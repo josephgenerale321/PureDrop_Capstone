@@ -1,19 +1,3 @@
-import { Ionicons } from "@expo/vector-icons";
-import { type Href, useRouter } from "expo-router";
-import { useRef, useState } from "react";
-import {
-  Alert,
-  Keyboard,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import {
   sendEmailVerificationOtp,
   verifyEmailVerificationOtp,
@@ -22,15 +6,39 @@ import {
   directPasswordReset,
   getPasswordResetErrorMessage,
 } from "@/lib/login/passwordReset";
+import { Ionicons } from "@expo/vector-icons";
+import { type Href, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Alert,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 const CODE_LENGTH = 6;
 const LOGIN_ROUTE = "/login" as Href;
+const isMobile = Platform.OS !== "web";
+
+/** Offset above the field to keep label/padding visible */
+const SCROLL_OFFSET = 130;
 
 type ForgotPasswordStep = "email" | "code" | "password" | "success";
 
 export default function ForgotPasswordScreen() {
   const router = useRouter();
+  const scrollViewRef = useRef<ScrollView>(null);
   const codeInputRef = useRef<TextInput>(null);
+  const newPasswordRef = useRef<TextInput>(null);
+  const confirmPasswordRef = useRef<TextInput>(null);
 
   const [step, setStep] = useState<ForgotPasswordStep>("email");
   const [email, setEmail] = useState("");
@@ -40,8 +48,44 @@ export default function ForgotPasswordScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [focusedField, setFocusedField] = useState<string | null>(null);
+
+  // Layout Y positions of each field wrapper (relative to ScrollView content)
+  const fieldYPositions = useRef<Record<string, number>>({});
 
   const formattedEmail = email.trim();
+
+  const scrollToField = useCallback((fieldName: string) => {
+    const y = fieldYPositions.current[fieldName];
+    if (y !== undefined && scrollViewRef.current) {
+      const targetY = Math.max(y - SCROLL_OFFSET, 0);
+      scrollViewRef.current.scrollTo({ y: targetY, animated: true });
+    }
+  }, []);
+
+  // When the keyboard shows while a field is focused, re-scroll to that field
+  useEffect(() => {
+    if (!isMobile) return undefined;
+
+    const sub = Keyboard.addListener("keyboardDidShow", () => {
+      if (focusedField) {
+        scrollToField(focusedField);
+      }
+    });
+
+    return () => sub.remove();
+  }, [focusedField, scrollToField]);
+
+  /** Helper to register a field's Y position via onLayout */
+  const onFieldLayout = (fieldName: string) => (event: { nativeEvent: { layout: { y: number } } }) => {
+    fieldYPositions.current[fieldName] = event.nativeEvent.layout.y;
+  };
+
+  /** Focus handler that also scrolls to the field */
+  const handleFieldFocus = (fieldName: string) => {
+    setFocusedField(fieldName);
+    scrollToField(fieldName);
+  };
 
   const handleSendCode = async (): Promise<void> => {
     if (!formattedEmail) {
@@ -77,6 +121,8 @@ export default function ForgotPasswordScreen() {
       await verifyEmailVerificationOtp(formattedEmail, code);
       Keyboard.dismiss();
       setStep("password");
+      // Auto-focus the new password field after transition
+      setTimeout(() => newPasswordRef.current?.focus(), 400);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unable to verify code.";
       Alert.alert("Verification Failed", message);
@@ -119,17 +165,23 @@ export default function ForgotPasswordScreen() {
       <Text style={styles.description}>Enter your email to reset your password.</Text>
 
       <View style={styles.form}>
-        <Text style={styles.label}>Email</Text>
-        <TextInput
-          style={styles.input}
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-          textContentType="emailAddress"
-          autoComplete="email"
-        />
+        <View onLayout={onFieldLayout("email")}>
+          <Text style={styles.label}>Email</Text>
+          <TextInput
+            style={[styles.input, focusedField === "email" && styles.inputFocused]}
+            value={email}
+            onChangeText={setEmail}
+            onFocus={() => handleFieldFocus("email")}
+            onBlur={() => setFocusedField(null)}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="emailAddress"
+            autoComplete="email"
+            returnKeyType="done"
+            onSubmitEditing={handleSendCode}
+          />
+        </View>
       </View>
 
       <TouchableOpacity
@@ -155,7 +207,7 @@ export default function ForgotPasswordScreen() {
         accessibilityLabel="Enter reset code"
       >
         {Array.from({ length: CODE_LENGTH }).map((_, index) => (
-          <View key={index} style={styles.pinBox}>
+          <View key={index} style={[styles.pinBox, focusedField === "code" && code.length === index && styles.inputFocused]}>
             <Text style={styles.pinDigit}>{code[index] ?? ""}</Text>
           </View>
         ))}
@@ -165,11 +217,15 @@ export default function ForgotPasswordScreen() {
         ref={codeInputRef}
         value={code}
         onChangeText={handleCodeChange}
+        onFocus={() => setFocusedField("code")}
+        onBlur={() => setFocusedField(null)}
         keyboardType="number-pad"
         textContentType="oneTimeCode"
         autoComplete="sms-otp"
         maxLength={CODE_LENGTH}
         style={styles.hiddenInput}
+        returnKeyType="done"
+        onSubmitEditing={handleVerifyCode}
       />
 
       <TouchableOpacity
@@ -188,54 +244,71 @@ export default function ForgotPasswordScreen() {
       <Text style={styles.title}>Reset Your Password</Text>
 
       <View style={styles.form}>
-        <Text style={styles.label}>Password</Text>
-        <View style={styles.passwordRow}>
-          <TextInput
-            style={styles.passwordInput}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry={!showPassword}
-            textContentType="newPassword"
-            autoComplete="new-password"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TouchableOpacity
-            onPress={() => setShowPassword(!showPassword)}
-            style={styles.eyeButton}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name={showPassword ? "eye-off" : "eye"}
-              size={18}
-              color="#666"
+        {/* New Password */}
+        <View onLayout={onFieldLayout("password")}>
+          <Text style={styles.label}>Password</Text>
+          <View style={[styles.passwordRow, focusedField === "password" && styles.inputFocused]}>
+            <TextInput
+              ref={newPasswordRef}
+              style={styles.passwordInput}
+              value={password}
+              onChangeText={setPassword}
+              onFocus={() => handleFieldFocus("password")}
+              onBlur={() => setFocusedField(null)}
+              secureTextEntry={!showPassword}
+              textContentType="newPassword"
+              autoComplete="new-password"
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="next"
+              onSubmitEditing={() => confirmPasswordRef.current?.focus()}
+              blurOnSubmit={false}
             />
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setShowPassword(!showPassword)}
+              style={styles.eyeButton}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={showPassword ? "eye-off" : "eye"}
+                size={18}
+                color="#666"
+              />
+            </TouchableOpacity>
+          </View>
         </View>
 
-        <Text style={styles.label}>Confirm Password</Text>
-        <View style={styles.passwordRow}>
-          <TextInput
-            style={styles.passwordInput}
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            secureTextEntry={!showConfirmPassword}
-            textContentType="newPassword"
-            autoComplete="new-password"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TouchableOpacity
-            onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-            style={styles.eyeButton}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name={showConfirmPassword ? "eye-off" : "eye"}
-              size={18}
-              color="#666"
+        {/* Confirm Password */}
+        <View onLayout={onFieldLayout("confirmPassword")}>
+          <Text style={styles.label}>Confirm Password</Text>
+          <View style={[styles.passwordRow, focusedField === "confirmPassword" && styles.inputFocused]}>
+            <TextInput
+              ref={confirmPasswordRef}
+              style={styles.passwordInput}
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              onFocus={() => handleFieldFocus("confirmPassword")}
+              onBlur={() => setFocusedField(null)}
+              secureTextEntry={!showConfirmPassword}
+              textContentType="newPassword"
+              autoComplete="new-password"
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="done"
+              onSubmitEditing={handleResetPassword}
             />
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+              style={styles.eyeButton}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={showConfirmPassword ? "eye-off" : "eye"}
+                size={18}
+                color="#666"
+              />
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -276,12 +349,19 @@ export default function ForgotPasswordScreen() {
         style={styles.keyboardView}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View style={[styles.content, step === "success" && styles.successContent]}>
+        <ScrollView
+          ref={scrollViewRef}
+          contentContainerStyle={[styles.content, step === "success" && styles.successContent]}
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+        >
           {step === "email" ? renderEmailStep() : null}
           {step === "code" ? renderCodeStep() : null}
           {step === "password" ? renderPasswordStep() : null}
           {step === "success" ? renderSuccessStep() : null}
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -298,7 +378,7 @@ const styles = StyleSheet.create({
   },
 
   content: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 34,
@@ -350,6 +430,11 @@ const styles = StyleSheet.create({
     color: "#0F172A",
     width: "100%",
     fontSize: 16,
+  },
+
+  inputFocused: {
+    borderColor: "#0EA5E9",
+    borderWidth: 1.5,
   },
 
   passwordRow: {
