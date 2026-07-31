@@ -1,7 +1,6 @@
 import * as FileSystem from "expo-file-system/legacy";
 import { Platform } from "react-native";
-import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from "@supabase/supabase-js";
-import { supabase } from "./supabase";
+import { supabaseAnonKey, supabaseUrl } from "./supabase";
 import type { Attachment } from "../components/create_report/useCreateReportForm";
 
 type AttachmentAuthenticityResponse = {
@@ -33,6 +32,8 @@ type LegacyAttachmentAuthenticityRequest = {
 
 const REVIEW_ATTACHMENT_FUNCTION = "review-report-attachment";
 const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const MISSING_SUPABASE_CONFIG_MESSAGE =
+  "Missing Supabase config. Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY (or EXPO_PUBLIC_SUPABASE_KEY), then rebuild the app.";
 
 const arrayBufferToBase64 = (arrayBuffer: ArrayBuffer) => {
   const bytes = new Uint8Array(arrayBuffer);
@@ -149,14 +150,6 @@ const buildLegacyInvokeBody = async (
     };
   }
 
-  if (attachment.base64Data) {
-    return {
-      base64: attachment.base64Data,
-      fileName,
-      mimeType,
-    };
-  }
-
   const base64 = await FileSystem.readAsStringAsync(attachment.uri, {
     encoding: FileSystem.EncodingType.Base64,
   });
@@ -197,18 +190,6 @@ const getSupabaseFunctionErrorMessage = async (error: unknown, response?: Respon
     return responseMessage;
   }
 
-  if (error instanceof FunctionsHttpError) {
-    return "The Supabase Edge Function returned an error response.";
-  }
-
-  if (error instanceof FunctionsRelayError) {
-    return "Supabase could not route the request to the Edge Function.";
-  }
-
-  if (error instanceof FunctionsFetchError) {
-    return "Could not reach the Supabase Edge Function.";
-  }
-
   if (error instanceof Error && error.message.trim()) {
     return error.message.trim();
   }
@@ -221,12 +202,56 @@ const shouldRetryWithLegacyJson = (message: string) => {
   return normalized.includes("valid json");
 };
 
+const getReviewAttachmentFunctionUrl = () => {
+  const trimmedSupabaseUrl = supabaseUrl?.trim().replace(/\/+$/, "");
+  const trimmedAnonKey = supabaseAnonKey?.trim();
+
+  if (!trimmedSupabaseUrl || !trimmedAnonKey) {
+    throw new Error(MISSING_SUPABASE_CONFIG_MESSAGE);
+  }
+
+  return {
+    anonKey: trimmedAnonKey,
+    url: `${trimmedSupabaseUrl}/functions/v1/${REVIEW_ATTACHMENT_FUNCTION}`,
+  };
+};
+
 const invokeReviewAttachment = async (
   body: FormData | LegacyAttachmentAuthenticityRequest,
-) =>
-  supabase.functions.invoke<AttachmentAuthenticityResponse>(REVIEW_ATTACHMENT_FUNCTION, {
-    body,
-  });
+) => {
+  const { anonKey, url } = getReviewAttachmentFunctionUrl();
+  const isMultipart = body instanceof FormData;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      body: isMultipart ? body : JSON.stringify(body),
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`,
+        ...(isMultipart ? {} : { "Content-Type": "application/json" }),
+      },
+      method: "POST",
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message.trim()
+        ? error.message.trim()
+        : "Could not reach the Supabase Edge Function.";
+
+    throw new Error(`Could not reach the Supabase Edge Function: ${message}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(await getSupabaseFunctionErrorMessage(null, response));
+  }
+
+  try {
+    return (await response.json()) as AttachmentAuthenticityResponse;
+  } catch {
+    throw new Error("Supabase Edge Function returned invalid JSON.");
+  }
+};
 
 export async function reviewAttachmentAuthenticity(
   attachment: Attachment,
@@ -236,29 +261,19 @@ export async function reviewAttachmentAuthenticity(
   }
 
   const body = Platform.OS === "web" ? await buildInvokeBody(attachment) : await buildLegacyInvokeBody(attachment);
-  let { data, error, response } = await invokeReviewAttachment(body);
-
-  if (error) {
-    const message = await getSupabaseFunctionErrorMessage(error, response);
+  try {
+    return await invokeReviewAttachment(body);
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message.trim()
+        ? error.message.trim()
+        : "Authenticity review failed.";
 
     if (shouldRetryWithLegacyJson(message)) {
       const legacyBody = await buildLegacyInvokeBody(attachment);
-      const legacyResult = await invokeReviewAttachment(legacyBody);
-      data = legacyResult.data;
-      error = legacyResult.error;
-      response = legacyResult.response;
-
-      if (error) {
-        throw new Error(await getSupabaseFunctionErrorMessage(error, response));
-      }
-    } else {
-      throw new Error(message);
+      return await invokeReviewAttachment(legacyBody);
     }
-  }
 
-  if (!data) {
-    throw new Error("Supabase Edge Function returned no data.");
+    throw new Error(message);
   }
-
-  return data;
 }

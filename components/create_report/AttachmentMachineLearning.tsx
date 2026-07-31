@@ -14,6 +14,7 @@ export type AttachmentMachineLearningItem = {
 };
 
 export type AttachmentMachineLearningStatus = {
+  attachmentUris: string[];
   canSubmit: boolean;
   items: AttachmentMachineLearningItem[];
   state: ReviewState;
@@ -40,6 +41,7 @@ type AttachmentAuthenticityResponse = {
 };
 
 const initialStatus: AttachmentMachineLearningStatus = {
+  attachmentUris: [],
   canSubmit: true,
   items: [],
   state: "idle",
@@ -47,6 +49,12 @@ const initialStatus: AttachmentMachineLearningStatus = {
 };
 
 const formatScore = (value?: number) => `${Math.round((value ?? 0) * 100)}%`;
+const SCREENSHOT_NAME_PATTERN = /(screen\s*shot|screenshot|screen[_-]?capture)/i;
+
+const hasScreenshotFileName = (attachment: Attachment) => {
+  const source = `${attachment.fileName ?? ""} ${attachment.uri}`;
+  return SCREENSHOT_NAME_PATTERN.test(source);
+};
 
 const buildCategoryNote = (category: string) => {
   if (!category.trim()) {
@@ -67,6 +75,14 @@ const buildAuthenticityReview = (
   const photoScore = response.type?.photo ?? 0;
   const artificialTextScore = response.text?.has_artificial ?? 0;
 
+  if (hasScreenshotFileName(attachment)) {
+    return {
+      attachmentUri: attachment.uri,
+      message: "This attachment looks like a screenshot based on its file name. Please upload a real camera photo of the issue.",
+      state: "blocked",
+    };
+  }
+
   if (aiGeneratedScore >= 0.7) {
     return {
       attachmentUri: attachment.uri,
@@ -79,6 +95,14 @@ const buildAuthenticityReview = (
     return {
       attachmentUri: attachment.uri,
       message: `Sightengine marked this attachment as likely deepfake or face-manipulated (${formatScore(deepfakeScore)}).`,
+      state: "blocked",
+    };
+  }
+
+  if (artificialTextScore >= 0.8) {
+    return {
+      attachmentUri: attachment.uri,
+      message: `Sightengine found heavy artificial text or UI elements (${formatScore(artificialTextScore)}), so this may be a screenshot. Please upload a real camera photo.`,
       state: "blocked",
     };
   }
@@ -99,14 +123,6 @@ const buildAuthenticityReview = (
     };
   }
 
-  if (deepfakeScore >= 0.25) {
-    return {
-      attachmentUri: attachment.uri,
-      message: `Sightengine sees some deepfake/manipulation risk (${formatScore(deepfakeScore)}). ${buildCategoryNote(category)}`,
-      state: "warning",
-    };
-  }
-
   if (illustrationScore >= 0.55 && photoScore < 0.45) {
     return {
       attachmentUri: attachment.uri,
@@ -115,10 +131,10 @@ const buildAuthenticityReview = (
     };
   }
 
-  if (artificialTextScore >= 0.8) {
+  if (deepfakeScore >= 0.25) {
     return {
       attachmentUri: attachment.uri,
-      message: `This attachment contains a lot of artificial text or UI elements (${formatScore(artificialTextScore)}), so it may be a screenshot instead of report evidence.`,
+      message: `Sightengine sees some deepfake/manipulation risk (${formatScore(deepfakeScore)}). ${buildCategoryNote(category)}`,
       state: "warning",
     };
   }
@@ -140,7 +156,7 @@ const buildItemReview = async (
 
 const buildSummary = (items: AttachmentMachineLearningItem[], category: string) => {
   if (items.some((item) => item.state === "blocked")) {
-    return "One or more attachments were blocked because they look AI-generated, face-manipulated, or non-photographic.";
+    return "One or more attachments were blocked because they look like screenshots, AI-generated images, face-manipulated images, or non-photographic uploads.";
   }
 
   if (items.some((item) => item.state === "warning")) {
@@ -200,6 +216,7 @@ export function AttachmentMachineLearning({
     }
 
     updateStatus({
+      attachmentUris: attachments.map((attachment) => attachment.uri),
       canSubmit: false,
       items: [],
       state: "analyzing",
@@ -216,6 +233,7 @@ export function AttachmentMachineLearning({
       }
 
       const nextStatus: AttachmentMachineLearningStatus = {
+        attachmentUris: attachments.map((attachment) => attachment.uri),
         canSubmit: !items.some((item) => item.state === "blocked"),
         items,
         state: items.some((item) => item.state === "blocked")
@@ -235,10 +253,11 @@ export function AttachmentMachineLearning({
             : "Authenticity review failed.";
 
         updateStatus({
-          canSubmit: true,
+          attachmentUris: attachments.map((attachment) => attachment.uri),
+          canSubmit: false,
           items: [],
-          state: "warning",
-          summary: `Authenticity review could not finish: ${message}`,
+          state: "unavailable",
+          summary: `Attachment review could not finish: ${message}. Please try again before submitting.`,
         });
       });
 

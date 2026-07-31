@@ -108,6 +108,20 @@ export default function CreateReportScreen() {
   };
 
   const handleSubmitPress = async () => {
+    const attachmentUris = form.attachments.map((attachment) => attachment.uri);
+    const hasPendingAttachmentReview =
+      attachmentUris.length > 0 &&
+      (!attachmentReview ||
+        attachmentReview.state === "idle" ||
+        attachmentReview.state === "analyzing" ||
+        attachmentReview.attachmentUris.length !== attachmentUris.length ||
+        !attachmentUris.every((uri) => attachmentReview.attachmentUris.includes(uri)));
+
+    if (hasPendingAttachmentReview) {
+      Alert.alert("Attachment check", "Please wait until the current attachments finish review.");
+      return;
+    }
+
     if (attachmentReview && !attachmentReview.canSubmit) {
       Alert.alert("Attachment check", attachmentReview.summary);
       return;

@@ -253,6 +253,35 @@ export function useCreateReportForm() {
     }
   };
 
+  const getAttachmentStorageFileName = (
+    attachment: Attachment,
+    index: number,
+    extension: string,
+    usedFileNames: Set<string>,
+  ) => {
+    const rawFileName = attachment.fileName?.split(/[\\/]/).pop()?.split("?")[0]?.trim() ?? "";
+    const sanitizedFileName = rawFileName
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    const fallbackFileName = `attachment-${index + 1}.${extension}`;
+    const fileNameWithExtension = sanitizedFileName || fallbackFileName;
+    const fileName = /\.[a-zA-Z0-9]+$/.test(fileNameWithExtension)
+      ? fileNameWithExtension
+      : `${fileNameWithExtension}.${extension}`;
+
+    if (!usedFileNames.has(fileName)) {
+      usedFileNames.add(fileName);
+      return fileName;
+    }
+
+    const dotIndex = fileName.lastIndexOf(".");
+    const baseName = dotIndex >= 0 ? fileName.slice(0, dotIndex) : fileName;
+    const fileExtension = dotIndex >= 0 ? fileName.slice(dotIndex + 1) : extension;
+    const uniqueFileName = `${baseName}-${index + 1}.${fileExtension}`;
+    usedFileNames.add(uniqueFileName);
+    return uniqueFileName;
+  };
+
   const handleRegionChangeComplete = (region: Region) => {
     setMapRegion(region);
     setSelectedPin({
@@ -450,11 +479,18 @@ export function useCreateReportForm() {
       setSubmitLoading(true);
       const reportId = await reserveNextReportId(currentUser.uid);
       const uploadedUrls: string[] = [];
+      const usedStorageFileNames = new Set<string>();
 
       for (let i = 0; i < attachments.length; i += 1) {
         const attachment = attachments[i];
         const extension = getFileExtension(attachment);
-        const destinationPath = `${currentUser.uid}/${reportId}-${i}.${extension}`;
+        const storageFileName = getAttachmentStorageFileName(
+          attachment,
+          i,
+          extension,
+          usedStorageFileNames,
+        );
+        const destinationPath = `${reportId}/${storageFileName}`;
 
         const uploaded = await uploadFile(attachment.uri, destinationPath, {
           contentType: attachment.mimeType || getContentType(extension),
