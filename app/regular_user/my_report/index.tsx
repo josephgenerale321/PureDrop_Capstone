@@ -31,8 +31,7 @@ const normalizeStatus = (value: unknown) => {
 
   const normalized = value.trim().toLowerCase();
   if (normalized === "approved") return "Approved";
-  if (normalized === "rejected") return "Rejected";
-  if (normalized === "resolved") return "Resolved";
+  if (normalized === "resolving" || normalized === "resolved") return "Resolving";
   if (normalized === "pending" || normalized === "submitted") return "Pending";
   return "Pending";
 };

@@ -17,9 +17,7 @@ import {
 
 const getStatusColor = (status: string) => {
   if (status === "Approved") return "#166534";
-  if (status === "Rejected") return "#991b1b";
-  if (status === "Resolved") return "#1d4ed8";
-  if (status === "Submitted") return "#0f766e";
+  if (status === "Resolving") return "#1d4ed8";
   return "#1f2937";
 };
 
@@ -81,7 +79,7 @@ export default function NotificationScreen() {
             </View>
             <Text style={styles.emptyTitle}>No notifications yet</Text>
             <Text style={styles.emptySub}>
-              You'll receive updates here when the status of your submitted reports changes.
+              You will receive updates here when the status of your submitted reports changes.
             </Text>
             <TouchableOpacity
               style={styles.emptyCta}

@@ -30,7 +30,7 @@ const normalizeStatus = (value: unknown) => {
   if (typeof value !== "string") return "Pending";
   const normalized = value.trim().toLowerCase();
   if (normalized === "approved") return "Approved";
-  if (normalized === "rejected") return "Rejected";
+  if (normalized === "resolving" || normalized === "resolved") return "Resolving";
   if (normalized === "pending" || normalized === "submitted") return "Pending";
   return "Pending";
 };
@@ -150,7 +150,7 @@ return () => unsubscribe();
           </View>
           <Text style={styles.emptyTitle}>Report not found</Text>
           <Text style={styles.emptyText}>
-            The report you're looking for could not be loaded. It may have been removed or you may have a connection issue.
+            The report could not be loaded. It may have been removed or you may have a connection issue.
           </Text>
           <View style={styles.errorActions}>
             <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
