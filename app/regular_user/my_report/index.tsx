@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { ShareReportButton } from "../../../components/my_report/share_reports";
 import { auth, db } from "../../../firebaseConfig";
 
 type ReportItem = {
@@ -67,18 +68,17 @@ type ReportRowProps = {
 
 function ReportRow({ item, onOpen }: ReportRowProps) {
   return (
-    <TouchableOpacity
-      style={styles.card}
-      activeOpacity={0.88}
-      onPress={() => onOpen(item)}
-    >
-      <Text style={styles.cardTitle}>{item.category}</Text>
-      <Text style={styles.cardIssue}>{item.issue}</Text>
-      <Text style={styles.metaText}>
-        Location (Toledo City only): {item.location || item.gpsLocation || "N/A"}
-      </Text>
-      <Text style={styles.metaText}>Status: {item.status}</Text>
-    </TouchableOpacity>
+    <View style={styles.card}>
+      <TouchableOpacity activeOpacity={0.88} onPress={() => onOpen(item)}>
+        <Text style={styles.cardTitle}>{item.category}</Text>
+        <Text style={styles.cardIssue}>{item.issue}</Text>
+        <Text style={styles.metaText}>
+          Location (Toledo City only): {item.location || item.gpsLocation || "N/A"}
+        </Text>
+        <Text style={styles.metaText}>Status: {item.status}</Text>
+      </TouchableOpacity>
+      <ShareReportButton report={item} />
+    </View>
   );
 }
 
