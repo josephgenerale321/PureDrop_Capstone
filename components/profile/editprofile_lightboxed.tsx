@@ -1,8 +1,9 @@
+import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
-  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -70,9 +71,12 @@ type EditProfileLightboxProps = {
   saving: boolean;
   uploadingProfilePicture: boolean;
   profileImageUrl?: string | null;
+  hasProfilePicture?: boolean;
   onClose: () => void;
   onSave: (values: EditableProfileValues) => void;
   onChangeProfilePicture: () => void;
+  onTakePhoto: () => void;
+  onRemoveProfilePicture: () => void;
 };
 
 export default function EditProfileLightbox({
@@ -81,19 +85,24 @@ export default function EditProfileLightbox({
   saving,
   uploadingProfilePicture,
   profileImageUrl,
+  hasProfilePicture,
   onClose,
   onSave,
   onChangeProfilePicture,
+  onTakePhoto,
+  onRemoveProfilePicture,
 }: EditProfileLightboxProps) {
   const [form, setForm] = useState<EditableProfileValues>(values);
   const [addressPickerVisible, setAddressPickerVisible] = useState(false);
   const [addressQuery, setAddressQuery] = useState("");
+  const [photoOptionsVisible, setPhotoOptionsVisible] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setForm(values);
       setAddressPickerVisible(false);
       setAddressQuery("");
+      setPhotoOptionsVisible(false);
     }
   }, [values, visible]);
 
@@ -140,20 +149,33 @@ export default function EditProfileLightbox({
             contentContainerStyle={styles.form}
           >
             <View style={styles.avatarSection}>
-              <Image source={avatarSource} style={styles.avatar} />
+              <Image source={avatarSource} style={styles.avatar} contentFit="cover" />
               <TouchableOpacity
                 style={[styles.photoButton, uploadingProfilePicture && styles.disabledButton]}
-                onPress={onChangeProfilePicture}
+                onPress={() => setPhotoOptionsVisible(true)}
                 disabled={uploadingProfilePicture || saving}
                 activeOpacity={0.85}
               >
                 {uploadingProfilePicture ? (
                   <ActivityIndicator size="small" color="#ffffff" />
-                ) : null}
+                ) : (
+                  <Ionicons name="camera-outline" size={18} color="#ffffff" />
+                )}
                 <Text style={styles.photoButtonText}>
                   {uploadingProfilePicture ? "Uploading..." : "Edit Profile Picture"}
                 </Text>
               </TouchableOpacity>
+              {hasProfilePicture && !uploadingProfilePicture ? (
+                <TouchableOpacity
+                  style={styles.removePhotoButton}
+                  onPress={onRemoveProfilePicture}
+                  disabled={saving}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                  <Text style={styles.removePhotoText}>Remove Photo</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
 
             <View style={styles.fieldGroup}>
@@ -228,6 +250,53 @@ export default function EditProfileLightbox({
             </TouchableOpacity>
           </View>
         </View>
+
+        <Modal
+          visible={photoOptionsVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setPhotoOptionsVisible(false)}
+        >
+          <View style={styles.pickerOverlay}>
+            <View style={styles.photoSheet}>
+              <Text style={styles.pickerTitle}>Profile Picture</Text>
+
+              <TouchableOpacity
+                style={styles.photoOptionButton}
+                onPress={() => {
+                  setPhotoOptionsVisible(false);
+                  onChangeProfilePicture();
+                }}
+                disabled={uploadingProfilePicture || saving}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="images-outline" size={20} color="#0284c7" />
+                <Text style={styles.photoOptionText}>Choose from Library</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.photoOptionButton}
+                onPress={() => {
+                  setPhotoOptionsVisible(false);
+                  onTakePhoto();
+                }}
+                disabled={uploadingProfilePicture || saving}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="camera-outline" size={20} color="#0284c7" />
+                <Text style={styles.photoOptionText}>Take Photo</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.cancelPickerButton}
+                onPress={() => setPhotoOptionsVisible(false)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.cancelPickerText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
 
         <Modal
           visible={addressPickerVisible}
@@ -357,6 +426,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
   },
+  removePhotoButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 6,
+    backgroundColor: "#fef2f2",
+    borderWidth: 1,
+    borderColor: "#fecaca",
+  },
+  removePhotoText: {
+    color: "#ef4444",
+    fontSize: 13,
+    fontWeight: "600",
+  },
   fieldGroup: {
     marginBottom: 14,
   },
@@ -437,6 +524,34 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "rgba(5, 22, 38, 0.45)",
     paddingHorizontal: 16,
+  },
+  photoSheet: {
+    borderRadius: 8,
+    backgroundColor: "#ffffff",
+    padding: 16,
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  photoOptionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    backgroundColor: "#ffffff",
+  },
+  photoOptionText: {
+    color: "#0f172a",
+    fontSize: 15,
+    fontWeight: "600",
   },
   pickerSheet: {
     maxHeight: "82%",

@@ -6,9 +6,16 @@ import { doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/fi
 import { useEffect, useState } from "react";
 import { Alert } from "react-native";
 import { getPublicFileUrl, removeFile, uploadFile } from "../../../api/storage";
+import { takeProfilePhoto } from "../../../components/profile/camera_editprof";
 import EditProfileLightbox, {
   type EditableProfileValues,
 } from "../../../components/profile/editprofile_lightboxed";
+import { resizeProfileImage } from "../../../components/profile/file_resize_editprof";
+import {
+  getContentType,
+  getFileExtension,
+  validateProfileImage,
+} from "../../../components/profile/file_valid_editprof";
 import ProfileComponent, {
   type ProfileViewModel,
 } from "../../../components/profile/profilecomponent";
@@ -42,36 +49,6 @@ export default function ProfileViewScreen() {
     || process.env.EXPO_PUBLIC_SUPABASE_STORAGE_BUCKET
     || "reports";
   const avatarFolder = process.env.EXPO_PUBLIC_SUPABASE_AVATAR_FOLDER || "users";
-
-  const getFileExtension = (uri: string, mimeType?: string | null) => {
-    const cleanUri = uri.split("?")[0];
-    const parts = cleanUri.split(".");
-    if (parts.length > 1) {
-      return parts[parts.length - 1].toLowerCase();
-    }
-
-    const mime = (mimeType || "").toLowerCase();
-    if (mime.includes("png")) return "png";
-    if (mime.includes("webp")) return "webp";
-    if (mime.includes("heic")) return "heic";
-    return "jpg";
-  };
-
-  const getContentType = (extension: string) => {
-    switch (extension) {
-      case "jpg":
-      case "jpeg":
-        return "image/jpeg";
-      case "png":
-        return "image/png";
-      case "webp":
-        return "image/webp";
-      case "heic":
-        return "image/heic";
-      default:
-        return "application/octet-stream";
-    }
-  };
 
   const createStableAvatarUri = async (uri: string, extension: string) => {
     if (!LOCAL_AVATAR_URI_PATTERN.test(uri) || !FileSystem.cacheDirectory) {
@@ -244,7 +221,7 @@ export default function ProfileViewScreen() {
     }
   };
 
-  const handleChangeProfilePicture = async () => {
+  const processAndUploadImage = async (selected: ImagePicker.ImagePickerAsset) => {
     if (!currentUserId) {
       Alert.alert("Not signed in", "Please sign in again before updating your profile picture.");
       return;
@@ -256,24 +233,19 @@ export default function ProfileViewScreen() {
       setUploadingProfilePicture(true);
       const userDocRef = doc(db, "regular_user", currentUserId);
 
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (permission.status !== "granted") {
-        Alert.alert("Permission needed", "Please allow photo library access.");
+      const validationError = await validateProfileImage(
+        selected.uri,
+        selected.mimeType,
+        selected.fileSize ?? null
+      );
+      if (validationError) {
+        Alert.alert("Invalid image", validationError);
         return;
       }
 
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
-        quality: 0.7,
-      });
-
-      if (result.canceled || result.assets.length === 0) {
-        return;
-      }
-
-      const selected = result.assets[0];
-      const extension = getFileExtension(selected.uri, selected.mimeType);
-      const stableAvatar = await createStableAvatarUri(selected.uri, extension);
+      const resized = await resizeProfileImage(selected.uri, selected.mimeType);
+      const extension = getFileExtension(resized.uri, resized.mimeType);
+      const stableAvatar = await createStableAvatarUri(resized.uri, extension);
       if (stableAvatar.cached) {
         cachedAvatarUri = stableAvatar.uri;
       }
@@ -290,7 +262,7 @@ export default function ProfileViewScreen() {
 
       const uploaded = await uploadFile(stableAvatar.uri, destinationPath, {
         bucket: avatarBucket,
-        contentType: selected.mimeType || getContentType(extension),
+        contentType: resized.mimeType || getContentType(extension),
       });
 
       const uploadedPath =
@@ -340,6 +312,96 @@ export default function ProfileViewScreen() {
     }
   };
 
+  const handleChangeProfilePicture = async () => {
+    if (!currentUserId) {
+      Alert.alert("Not signed in", "Please sign in again before updating your profile picture.");
+      return;
+    }
+
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (permission.status !== "granted") {
+        Alert.alert("Permission needed", "Please allow photo library access.");
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (result.canceled || result.assets.length === 0) {
+        return;
+      }
+
+      await processAndUploadImage(result.assets[0]);
+    } catch {
+      Alert.alert("Image picker error", "Unable to open the photo library. Please try again.");
+    }
+  };
+
+  const handleTakePhoto = async () => {
+    if (!currentUserId) {
+      Alert.alert("Not signed in", "Please sign in again before updating your profile picture.");
+      return;
+    }
+
+    const selected = await takeProfilePhoto();
+    if (!selected) {
+      return;
+    }
+
+    await processAndUploadImage(selected);
+  };
+
+  const handleRemoveProfilePicture = async () => {
+    if (!currentUserId) {
+      Alert.alert("Not signed in", "Please sign in again before updating your profile picture.");
+      return;
+    }
+
+    const currentPath = profileImagePath;
+    if (!currentPath) {
+      return;
+    }
+
+    try {
+      setUploadingProfilePicture(true);
+      const userDocRef = doc(db, "regular_user", currentUserId);
+
+      await updateDoc(userDocRef, {
+        profileImageUrl: null,
+        profileImagePath: null,
+        updatedAt: serverTimestamp(),
+      });
+
+      try {
+        await removeFile(currentPath, avatarBucket);
+      } catch {
+        // The document is already cleared; storage cleanup should not block the flow.
+      }
+
+      setProfileImagePath(null);
+      setProfile((prev) => ({
+        fullName: prev?.fullName || "User",
+        address: prev?.address || "",
+        email: prev?.email || "No email",
+        waterMeter: prev?.waterMeter ?? null,
+        profileImageUrl: null,
+      }));
+    } catch (removeError) {
+      const message =
+        removeError instanceof Error
+          ? removeError.message
+          : "Failed to remove profile picture.";
+      Alert.alert("Remove error", message);
+    } finally {
+      setUploadingProfilePicture(false);
+    }
+  };
+
   return (
     <>
       <ProfileComponent
@@ -357,6 +419,7 @@ export default function ProfileViewScreen() {
         saving={savingProfile}
         uploadingProfilePicture={uploadingProfilePicture}
         profileImageUrl={profile?.profileImageUrl ?? null}
+        hasProfilePicture={profile?.profileImageUrl != null}
         onClose={() => {
           if (!savingProfile && !uploadingProfilePicture) {
             setEditProfileVisible(false);
@@ -364,6 +427,8 @@ export default function ProfileViewScreen() {
         }}
         onSave={handleSaveProfile}
         onChangeProfilePicture={handleChangeProfilePicture}
+        onTakePhoto={handleTakePhoto}
+        onRemoveProfilePicture={handleRemoveProfilePicture}
       />
     </>
   );
