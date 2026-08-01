@@ -13,24 +13,25 @@ export interface ProfileViewModel {
   fullName: string;
   address: string;
   email: string;
+  waterMeter?: number | string | null;
   profileImageUrl?: string | null;
 }
 
 interface ProfileComponentProps {
   profile: ProfileViewModel | null;
   loading: boolean;
-  uploadingAvatar: boolean;
+  savingProfile: boolean;
   error: string | null;
-  onChangeAvatar: () => void;
+  onEditProfile: () => void;
   onBack: () => void;
 }
 
 export default function ProfileComponent({
   profile,
   loading,
-  uploadingAvatar,
+  savingProfile,
   error,
-  onChangeAvatar,
+  onEditProfile,
   onBack,
 }: ProfileComponentProps) {
   const avatarSource = profile?.profileImageUrl
@@ -70,13 +71,13 @@ export default function ProfileComponent({
             ) : null}
 
             <TouchableOpacity
-              style={[styles.changePhotoButton, uploadingAvatar && styles.changePhotoButtonDisabled]}
-              onPress={onChangeAvatar}
-              disabled={uploadingAvatar}
+              style={[styles.changePhotoButton, savingProfile && styles.changePhotoButtonDisabled]}
+              onPress={onEditProfile}
+              disabled={savingProfile || loading}
               activeOpacity={0.85}
             >
               <Text style={styles.changePhotoText}>
-                {uploadingAvatar ? "Uploading photo..." : "Change Profile Picture"}
+                {savingProfile ? "Saving profile..." : "Edit Profile"}
               </Text>
             </TouchableOpacity>
 
@@ -89,6 +90,16 @@ export default function ProfileComponent({
             <View style={styles.fieldGroup}>
               <Text style={styles.fieldLabel}>YOUR EMAIL:</Text>
               <Text style={styles.fieldValue}>{profile?.email || "No email"}</Text>
+              <View style={styles.line} />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>WATER METER:</Text>
+              <Text style={styles.fieldValue}>
+                {profile?.waterMeter !== undefined && profile?.waterMeter !== null && `${profile.waterMeter}`.length > 0
+                  ? profile.waterMeter
+                  : "No water meter"}
+              </Text>
               <View style={styles.line} />
             </View>
           </>

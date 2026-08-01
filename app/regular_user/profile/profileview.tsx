@@ -1,11 +1,14 @@
-import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
+import * as ImagePicker from "expo-image-picker";
 import { type Href, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { Alert } from "react-native";
 import { getPublicFileUrl, removeFile, uploadFile } from "../../../api/storage";
+import EditProfileLightbox, {
+  type EditableProfileValues,
+} from "../../../components/profile/editprofile_lightboxed";
 import ProfileComponent, {
   type ProfileViewModel,
 } from "../../../components/profile/profilecomponent";
@@ -19,6 +22,7 @@ interface RegularUserDoc {
   fullName?: string;
   address?: string;
   email?: string;
+  waterMeter?: number | string | null;
   profileImageUrl?: string;
   profileImagePath?: string;
 }
@@ -26,7 +30,9 @@ interface RegularUserDoc {
 export default function ProfileViewScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [uploadingProfilePicture, setUploadingProfilePicture] = useState(false);
+  const [editProfileVisible, setEditProfileVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileViewModel | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -94,6 +100,7 @@ export default function ProfileViewScreen() {
         if (isMounted) {
           setCurrentUserId(null);
           setProfileImagePath(null);
+          setEditProfileVisible(false);
           router.replace(LOGIN_ROUTE);
           setLoading(false);
         }
@@ -119,8 +126,9 @@ export default function ProfileViewScreen() {
             setProfileImagePath(null);
             setProfile({
               fullName: "User",
-              address: "No address",
+              address: "",
               email: currentUser.email || "No email",
+              waterMeter: null,
               profileImageUrl: null,
             });
             setLoading(false);
@@ -132,8 +140,9 @@ export default function ProfileViewScreen() {
           setProfileImagePath(typeof data.profileImagePath === "string" ? data.profileImagePath : null);
           setProfile({
             fullName: data.fullName || "User",
-            address: data.address || "No address",
+            address: data.address || "",
             email: data.email || currentUser.email || "No email",
+            waterMeter: data.waterMeter ?? null,
             profileImageUrl:
               typeof data.profileImageUrl === "string" && data.profileImageUrl.length > 0
                 ? data.profileImageUrl
@@ -162,7 +171,80 @@ export default function ProfileViewScreen() {
     };
   }, [router]);
 
-  const handleChangeAvatar = async () => {
+  const editProfileValues: EditableProfileValues = {
+    fullName: profile?.fullName || "",
+    address: profile?.address || "",
+    email: profile?.email || "",
+    waterMeter:
+      profile?.waterMeter !== undefined && profile?.waterMeter !== null
+        ? `${profile.waterMeter}`
+        : "",
+  };
+
+  const handleSaveProfile = async (values: EditableProfileValues) => {
+    if (!currentUserId) {
+      Alert.alert("Not signed in", "Please sign in again before editing your profile.");
+      return;
+    }
+
+    const fullName = values.fullName.trim();
+    const address = values.address.trim();
+    const email = values.email.trim();
+    const waterMeterText = values.waterMeter.trim();
+
+    if (!fullName) {
+      Alert.alert("Full name required", "Please enter your full name.");
+      return;
+    }
+
+    if (!address) {
+      Alert.alert("Address required", "Please enter your address.");
+      return;
+    }
+
+    if (!email) {
+      Alert.alert("Email required", "Please enter your email.");
+      return;
+    }
+
+    const waterMeter =
+      waterMeterText.length > 0 ? Number.parseInt(waterMeterText, 10) : null;
+
+    if (waterMeterText.length > 0 && !Number.isFinite(waterMeter)) {
+      Alert.alert("Invalid water meter", "Please enter numbers only for your water meter.");
+      return;
+    }
+
+    try {
+      setSavingProfile(true);
+      const userDocRef = doc(db, "regular_user", currentUserId);
+
+      await updateDoc(userDocRef, {
+        fullName,
+        address,
+        email,
+        waterMeter,
+        updatedAt: serverTimestamp(),
+      });
+
+      setProfile((prev) => ({
+        fullName,
+        address,
+        email,
+        waterMeter,
+        profileImageUrl: prev?.profileImageUrl ?? null,
+      }));
+      setEditProfileVisible(false);
+    } catch (saveError) {
+      const message =
+        saveError instanceof Error ? saveError.message : "Failed to save your profile.";
+      Alert.alert("Profile update error", message);
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleChangeProfilePicture = async () => {
     if (!currentUserId) {
       Alert.alert("Not signed in", "Please sign in again before updating your profile picture.");
       return;
@@ -171,7 +253,7 @@ export default function ProfileViewScreen() {
     let cachedAvatarUri: string | null = null;
 
     try {
-      setUploadingAvatar(true);
+      setUploadingProfilePicture(true);
       const userDocRef = doc(db, "regular_user", currentUserId);
 
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -196,9 +278,7 @@ export default function ProfileViewScreen() {
         cachedAvatarUri = stableAvatar.uri;
       }
 
-      // Use a versioned object key so mobile image caches don't serve stale avatar bytes.
       const destinationPath = `${avatarFolder}/${currentUserId}/profile-image-${Date.now()}.${extension}`;
-
       const latestProfileSnap = await getDoc(userDocRef);
       const latestProfileData = latestProfileSnap.exists()
         ? (latestProfileSnap.data() as RegularUserDoc)
@@ -234,15 +314,16 @@ export default function ProfileViewScreen() {
         try {
           await removeFile(previousPath, avatarBucket);
         } catch {
-          // New avatar is already saved even if legacy file cleanup fails.
+          // The new avatar is already saved, so legacy cleanup should not block the flow.
         }
       }
 
       setProfileImagePath(uploadedPath);
       setProfile((prev) => ({
         fullName: prev?.fullName || "User",
-        address: prev?.address || "No address",
+        address: prev?.address || "",
         email: prev?.email || "No email",
+        waterMeter: prev?.waterMeter ?? null,
         profileImageUrl: publicUrl,
       }));
     } catch (uploadError) {
@@ -255,18 +336,35 @@ export default function ProfileViewScreen() {
           // Cache cleanup failure should not block profile upload flow.
         });
       }
-      setUploadingAvatar(false);
+      setUploadingProfilePicture(false);
     }
   };
 
   return (
-    <ProfileComponent
-      profile={profile}
-      loading={loading}
-      error={error}
-      uploadingAvatar={uploadingAvatar}
-      onChangeAvatar={handleChangeAvatar}
-      onBack={() => router.replace("/regular_user/home")}
-    />
+    <>
+      <ProfileComponent
+        profile={profile}
+        loading={loading}
+        error={error}
+        savingProfile={savingProfile}
+        onEditProfile={() => setEditProfileVisible(true)}
+        onBack={() => router.replace("/regular_user/home")}
+      />
+
+      <EditProfileLightbox
+        visible={editProfileVisible}
+        values={editProfileValues}
+        saving={savingProfile}
+        uploadingProfilePicture={uploadingProfilePicture}
+        profileImageUrl={profile?.profileImageUrl ?? null}
+        onClose={() => {
+          if (!savingProfile && !uploadingProfilePicture) {
+            setEditProfileVisible(false);
+          }
+        }}
+        onSave={handleSaveProfile}
+        onChangeProfilePicture={handleChangeProfilePicture}
+      />
+    </>
   );
 }
