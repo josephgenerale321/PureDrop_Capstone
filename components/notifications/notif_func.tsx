@@ -9,7 +9,16 @@ import {
   type QueryDocumentSnapshot,
   type Timestamp,
 } from "firebase/firestore";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { auth, db } from "../../firebaseConfig";
 
 export type NotificationItem = {
@@ -20,6 +29,8 @@ export type NotificationItem = {
   message: string;
   createdLabel: string;
   createdAtMs: number;
+  category?: string;
+  issue?: string;
 };
 
 const normalizeStatus = (value: unknown): string => {
@@ -49,6 +60,48 @@ const formatTimestampLabel = (value: unknown): string => {
   }
 
   return "Date unavailable";
+};
+
+export const formatRelativeTime = (createdAtMs: number): string => {
+  if (!createdAtMs || createdAtMs <= 0) {
+    return "";
+  }
+
+  const now = Date.now();
+  const diffMs = now - createdAtMs;
+  if (diffMs < 0) {
+    return "Just now";
+  }
+
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) {
+    return "Just now";
+  }
+
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) {
+    return `${diffMin}m ago`;
+  }
+
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) {
+    return `${diffHours}h ago`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays === 1) {
+    return "Yesterday";
+  }
+
+  if (diffDays < 7) {
+    return `${diffDays}d ago`;
+  }
+
+  try {
+    return new Date(createdAtMs).toLocaleDateString();
+  } catch {
+    return "";
+  }
 };
 
 const resolveTimestampMs = (value: unknown): number => {
@@ -146,15 +199,38 @@ const mapReportToNotification = (
     message: buildMessage(status, reportId, changedByAdmin),
     createdLabel: formatTimestampLabel(notificationTime),
     createdAtMs: resolveTimestampMs(notificationTime),
+    category:
+      typeof data.category === "string" && data.category.length > 0
+        ? data.category
+        : undefined,
+    issue:
+      typeof data.issue === "string" && data.issue.length > 0
+        ? data.issue
+        : undefined,
   };
 };
 
-export function useReportNotifications() {
+export type NotificationContextValue = {
+  items: NotificationItem[];
+  loading: boolean;
+  unreadCount: number;
+  lastSeenMs: number;
+  markAllAsRead: () => Promise<void>;
+};
+
+const NotificationContext = createContext<NotificationContextValue | null>(null);
+
+function ReportNotificationsProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [lastSeenMs, setLastSeenMs] = useState<number>(0);
   const currentUidRef = useRef<string | null>(null);
   const lastSeenMsRef = useRef<number>(0);
+  const itemsRef = useRef<NotificationItem[]>([]);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   const setLastSeenMsSafe = useCallback((value: number) => {
     lastSeenMsRef.current = value;
@@ -232,7 +308,9 @@ export function useReportNotifications() {
                 a.changedByAdmin !== b.changedByAdmin ||
                 a.message !== b.message ||
                 a.createdLabel !== b.createdLabel ||
-                a.createdAtMs !== b.createdAtMs
+                a.createdAtMs !== b.createdAtMs ||
+                a.category !== b.category ||
+                a.issue !== b.issue
               ) {
                 return mapped;
               }
@@ -273,6 +351,19 @@ export function useReportNotifications() {
       return;
     }
 
+    const currentItems = itemsRef.current;
+    const currentLastSeen = lastSeenMsRef.current;
+    const hasUnread = currentItems.some(
+      (item) => item.createdAtMs > currentLastSeen,
+    );
+
+    // Idempotent: skip the Firestore write when there is nothing new to
+    // mark as read. Focus/tab events can fire repeatedly, and without this
+    // guard each call would issue a redundant serverTimestamp() write.
+    if (!hasUnread) {
+      return;
+    }
+
     const optimisticLastSeenMs = Date.now();
     const previousLastSeenMs = lastSeenMsRef.current;
     setLastSeenMsSafe(optimisticLastSeenMs);
@@ -286,10 +377,32 @@ export function useReportNotifications() {
     }
   }, [setLastSeenMsSafe]);
 
-  return {
-    items,
-    loading,
-    unreadCount,
-    markAllAsRead,
-  };
+  return (
+    <NotificationContext.Provider
+      value={{
+        items,
+        loading,
+        unreadCount,
+        lastSeenMs,
+        markAllAsRead,
+      }}
+    >
+      {children}
+    </NotificationContext.Provider>
+  );
 }
+
+export function useReportNotifications(): NotificationContextValue {
+  const value = useContext(NotificationContext);
+  if (!value) {
+    // Throw only if misused outside the provider tree. In this app the
+    // provider wraps the whole regular_user layout, so this is a
+    // programming-error guard, not a runtime crash path.
+    throw new Error(
+      "useReportNotifications must be used within a ReportNotificationsProvider",
+    );
+  }
+  return value;
+}
+
+export { ReportNotificationsProvider };

@@ -1,10 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback } from "react";
+import { useRouter } from "expo-router";
 import {
   ActivityIndicator,
   FlatList,
-  StyleSheet,
   Text,
   TouchableOpacity,
   View,
@@ -12,8 +10,15 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   type NotificationItem,
+  formatRelativeTime,
   useReportNotifications,
 } from "../../../components/notifications/notif_func";
+import {
+  BUCKET_LABELS,
+  groupNotificationsByTime,
+  isNotificationUnread,
+} from "../../../components/notifications/notif_reddot";
+import { styles } from "../../../components/notifications/notif_styles";
 
 const getStatusColor = (status: string) => {
   if (status === "Approved") return "#166534";
@@ -21,34 +26,111 @@ const getStatusColor = (status: string) => {
   return "#1f2937";
 };
 
-const renderItem = ({ item }: { item: NotificationItem }) => (
-  <View style={styles.card}>
-    <View style={styles.rowBetween}>
-      <Text style={styles.reportId}>Report #{item.reportId}</Text>
-      <Text style={[styles.status, { color: getStatusColor(item.status) }]}>{item.status}</Text>
-    </View>
+const getStatusIcon = (status: string): keyof typeof Ionicons.glyphMap => {
+  if (status === "Approved") return "checkmark-circle";
+  if (status === "Resolving") return "construct";
+  return "time";
+};
 
-    <Text style={styles.message}>{item.message}</Text>
-    <Text style={styles.date}>{item.createdLabel}</Text>
-  </View>
-);
+const getStatusIconColor = (status: string) => {
+  if (status === "Approved") return "#16A34A";
+  if (status === "Resolving") return "#2563EB";
+  return "#94A3B8";
+};
+
+const getStatusWrapStyle = (status: string) => {
+  if (status === "Approved") return styles.statusWrapApproved;
+  if (status === "Resolving") return styles.statusWrapResolving;
+  return styles.statusWrapPending;
+};
+
+function NotificationCard({
+  item,
+  lastSeenMs,
+  onOpenReport,
+}: {
+  item: NotificationItem;
+  lastSeenMs: number;
+  onOpenReport: (item: NotificationItem) => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={[
+        styles.card,
+        isNotificationUnread(item, lastSeenMs) && styles.unreadCard,
+      ]}
+      onPress={() => onOpenReport(item)}
+      activeOpacity={0.82}
+      accessibilityRole="button"
+      accessibilityLabel={`Open report ${item.reportId} notification`}
+    >
+      {isNotificationUnread(item, lastSeenMs) ? <View style={styles.unreadAccent} /> : null}
+      <View style={styles.rowBetween}>
+        <View style={styles.reportTitleWrap}>
+          {isNotificationUnread(item, lastSeenMs) ? <View style={styles.inPageRedDot} /> : null}
+          <Text style={styles.reportId}>Report #{item.reportId}</Text>
+        </View>
+        <View style={[styles.statusWrap, getStatusWrapStyle(item.status)]}>
+          <Ionicons name={getStatusIcon(item.status)} size={13} color={getStatusIconColor(item.status)} />
+          <Text style={[styles.status, { color: getStatusColor(item.status) }]}>{item.status}</Text>
+        </View>
+      </View>
+
+      <Text style={styles.message}>{item.message}</Text>
+
+      {item.category || item.issue ? (
+        <View style={styles.contextRow}>
+          {item.category ? <Text style={styles.contextCategory}>{item.category}</Text> : null}
+          {item.issue ? (
+            <Text style={styles.contextIssue} numberOfLines={1}>
+              {item.issue}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+
+      <View style={styles.footerRow}>
+        <Text style={styles.date}>{formatRelativeTime(item.createdAtMs)}</Text>
+        <View style={styles.openRow}>
+          <Text style={styles.openText}>View report</Text>
+          <Ionicons name="chevron-forward" size={14} color="#2563EB" />
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
 
 export default function NotificationScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { items, loading, markAllAsRead } = useReportNotifications();
+  const { items, loading, unreadCount, lastSeenMs, markAllAsRead } = useReportNotifications();
 
-  useFocusEffect(
-    useCallback(() => {
-      markAllAsRead();
-    }, [markAllAsRead]),
-  );
+  const sections = groupNotificationsByTime(items);
 
   const handleGoToReports = () => {
     try {
       router.push("/regular_user/view-reports");
     } catch {
       // Silently fail - navigation errors should not crash the app
+    }
+  };
+
+  const handleOpenReport = (item: NotificationItem) => {
+    try {
+      if (!item || !item.reportId) {
+        return;
+      }
+
+      router.push({
+        pathname: "/regular_user/view_reportuser",
+        params: { reportId: item.reportId },
+      });
+    } catch {
+      try {
+        router.push("/regular_user/view-reports");
+      } catch {
+        // Silently fail - navigation errors should not crash the app
+      }
     }
   };
 
@@ -65,7 +147,17 @@ export default function NotificationScreen() {
           </TouchableOpacity>
 
           <Text style={styles.title}>Notifications</Text>
-          <View style={styles.badgeWrap} />
+          <View style={styles.badgeWrap}>
+            {unreadCount > 0 ? (
+              <TouchableOpacity
+                style={styles.markReadButton}
+                onPress={markAllAsRead}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.markReadText}>Read</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
 
         {loading ? (
@@ -92,10 +184,23 @@ export default function NotificationScreen() {
           </View>
         ) : (
           <FlatList
-            data={items}
-            keyExtractor={(item) => item.id}
+            data={sections}
+            keyExtractor={(section) => section.bucket}
             contentContainerStyle={styles.listContent}
-            renderItem={renderItem}
+            extraData={lastSeenMs}
+            renderItem={({ item: section }) => (
+              <View key={section.bucket}>
+                <Text style={styles.sectionHeader}>{BUCKET_LABELS[section.bucket]}</Text>
+                {section.items.map((notification) => (
+                  <NotificationCard
+                    key={notification.id}
+                    item={notification}
+                    lastSeenMs={lastSeenMs}
+                    onOpenReport={handleOpenReport}
+                  />
+                ))}
+              </View>
+            )}
           />
         )}
       </View>
@@ -103,140 +208,3 @@ export default function NotificationScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-  },
-  animatedScreen: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingBottom: 12,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#FFFFFF",
-    zIndex: 2,
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  title: {
-    color: "#0F172A",
-    fontSize: 20,
-    fontWeight: "800",
-  },
-  badgeWrap: {
-    width: 40,
-    alignItems: "flex-end",
-  },
-  listContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 24,
-    gap: 12,
-  },
-  card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-    padding: 16,
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  rowBetween: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 10,
-  },
-  reportId: {
-    color: "#0F172A",
-    fontSize: 15,
-    fontWeight: "800",
-  },
-  status: {
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  message: {
-    color: "#475569",
-    fontSize: 14,
-    marginBottom: 8,
-    lineHeight: 20,
-  },
-  date: {
-    color: "#94A3B8",
-    fontSize: 12,
-  },
-  centered: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 20,
-  },
-  emptyContainer: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "flex-start",
-    paddingTop: 60,
-    paddingHorizontal: 24,
-  },
-  emptyTitle: {
-    color: "#0F172A",
-    fontSize: 20,
-    fontWeight: "800",
-    marginBottom: 8,
-  },
-  emptySub: {
-    color: "#475569",
-    fontSize: 14,
-    textAlign: "center",
-    lineHeight: 22,
-    marginBottom: 28,
-    maxWidth: 300,
-  },
-  emptyIconWrap: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: "#F1F5F9",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 20,
-  },
-  emptyCta: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: "#0EA5E9",
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    borderRadius: 16,
-    shadowColor: "#0EA5E9",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 6,
-  },
-  emptyCtaText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-});

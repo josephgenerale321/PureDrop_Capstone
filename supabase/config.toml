@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.direct-password-reset]
 verify_jwt = false
+
+[functions.send-report-push]
+verify_jwt = false

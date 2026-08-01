@@ -1,16 +1,24 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Tabs, usePathname, useRouter } from "expo-router";
+import { Tabs, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Image, StyleSheet, View } from "react-native";
-import { useReportNotifications } from "../../components/notifications/notif_func";
+import { ReportNotificationsProvider, useReportNotifications } from "../../components/notifications/notif_func";
+import PushNotificationSync from "../../components/notifications/push_notificationfunc";
 import { auth, db } from "../../firebaseConfig";
 import RegularUserPresenceSync from "./status/RegularUserPresenceSync";
 
 export default function RegularUserLayout() {
+  return (
+    <ReportNotificationsProvider>
+      <RegularUserTabs />
+    </ReportNotificationsProvider>
+  );
+}
+
+function RegularUserTabs() {
   const router = useRouter();
-  const pathname = usePathname();
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [profileImageUrl, setProfileImageUrl] = useState(null);
@@ -68,12 +76,6 @@ export default function RegularUserLayout() {
     };
   }, [router]);
 
-  useEffect(() => {
-    if (typeof pathname === "string" && pathname.startsWith("/regular_user/notifications") && unreadCount > 0) {
-      markAllAsRead();
-    }
-  }, [markAllAsRead, pathname, unreadCount]);
-
   const tabAvatarSource = profileImageUrl
     ? { uri: profileImageUrl }
     : require("../../assets/images/default_account.png");
@@ -89,6 +91,7 @@ export default function RegularUserLayout() {
   return (
     <>
       <RegularUserPresenceSync />
+      <PushNotificationSync />
       <Tabs
         screenOptions={{
           headerShown: false,
@@ -132,14 +135,17 @@ export default function RegularUserLayout() {
           ),
         }}
         listeners={{
-          tabPress: () => {
-            markAllAsRead();
-          },
           focus: () => {
+            // Mark read once when the tab gains focus. The hook is
+            // idempotent — it skips the Firestore write when there are
+            // no unread notifications — so repeated focus events cost
+            // nothing. (The old code also wired tabPress and a pathname
+            // effect, causing up to 3 redundant writes.)
             markAllAsRead();
           },
         }}
       />
+
 
       <Tabs.Screen
         name="profile"

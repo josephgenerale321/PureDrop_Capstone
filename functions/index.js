@@ -1,6 +1,8 @@
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
+import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { onRequest } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
@@ -9,6 +11,11 @@ initializeApp();
 
 const SIGHTENGINE_API_USER = defineSecret("SIGHTENGINE_API_USER");
 const SIGHTENGINE_API_SECRET = defineSecret("SIGHTENGINE_API_SECRET");
+
+// Expo push delivery endpoint (free, no API key required). Sends push
+// messages to Expo Push Tokens that the mobile app registers in the
+// user's regular_user profile document.
+const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
 const REGION = "asia-southeast1";
 const SIGHTENGINE_API_URL = "https://api.sightengine.com/1.0/check.json";
@@ -235,6 +242,136 @@ export const directPasswordReset = onRequest(
           : "Could not reset password. Please try again.";
 
       res.status(500).json({ error: message });
+    }
+  },
+);
+
+/**
+ * Normalizes a report status value to the canonical form used by the app.
+ * Mirrors the mobile client's normalizeStatus so the push message title
+ * matches what is shown in the notification screen.
+ */
+const normalizeStatusForPush = (value) => {
+  if (typeof value !== "string") {
+    return "Pending";
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "approved") return "Approved";
+  if (normalized === "resolving" || normalized === "resolved") return "Resolving";
+  return "Pending";
+};
+
+const buildPushBody = (status, reportId, changedByAdmin) => {
+  const id = typeof reportId === "string" && reportId.length > 0 ? reportId : "?";
+  if (changedByAdmin) {
+    if (status === "Approved") return `Admin approved your report #${id}.`;
+    if (status === "Resolving") return `Admin marked your report #${id} as resolving.`;
+    return `Admin set your report #${id} to pending.`;
+  }
+  if (status === "Approved") return `Your report #${id} has been approved.`;
+  if (status === "Resolving") return `Your report #${id} is now resolving.`;
+  return `Your report #${id} is still pending.`;
+};
+
+/**
+ * Sends an Expo push notification to a report owner when the report's
+ * status changes. The mobile app registers its Expo Push Token in the
+ * user's `regular_user/{uid}` document (`expoPushToken` + `pushNotificationEnabled`),
+ * so this trigger reads that token and POSTs a message to Expo's free
+ * push service.
+ */
+export const sendReportStatusPush = onDocumentUpdated(
+  {
+    document: "regular_user/{userId}/reports/{reportId}",
+    region: REGION,
+    memory: "256MiB",
+  },
+  async (event) => {
+    const before = event.data?.before?.data?.();
+    const after = event.data?.after?.data?.();
+
+    if (!before || !after) {
+      return;
+    }
+
+    const beforeStatus = typeof before.status === "string" ? before.status.toLowerCase() : "";
+    const afterStatus = typeof after.status === "string" ? after.status.toLowerCase() : "";
+    if (!afterStatus || afterStatus === beforeStatus) {
+      return;
+    }
+
+    const userId = event.params.userId;
+    const reportId = typeof event.params.reportId === "string" ? event.params.reportId : "";
+
+    try {
+      const userDoc = await getFirestore()
+        .collection("regular_user")
+        .doc(userId)
+        .get();
+
+      if (!userDoc.exists) {
+        return;
+      }
+
+      const userData = userDoc.data() || {};
+      const token = typeof userData.expoPushToken === "string" ? userData.expoPushToken : "";
+      const pushEnabled = userData.pushNotificationEnabled;
+
+      if (!token) {
+        return;
+      }
+
+      if (pushEnabled === false) {
+        return;
+      }
+
+      const status = normalizeStatusForPush(after.status);
+      const rawUpdatedBy = before.statusUpdatedBy;
+      const changedByAdmin =
+        typeof rawUpdatedBy === "string" ? rawUpdatedBy.toLowerCase() === "admin" : false;
+
+      const body = buildPushBody(status, reportId, changedByAdmin);
+
+      const response = await fetch(EXPO_PUSH_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: token,
+          title: "Report update",
+          body,
+          sound: "default",
+          data: {
+            reportId,
+            route: "/regular_user/notifications",
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        logger.warn("sendReportStatusPush non-OK response", {
+          userId,
+          reportId,
+          status: response.status,
+        });
+        return;
+      }
+
+      const payload = await response.json();
+      if (payload?.data?.[0]?.status === "error") {
+        logger.warn("Expo push rejected", {
+          userId,
+          reportId,
+          message: payload.data[0].message,
+        });
+        return;
+      }
+
+      logger.info("sendReportStatusPush delivered", { userId, reportId, status });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Pushes are best-effort; failures must never break report updates.
+      logger.warn("sendReportStatusPush failed", { userId, reportId, message });
     }
   },
 );
