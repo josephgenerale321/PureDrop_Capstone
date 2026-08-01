@@ -213,9 +213,12 @@ const mapReportToNotification = (
 export type NotificationContextValue = {
   items: NotificationItem[];
   loading: boolean;
+  hasError: boolean;
+  refreshing: boolean;
   unreadCount: number;
   lastSeenMs: number;
   markAllAsRead: () => Promise<void>;
+  refresh: () => void;
 };
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
@@ -227,6 +230,9 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
   const currentUidRef = useRef<string | null>(null);
   const lastSeenMsRef = useRef<number>(0);
   const itemsRef = useRef<NotificationItem[]>([]);
+  const [hasError, setHasError] = useState<boolean>(false);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [refreshToken, setRefreshToken] = useState<number>(0);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -256,11 +262,14 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
         setItems([]);
         setLastSeenMsSafe(0);
         setLoading(false);
+        setHasError(false);
+        setRefreshing(false);
         return;
       }
 
       currentUidRef.current = currentUser.uid;
-      setLoading(true);
+      setLoading(itemsRef.current.length === 0);
+      setHasError(false);
 
       const userRef = doc(db, "regular_user", currentUser.uid);
       unsubscribeUser = onSnapshot(
@@ -281,6 +290,7 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
         },
         () => {
           setLastSeenMsSafe(0);
+          setRefreshing(false);
         },
       );
 
@@ -319,8 +329,12 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
             return prev;
           });
           setLoading(false);
+          setHasError(false);
+          setRefreshing(false);
         },
         () => {
+          setHasError(true);
+          setRefreshing(false);
           setLoading(false);
         },
       );
@@ -336,7 +350,7 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
         unsubscribeUser();
       }
     };
-  }, [setLastSeenMsSafe]);
+  }, [refreshToken, setLastSeenMsSafe]);
 
   const unreadCount = useMemo(() => {
     if (lastSeenMs <= 0) {
@@ -377,14 +391,23 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
     }
   }, [setLastSeenMsSafe]);
 
+  const refresh = useCallback(() => {
+    setHasError(false);
+    setRefreshing(true);
+    setRefreshToken((token) => token + 1);
+  }, []);
+
   return (
     <NotificationContext.Provider
       value={{
         items,
         loading,
+        hasError,
+        refreshing,
         unreadCount,
         lastSeenMs,
         markAllAsRead,
+        refresh,
       }}
     >
       {children}

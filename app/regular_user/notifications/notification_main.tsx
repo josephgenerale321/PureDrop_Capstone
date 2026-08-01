@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import {
   ActivityIndicator,
   FlatList,
+  RefreshControl,
   Text,
   TouchableOpacity,
   View,
@@ -103,7 +104,16 @@ function NotificationCard({
 export default function NotificationScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { items, loading, unreadCount, lastSeenMs, markAllAsRead } = useReportNotifications();
+  const {
+    items,
+    loading,
+    hasError,
+    refreshing,
+    unreadCount,
+    lastSeenMs,
+    markAllAsRead,
+    refresh,
+  } = useReportNotifications();
 
   const sections = groupNotificationsByTime(items);
 
@@ -164,6 +174,24 @@ export default function NotificationScreen() {
           <View style={styles.centered}>
             <ActivityIndicator size="large" color="#0284c7" />
           </View>
+        ) : hasError && items.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <View style={styles.emptyIconWrap}>
+              <Ionicons name="cloud-offline-outline" size={48} color="#94A3B8" />
+            </View>
+            <Text style={styles.emptyTitle}>{"Couldn't load notifications"}</Text>
+            <Text style={styles.emptySub}>
+              {"We couldn't fetch your notifications. Check your connection and try again."}
+            </Text>
+            <TouchableOpacity
+              style={styles.emptyCta}
+              onPress={refresh}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="refresh" size={20} color="#FFFFFF" />
+              <Text style={styles.emptyCtaText}>Try Again</Text>
+            </TouchableOpacity>
+          </View>
         ) : items.length === 0 ? (
           <View style={styles.emptyContainer}>
             <View style={styles.emptyIconWrap}>
@@ -188,6 +216,14 @@ export default function NotificationScreen() {
             keyExtractor={(section) => section.bucket}
             contentContainerStyle={styles.listContent}
             extraData={lastSeenMs}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={refresh}
+                tintColor="#0284c7"
+                colors={["#0284c7"]}
+              />
+            }
             renderItem={({ item: section }) => (
               <View key={section.bucket}>
                 <Text style={styles.sectionHeader}>{BUCKET_LABELS[section.bucket]}</Text>

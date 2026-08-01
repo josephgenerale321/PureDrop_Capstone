@@ -3,7 +3,7 @@ import { Tabs, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Image, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Image, StyleSheet, Text, View } from "react-native";
 import { ReportNotificationsProvider, useReportNotifications } from "../../components/notifications/notif_func";
 import PushNotificationSync from "../../components/notifications/push_notificationfunc";
 import { auth, db } from "../../firebaseConfig";
@@ -129,7 +129,11 @@ function RegularUserTabs() {
                 size={24}
                 color={focused ? "#0EA5E9" : "#94A3B8"}
               />
-              {unreadCount > 0 && !focused ? <View style={styles.notifDot} /> : null}
+              {unreadCount > 0 && !focused ? (
+                <View style={styles.notifDot}>
+                  <Text style={styles.notifDotText}>{unreadCount > 9 ? "9+" : String(unreadCount)}</Text>
+                </View>
+              ) : null}
               {focused && <View style={styles.activeIndicator} />}
             </View>
           ),
@@ -250,14 +254,24 @@ const styles = StyleSheet.create({
 
   notifDot: {
     position: "absolute",
-    top: -2,
-    right: -2,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    top: -4,
+    right: -8,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: "#EF4444",
     borderWidth: 1.5,
     borderColor: "#FFFFFF",
+  },
+
+  notifDotText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "800",
+    lineHeight: 12,
   },
 
   loading: {
