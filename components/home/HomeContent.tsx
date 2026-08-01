@@ -107,7 +107,7 @@ export default function HomeContent({ user, loading }: HomeContentProps) {
           </TouchableOpacity>
 
           {/* Community Feed */}
-          <TouchableOpacity
+          {/* <TouchableOpacity
             style={styles.gridCard}
             onPress={() => router.push("/regular_user/all_reports/all_reportlist")}
             activeOpacity={0.85}
@@ -117,7 +117,7 @@ export default function HomeContent({ user, loading }: HomeContentProps) {
             </View>
             <Text style={styles.gridTitle}>Community</Text>
             <Text style={styles.gridDesc}>View local issues</Text>
-          </TouchableOpacity>
+          </TouchableOpacity> */}
 
           {/* Emergency Directory (Full width spanning 2 columns) */}
           <TouchableOpacity
