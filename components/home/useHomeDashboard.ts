@@ -1,8 +1,11 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { auth, db } from "../../firebaseConfig";
+
+const SAVED_LOGIN_NAME_KEY = "@puredrop/saved_login_name";
 
 /**
  * Profile fields resolved from the `regular_user/{uid}` Firestore document.
@@ -18,11 +21,31 @@ export type HomeUser = {
 };
 
 /**
+ * Reads the cached full name written by `save_loginfunc.tsx`. Used only as an
+ * instant fast-path so the greeting shows the real name immediately after an
+ * auto-login; the live Firestore listener below always converges to the
+ * freshest profile data.
+ */
+const getCachedFullName = async (): Promise<string | null> => {
+  try {
+    const raw = await AsyncStorage.getItem(SAVED_LOGIN_NAME_KEY);
+    return typeof raw === "string" && raw.trim().length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
  * Backend logic for the home dashboard.
  *
  * - Subscribes to Firebase auth state.
- * - Fetches the current user's `regular_user/{uid}` Firestore document once
- *   after login and exposes it as `user`.
+ * - Subscribes to the current user's `regular_user/{uid}` Firestore document
+ *   with a LIVE `onSnapshot` listener (same pattern as the profile screen), so
+ *   the displayed name always converges to the real profile — even right after
+ *   an auto-login when a one-shot `getDoc` can race with session restore and
+ *   return before the document is readable.
+ * - Seeds the greeting from the locally cached full name (if any) for an
+ *   instant fast-path while the live listener resolves.
  * - Redirects to `/login` when there is no authenticated user.
  * - Exposes `loading` so the UI can show a spinner until the first auth/user
  *   resolution completes.
@@ -37,13 +60,45 @@ export function useHomeDashboard() {
 
   useEffect(() => {
     let isMounted = true;
+    let unsubscribeProfile: (() => void) | null = null;
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        try {
-          const userDocRef = doc(db, "regular_user", currentUser.uid);
-          const userSnap = await getDoc(userDocRef);
+      if (unsubscribeProfile) {
+        unsubscribeProfile();
+        unsubscribeProfile = null;
+      }
 
+      if (!currentUser) {
+        if (isMounted) {
+          setUser(null);
+          router.replace("/login");
+          setLoading(false);
+        }
+        return;
+      }
+
+      // Fast-path: show the cached full name instantly while the live
+      // listener resolves the freshest profile.
+      if (isMounted) {
+        try {
+          const cachedName = await getCachedFullName();
+          if (isMounted && cachedName) {
+            setUser((prev) => {
+              if (prev && typeof prev.fullName === "string" && prev.fullName.length > 0) {
+                return prev;
+              }
+              return { uid: currentUser.uid, email: currentUser.email, fullName: cachedName };
+            });
+          }
+        } catch {
+          // Non-fatal — the live listener will provide the real profile.
+        }
+      }
+
+      const userDocRef = doc(db, "regular_user", currentUser.uid);
+      unsubscribeProfile = onSnapshot(
+        userDocRef,
+        (userSnap) => {
           if (!isMounted) {
             return;
           }
@@ -58,29 +113,33 @@ export function useHomeDashboard() {
             setUser({ uid: currentUser.uid, email: currentUser.email });
             console.warn("User profile not found in Firestore");
           }
-        } catch (error) {
+          setLoading(false);
+        },
+        (error) => {
           if (!isMounted) {
             return;
           }
 
-          setUser({ uid: currentUser.uid, email: currentUser.email });
-          console.warn("Failed to load user profile after login", error);
-        }
-      } else {
-        if (isMounted) {
-          setUser(null);
-          router.replace("/login");
-        }
-      }
-
-      if (isMounted) {
-        setLoading(false);
-      }
+          console.warn("Failed to subscribe to user profile after login", error);
+          // Keep the cached fast-path user (if any) or a minimal user, so the
+          // dashboard still renders instead of spinning forever.
+          setUser((prev) => {
+            if (prev) {
+              return prev;
+            }
+            return { uid: currentUser.uid, email: currentUser.email };
+          });
+          setLoading(false);
+        },
+      );
     });
 
     return () => {
       isMounted = false;
       unsubscribe();
+      if (unsubscribeProfile) {
+        unsubscribeProfile();
+      }
     };
   }, [router]);
 

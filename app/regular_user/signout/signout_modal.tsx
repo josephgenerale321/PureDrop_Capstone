@@ -3,6 +3,7 @@ import { signOut } from "firebase/auth";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { auth } from "../../../firebaseConfig";
+import { clearSavedLogin } from "../../../components/main_layout/save_loginfunc";
 import { beginLogout, finishLogout } from "../../../lib/auth/logoutState";
 import { markCurrentUserInactive } from "../status/RegularUserPresenceSync";
 
@@ -17,6 +18,14 @@ export default function SignOutModal() {
       await markCurrentUserInactive("manual_logout");
     } catch {
       // Keep sign-out flow non-blocking even if presence update fails.
+    }
+
+    // Forget the locally saved login marker so the app does NOT auto-login
+    // again on the next launch after an explicit sign-out.
+    try {
+      await clearSavedLogin();
+    } catch {
+      // Non-fatal — Firebase sign-out still proceeds.
     }
 
     try {
