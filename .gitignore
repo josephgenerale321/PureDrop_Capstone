@@ -35,10 +35,11 @@ yarn-error.*
 .env*.local
 
 # Firebase credentials (never commit secrets)
-google-services.json
+# NOTE: google-services.json is intentionally committed (client-side config only,
+# no secret credentials) so EAS cloud builds can access it. The admin SDK key
+# and env files remain ignored.
 puredrop-capstone-project-firebase-adminsdk-*.json
 google-services.dev.json
-*.google-services.json
 
 # typescript
 *.tsbuildinfo

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "781886256531",
+    "project_id": "puredrop-capstone-project",
+    "storage_bucket": "puredrop-capstone-project.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:781886256531:android:6fdb333d8bf5660995a466",
+        "android_client_info": {
+          "package_name": "com.mermaid146.PureDrop_App"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAjY5aUySckoUm9KJ8t6tNe-R636OKM9hg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
