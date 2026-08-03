@@ -86,7 +86,7 @@ export default function HomeContent({ user, loading }: HomeContentProps) {
               Submit a report for leaks, dirty water, or supply outage.
             </Text>
           </View>
-          <Ionicons name="chevron-forward" size={24} color="#0EA5E9" style={{ opacity: 0.8 }} />
+          <Ionicons name="chevron-forward" size={24} color="#A0EEBA" style={{ opacity: 0.8 }} />
         </TouchableOpacity>
 
         {/* Dashboard Utilities Section */}

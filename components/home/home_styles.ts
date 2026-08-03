@@ -85,7 +85,7 @@ export const styles = StyleSheet.create({
   },
   primaryActionCard: {
     flexDirection: "row",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#509AEE",
     borderRadius: 20,
     padding: 20,
     marginBottom: 32,
@@ -96,7 +96,7 @@ export const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 3,
     borderWidth: 1,
-    borderColor: "#F1F5F9",
+    borderColor: "#3a7ac4",
   },
   primaryActionIconWrap: {
     width: 56,
@@ -104,7 +104,7 @@ export const styles = StyleSheet.create({
     borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#0EA5E9",
+    backgroundColor: "#a0eeba9d",
     shadowColor: "#0EA5E9",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
@@ -117,14 +117,14 @@ export const styles = StyleSheet.create({
     marginRight: 12,
   },
   primaryActionTitle: {
-    color: "#0F172A",
+    color: "#ffffff",
     fontSize: 18,
     fontWeight: "800",
     marginBottom: 4,
     letterSpacing: -0.3,
   },
   primaryActionDesc: {
-    color: "#64748B",
+    color: "#ffffff",
     fontSize: 13,
     lineHeight: 18,
   },
@@ -144,7 +144,7 @@ export const styles = StyleSheet.create({
   },
   gridCard: {
     width: "47%",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#509AEE",
     borderRadius: 20,
     padding: 20,
     shadowColor: "#0F172A",
@@ -153,7 +153,7 @@ export const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
     borderWidth: 1,
-    borderColor: "#F1F5F9",
+    borderColor: "#3a7ac4",
     alignItems: "flex-start",
   },
   gridCardFull: {
@@ -177,14 +177,14 @@ export const styles = StyleSheet.create({
     marginBottom: 16,
   },
   gridTitle: {
-    color: "#0F172A",
+    color: "#ffffff",
     fontSize: 16,
     fontWeight: "800",
     marginBottom: 6,
     letterSpacing: -0.3,
   },
   gridDesc: {
-    color: "#64748B",
+    color: "#ffffff",
     fontSize: 13,
     lineHeight: 18,
   },
