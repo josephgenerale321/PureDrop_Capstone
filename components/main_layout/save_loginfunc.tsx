@@ -59,8 +59,15 @@ export async function getSavedLogin(): Promise<SavedLoginState> {
     ]);
 
     const saved = savedRaw?.[1] === "true";
-    const email = typeof emailRaw?.[1] === "string" ? emailRaw[1] : null;
-    const fullName = typeof nameRaw?.[1] === "string" ? nameRaw[1] : null;
+    const emailValue = emailRaw?.[1];
+    const nameValue = nameRaw?.[1];
+
+    // Treat empty strings (the marker's "no value" representation) as null so
+    // callers never receive a blank string that looks like real data.
+    const email =
+      typeof emailValue === "string" && emailValue.length > 0 ? emailValue : null;
+    const fullName =
+      typeof nameValue === "string" && nameValue.length > 0 ? nameValue : null;
 
     return { saved, email, fullName };
   } catch {
@@ -83,50 +90,31 @@ export async function clearSavedLogin(): Promise<void> {
 export default function SaveLoginSync() {
   const router = useRouter();
   const pathname = usePathname();
+  // Guards the auto-redirect so it can only ever run once per app run.
   const handledSessionRef = useRef(false);
+  // True only when the app opened with a previously saved login marker — i.e.
+  // the current session is a genuine *restore*, not a fresh manual login that
+  // already navigates to `/regular_user/home` on its own.
+  const restoreIntentRef = useRef(false);
+  // uid of the auth session already synchronized (local cache + storage
+  // marker). `onAuthStateChanged` can re-fire for the same user (token
+  // refresh, re-subscribe); this uid guard keeps the network + storage work to
+  // ONE sync per user per app run.
+  const syncedUidRef = useRef<string | null>(null);
+  // Re-entrancy guard, so an auth re-fire while a sync is still awaiting I/O
+  // does not start a second overlapping sync (dedupes network reads).
+  const syncingRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
+    let unsubscribe: (() => void) | null = null;
 
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (!currentUser) {
-        handledSessionRef.current = false;
-        return;
-      }
-
-      // Best-effort, crash-safe: persist the login marker + profile name.
-      let fullName: string | null = null;
-      try {
-        const profileRef = doc(db, "regular_user", currentUser.uid);
-        const profileSnap = await getDoc(profileRef);
-        const data = profileSnap.exists() ? profileSnap.data() : null;
-        fullName =
-          data && typeof data.fullName === "string" && data.fullName.length > 0
-            ? data.fullName
-            : null;
-      } catch {
-        // If the profile fetch fails (e.g. offline restore), fall back to
-        // the previous cached value below — never crash.
-      }
-
-      try {
-        await AsyncStorage.multiSet([
-          [SAVED_LOGIN_KEY, "true"],
-          [SAVED_LOGIN_EMAIL_KEY, currentUser.email ?? ""],
-          [SAVED_LOGIN_NAME_KEY, fullName ?? ""],
-        ]);
-      } catch {
-        // Non-fatal.
-      }
-
-      if (!isMounted) {
-        return;
-      }
-
-      // Auto-login: bounce a logged-in user off the pre-login screens exactly
-      // once per session. Manual login already navigates on its own, so this
-      // only matters when a session is restored on app open.
-      if (!handledSessionRef.current && isPreLoginRoute(pathname)) {
+    const maybeRedirect = () => {
+      if (
+        !handledSessionRef.current &&
+        restoreIntentRef.current &&
+        isPreLoginRoute(pathname)
+      ) {
         handledSessionRef.current = true;
         try {
           router.replace("/regular_user/home");
@@ -134,11 +122,131 @@ export default function SaveLoginSync() {
           // Navigation must never crash the app.
         }
       }
-    });
+    };
+
+    // Start observing Firebase auth. Called only after the storage read has
+    // settled so `restoreIntentRef` is always accurate when the listener fires
+    // (`onAuthStateChanged` emits the current user immediately on subscribe,
+    // so no restored session is ever missed).
+    const startListening = () => {
+      if (!isMounted) {
+        return;
+      }
+
+      unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+        if (!currentUser) {
+          // Explicit sign-out (or expired session). Allow the next sign-in to
+          // re-synchronize so a profile/name change is not missed.
+          syncedUidRef.current = null;
+          return;
+        }
+
+        // Same user as the last auth event — already synced this app run.
+        // Skip the network profile read and the storage write entirely; only
+        // re-attempt the cheap (local) one-shot redirect.
+        if (syncedUidRef.current === currentUser.uid) {
+          maybeRedirect();
+          return;
+        }
+
+        // A sync for this sign-in is already in flight — don't start a second
+        // overlapping network read.
+        if (syncingRef.current) {
+          return;
+        }
+        syncingRef.current = true;
+
+        void (async () => {
+          try {
+            // 1) Resolve the display name cache-first (zero network I/O).
+            let cached: SavedLoginState;
+            try {
+              cached = await getSavedLogin();
+            } catch {
+              cached = { saved: false, email: null, fullName: null };
+            }
+
+            let fullName = cached.fullName;
+
+            // 2) Only when the cache has no name do we hit the network. On a
+            //    typical app reopen the cached name already exists, so the
+            //    Firestore `getDoc` round-trip is skipped entirely — faster
+            //    auto-login, works offline, and saves a network request.
+            if (!fullName) {
+              try {
+                const profileRef = doc(db, "regular_user", currentUser.uid);
+                const profileSnap = await getDoc(profileRef);
+                const data = profileSnap.exists() ? profileSnap.data() : null;
+                fullName =
+                  data && typeof data.fullName === "string" && data.fullName.length > 0
+                    ? data.fullName
+                    : null;
+              } catch {
+                // If the profile fetch fails (e.g. offline restore), fall back
+                // to the cached value — never crash.
+              }
+            }
+
+            // 3) Persist only what actually changed (diff against the cached
+            //    values) — no redundant AsyncStorage writes on every signal.
+            try {
+              const writes: [string, string][] = [];
+              if (!cached.saved) {
+                writes.push([SAVED_LOGIN_KEY, "true"]);
+              }
+              const emailValue = currentUser.email ?? "";
+              if (cached.email !== emailValue) {
+                writes.push([SAVED_LOGIN_EMAIL_KEY, emailValue]);
+              }
+              const nameValue = fullName ?? "";
+              if (cached.fullName !== nameValue) {
+                writes.push([SAVED_LOGIN_NAME_KEY, nameValue]);
+              }
+              if (writes.length > 0) {
+                await AsyncStorage.multiSet(writes);
+              }
+            } catch {
+              // Non-fatal.
+            }
+
+            if (isMounted) {
+              syncedUidRef.current = currentUser.uid;
+            }
+          } finally {
+            syncingRef.current = false;
+            if (isMounted) {
+              maybeRedirect();
+            }
+          }
+        })();
+      });
+    };
+
+    (async () => {
+      try {
+        const savedLogin = await getSavedLogin();
+        if (!isMounted) {
+          return;
+        }
+        restoreIntentRef.current = savedLogin.saved;
+        startListening();
+        maybeRedirect();
+      } catch {
+        // Storage read failure is non-fatal. Still listen for auth so the app
+        // stays functional; auto-redirect is simply disabled.
+        if (!isMounted) {
+          return;
+        }
+        restoreIntentRef.current = false;
+        startListening();
+      }
+    })();
 
     return () => {
       isMounted = false;
-      unsubscribe();
+      if (unsubscribe) {
+        unsubscribe();
+      }
     };
   }, [router, pathname]);
 

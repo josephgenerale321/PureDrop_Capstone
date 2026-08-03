@@ -9,6 +9,23 @@ import { ReportNotificationsProvider, useReportNotifications } from "../../compo
 import PushNotificationSync from "../../components/notifications/push_notificationfunc";
 import { auth, db } from "../../firebaseConfig";
 import RegularUserPresenceSync from "./status/RegularUserPresenceSync";
+import {
+  clearSavedLogin,
+  getSavedLogin,
+} from "../../components/main_layout/save_loginfunc";
+
+// While a saved-login marker exists, Firebase may need several seconds to
+// refresh the persisted session token after the app reopens (especially on a
+// slow network). Keep the /regular_user spinner up for this grace window
+// before falling back to /login, so a valid restored session is never dropped
+// to the login screen prematurely.
+//
+// NOTE ON TUNING: if this is set LOWER than the actual token-refresh time on
+// the slowest supported network, the app will bounce to /login before the
+// session restores, then get redirected back once it does — that is the exact
+// "flip-flop" this grace window exists to prevent. 8s matches the 8s loading
+// overlay timeout in `saveloginwait.tsx` for coherent behavior.
+const AUTH_RESTORE_GRACE_MS = 8000;
 
 export default function RegularUserLayout() {
   return (
@@ -24,10 +41,62 @@ function RegularUserTabs() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [profileImageUrl, setProfileImageUrl] = useState(null);
   const redirectingRef = useRef(false);
+  // True while this open still holds a saved-login marker. During the short
+  // window after a force-close+reopen, Firebase may legitimately report "no
+  // user" for a few seconds while it refreshes the persisted session token —
+  // we must not bounce to /login during that window.
+  const hasSavedLoginRef = useRef(false);
+  // True until the first AsyncStorage read settles, so an auth "no user"
+  // event that races ahead of the read doesn't cause a premature redirect.
+  const markerPendingRef = useRef(true);
+  const graceTimerRef = useRef(null);
   const { unreadCount, markAllAsRead } = useReportNotifications();
 
   useEffect(() => {
     let unsubscribeProfile = null;
+    let isMounted = true;
+
+    const clearGraceTimer = () => {
+      if (graceTimerRef.current) {
+        clearTimeout(graceTimerRef.current);
+        graceTimerRef.current = null;
+      }
+    };
+
+    const redirectToLogin = () => {
+      if (!redirectingRef.current) {
+        redirectingRef.current = true;
+        router.replace("/login");
+      }
+    };
+
+    const handleNoCurrentUser = () => {
+      if (hasSavedLoginRef.current) {
+        // A restore is (probably) in progress — give Firebase a grace window
+        // before falling back to the login screen. A valid restored session
+        // must never be dropped to /login prematurely.
+        if (!graceTimerRef.current) {
+          graceTimerRef.current = setTimeout(() => {
+            graceTimerRef.current = null;
+            if (!isMounted) {
+              return;
+            }
+            // No session restored within the grace window — treat the saved
+            // login as stale, clear it, and fall back to a manual login.
+            hasSavedLoginRef.current = false;
+            void clearSavedLogin().catch(() => {});
+            setIsAuthenticated(false);
+            redirectToLogin();
+          }, AUTH_RESTORE_GRACE_MS);
+        }
+      } else if (!markerPendingRef.current) {
+        // No marker and the storage read has settled — this is a normal
+        // logged-out state, redirect immediately (existing gate behavior).
+        redirectToLogin();
+      }
+      // marker still pending: the storage read resolves below and re-runs
+      // this decision.
+    };
 
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (unsubscribeProfile) {
@@ -38,11 +107,13 @@ function RegularUserTabs() {
       if (!currentUser) {
         setIsAuthenticated(false);
         setProfileImageUrl(null);
-        if (!redirectingRef.current) {
-          redirectingRef.current = true;
-          router.replace("/login");
-        }
+        handleNoCurrentUser();
       } else {
+        // A session arrived (restored or fresh) — cancel any pending grace
+        // fallback and show the tab UI.
+        clearGraceTimer();
+        hasSavedLoginRef.current = false;
+        markerPendingRef.current = false;
         setIsAuthenticated(true);
         redirectingRef.current = false;
         const userRef = doc(db, "regular_user", currentUser.uid);
@@ -69,7 +140,40 @@ function RegularUserTabs() {
       setAuthChecked(true);
     });
 
+    // Decide whether this open should wait for a session restore, and close
+    // the race where the auth listener fires "no user" before the storage
+    // read settles.
+    (async () => {
+      try {
+        const savedLogin = await getSavedLogin();
+        if (!isMounted) {
+          return;
+        }
+        markerPendingRef.current = false;
+        hasSavedLoginRef.current = savedLogin.saved;
+
+        if (savedLogin.saved) {
+          // Marked for restore — if the auth listener already reported no
+          // user, arm the grace timer now.
+          if (!auth.currentUser) {
+            handleNoCurrentUser();
+          }
+        } else if (!auth.currentUser && !redirectingRef.current) {
+          // No marker and no session — normal logged-out gate.
+          redirectToLogin();
+        }
+      } catch {
+        // Storage read failure is non-fatal. The normal gate applies; the
+        // auth listener above handles immediate redirects from here on.
+        if (isMounted) {
+          markerPendingRef.current = false;
+        }
+      }
+    })();
+
     return () => {
+      isMounted = false;
+      clearGraceTimer();
       unsubscribe();
       if (unsubscribeProfile) {
         unsubscribeProfile();

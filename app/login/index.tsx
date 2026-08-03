@@ -16,6 +16,7 @@ import {
 import { finishLogout } from "../../lib/auth/logoutState";
 import { getLoginErrorMessage } from "../../lib/login/logerror";
 import { loginUser } from "../../lib/login/loginfunctions";
+import SavedLoginWait from "../../components/login/backend/saveloginwait";
 
 const FORGOT_PASSWORD_ROUTE = "/login/forgot_password" as Href;
 
@@ -61,6 +62,9 @@ export default function LoginScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 24 : 0}
     >
+      {/* Loading overlay while a saved login is restored (dev + preview safe) */}
+      <SavedLoginWait />
+
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardDismissMode="interactive"
