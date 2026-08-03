@@ -302,7 +302,7 @@ Deno.serve(async (request: Request) => {
     const status = normalizeStatus(body.status);
     const bodyText = buildPushBody(status, reportId, changedByAdmin);
 
-    // Step 3: Send the push notification through Expo's free API.
+// Step 3: Send the push notification through Expo's free API.
     const expoResponse = await fetch(EXPO_PUSH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -311,6 +311,12 @@ Deno.serve(async (request: Request) => {
         title: "Report update",
         body: bodyText,
         sound: "default",
+        // Android channel + high priority so the notification is shown
+        // prominently in the system shade even when the app is backgrounded
+        // or fully closed. Matches the channel id created by the app
+        // (push_notificationfunc.tsx / system_notif.tsx).
+        channelId: "report-updates",
+        priority: "high",
         data: {
           reportId,
           route: "/regular_user/notifications",

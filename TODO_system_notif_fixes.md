@@ -65,28 +65,25 @@ crashing and without needing FCM/APNs credentials.
        never committed:
        - `google-services.json`
        - `puredrop-capstone-project-firebase-adminsdk-*.json`
-- [ ] 8. Remaining manual steps (require the user's Expo/Firebase console):
-       a. Upload the FCM push credential to Expo using `eas credentials`
-          (the local `expo push:android:upload` command is NOT supported in
-          this Expo SDK version — EAS CLI must be used instead):
-          ```
-          eas credentials
-          ```
-Then select: **Android** → **Push notifications (FCM V1)** →
-          **Upload Google Service Account Key**, and choose the
-          `puredrop-capstone-project-firebase-adminsdk-*.json` service
-          account key already present in the project root.
-
-          ⚠️ IMPORTANT: Your Expo SDK 54 uses `expo-notifications` 0.32.17,
-          which requires **FCM V1**, NOT FCM Legacy. In the `eas credentials`
-          menu, make sure you select the **Push notifications (FCM V1)**
-          option (not "FCM Legacy"). If you see "FCM Legacy / None assigned
-          yet", you are on the wrong option — navigate back and choose the
-          FCM V1 entry, then upload the service account key there.
-       b. Rebuild the dev/preview Android app so FCM is bundled:
+- [x] 8. Uploaded the FCM V1 push credential to Expo via `eas credentials`:
+       - The local `expo push:android:upload` command is NOT supported in this
+         Expo SDK version, so EAS CLI was used instead.
+       - In the `eas credentials` menu the correct option was labeled
+         **"Google Service Account"** (FCM V1) → **"Set up a Google Service
+         Account Key for Push Notifications (FCM V1)"** → choose the
+         `puredrop-capstone-project-firebase-adminsdk-*.json` service account
+         key.
+       - ⚠️ NAVIGATION NOTE: The user's `eas-cli@21.4.0` labels the FCM V1
+         option "Google Service Account", NOT "FCM V1" (the FCM V1 entry shows
+         as a separate line "None assigned yet"). The "Push Notifications
+         (FCM Legacy)" entry is a DIFFERENT, wrong option. Upload to the FCM
+         V1 / Google Service Account slot.
+       - ✅ Confirmed: FCM V1 key uploaded successfully.
+- [ ] 9. Remaining manual steps (require the user's Expo account):
+       a. Rebuild the dev/preview Android app so FCM is bundled:
           `eas build --profile preview --platform android` (or
           `eas build --profile development --platform android`).
-       c. Reinstall the new build. On next login/auth restore,
+       b. Reinstall the new build. On next login/auth restore,
           `PushNotificationSync` will register a real `expoPushToken` in
           `regular_user/{uid}`. The server-side `send-report-push` Edge
           Function (which uses the service-account key via the

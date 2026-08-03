@@ -135,7 +135,10 @@ export const registerForPushNotificationsAsync =
       if (Platform.OS === "android") {
         await Notifications.setNotificationChannelAsync(PUSH_CHANNEL_ID, {
           name: "Report Updates",
-          importance: Notifications.AndroidImportance.DEFAULT,
+          // HIGH importance so remote pushes appear in the system shade even
+          // when the app is backgrounded or fully closed. Kept consistent
+          // with the local channel in system_notif.tsx.
+          importance: Notifications.AndroidImportance.HIGH,
           vibrationPattern: [0, 250, 250, 250],
           lightColor: "#0EA5E9",
         });

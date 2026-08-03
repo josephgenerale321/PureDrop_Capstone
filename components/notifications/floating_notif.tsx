@@ -37,6 +37,19 @@ const isNotificationsRoute = (pathname: string): boolean => {
 };
 
 /**
+ * Builds a stable "dedupe key" for a notification item.
+ *
+ * A report's Firestore document id does NOT change when the admin updates its
+ * status — only `statusUpdatedAt` (and therefore `createdAtMs`) and `status`
+ * change. Tracking by document id alone means a status update to an already
+ * seen report is silently ignored (the banner / system notification never
+ * appears). So we key on the triplet `reportId + createdAtMs + status`, which
+ * changes every time the admin sets a new status.
+ */
+const getNotificationKey = (item: NotificationItem): string =>
+  `${item.id}:${item.createdAtMs}:${item.status}`;
+
+/**
  * Floating notification banner for the regular-user area.
  *
  * Renders a small tappable toast above the bottom tab bar whenever a NEW
@@ -164,7 +177,8 @@ export default function FloatingNotification() {
 
       let newestUnread: NotificationItem | null = null;
       items.forEach((item) => {
-        knownIdsRef.current.add(item.id);
+        // Seed the known set so only genuinely new updates toast after this.
+        knownIdsRef.current.add(getNotificationKey(item));
         if (isNotificationUnread(item, lastSeenMs)) {
           if (!newestUnread || item.createdAtMs > newestUnread.createdAtMs) {
             newestUnread = item;
@@ -179,12 +193,15 @@ export default function FloatingNotification() {
     }
 
     // Look for a genuinely new unread notification we have not seen before.
+    // The key includes status + statusUpdatedAt, so an admin re-setting the
+    // status on an EXISTING report is treated as new and shown.
     let newestNew: NotificationItem | null = null;
     for (const item of items) {
-      if (knownIdsRef.current.has(item.id)) {
+      const key = getNotificationKey(item);
+      if (knownIdsRef.current.has(key)) {
         continue;
       }
-      knownIdsRef.current.add(item.id);
+      knownIdsRef.current.add(key);
       if (isNotificationUnread(item, lastSeenMs)) {
         if (!newestNew || item.createdAtMs > newestNew.createdAtMs) {
           newestNew = item;

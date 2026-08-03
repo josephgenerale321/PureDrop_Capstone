@@ -95,6 +95,19 @@ const getLocalNotificationsModule = () => {
 };
 
 /**
+ * Builds a stable "dedupe key" for a notification item.
+ *
+ * A report's Firestore document id does NOT change when the admin updates its
+ * status — only `statusUpdatedAt` (and therefore `createdAtMs`) and `status`
+ * change. Tracking by document id alone would make a status update to an
+ * already-seen report invisible (the system notification never appears). So we
+ * key on the triplet `reportId + createdAtMs + status`, which changes every
+ * time the admin sets a new status.
+ */
+const getNotificationKey = (item: NotificationItem): string =>
+  `${item.id}:${item.createdAtMs}:${item.status}`;
+
+/**
  * Builds the human-readable message for a report-update local notification.
  * Mirrors the message used by the in-app banner and the push functions so the
  * wording is consistent everywhere.
@@ -223,7 +236,8 @@ export default function SystemNotificationSync() {
       // the app when it arrived).
       let newestUnread: NotificationItem | null = null;
       items.forEach((item) => {
-        knownIdsRef.current.add(item.id);
+        // Seed the known set so only genuinely new updates notify after this.
+        knownIdsRef.current.add(getNotificationKey(item));
         if (isNotificationUnread(item, lastSeenMs)) {
           if (!newestUnread || item.createdAtMs > newestUnread.createdAtMs) {
             newestUnread = item;
@@ -238,12 +252,15 @@ export default function SystemNotificationSync() {
     }
 
     // Subsequent snapshots: only notify for genuinely NEW unread updates.
+    // The key includes status + statusUpdatedAt, so an admin re-setting the
+    // status on an EXISTING report is treated as new and shown.
     let newestNew: NotificationItem | null = null;
     for (const item of items) {
-      if (knownIdsRef.current.has(item.id)) {
+      const key = getNotificationKey(item);
+      if (knownIdsRef.current.has(key)) {
         continue;
       }
-      knownIdsRef.current.add(item.id);
+      knownIdsRef.current.add(key);
       if (isNotificationUnread(item, lastSeenMs)) {
         if (!newestNew || item.createdAtMs > newestNew.createdAtMs) {
           newestNew = item;

@@ -341,6 +341,12 @@ export const sendReportStatusPush = onDocumentUpdated(
           title: "Report update",
           body,
           sound: "default",
+          // Android channel + high priority so the notification is shown
+          // prominently in the system shade even when the app is backgrounded
+          // or fully closed. Matches the channel id created by the app
+          // (push_notificationfunc.tsx / system_notif.tsx).
+          channelId: "report-updates",
+          priority: "high",
           data: {
             reportId,
             route: "/regular_user/notifications",

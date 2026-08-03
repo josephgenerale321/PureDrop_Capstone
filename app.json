@@ -21,7 +21,8 @@
       "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
       "predictiveBackGestureEnabled": false,
-      "package": "com.mermaid146.PureDrop_App"
+      "package": "com.mermaid146.PureDrop_App",
+"googleServicesFile": "./google-services.json"
     },
     "web": {
       "output": "static",
