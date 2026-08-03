@@ -163,7 +163,27 @@ export const registerForPushNotificationsAsync =
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Push notification registration failed.";
-      console.warn("Push notification setup skipped:", message);
+
+      // In dev/preview builds that do not have FCM/APNs credentials configured,
+      // `getExpoPushTokenAsync` throws (e.g. "Default FirebaseApp is not
+      // initialized ... fcm-credentials"). This is EXPECTED and non-fatal, and
+      // the local system notification path (system_notif.tsx) covers delivery
+      // in those builds. Downgrade this expected case to a quiet debug log so
+      // it does not surface as a scary console warning. Remote push still
+      // works normally in production builds where FCM/APNs ARE configured.
+      const normalized = message.toLowerCase();
+      const isFcmNotConfigured =
+        normalized.includes("fcm-credentials") ||
+        normalized.includes("firebaseapp is not initialized") ||
+        normalized.includes("fcm") ||
+        normalized.includes("apns");
+
+      if (isFcmNotConfigured) {
+        console.debug("Remote push skipped (credentials not configured for this build):", message);
+      } else {
+        console.warn("Push notification setup skipped:", message);
+      }
+
       return { token: null, enabled: false, error: message };
     }
   };

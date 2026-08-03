@@ -7,6 +7,7 @@ import { ActivityIndicator, Image, StyleSheet, Text, View } from "react-native";
 import FloatingNotification from "../../components/notifications/floating_notif";
 import { ReportNotificationsProvider, useReportNotifications } from "../../components/notifications/notif_func";
 import PushNotificationSync from "../../components/notifications/push_notificationfunc";
+import SystemNotificationSync from "../../components/notifications/system_notif";
 import { auth, db } from "../../firebaseConfig";
 import RegularUserPresenceSync from "./status/RegularUserPresenceSync";
 import {
@@ -195,8 +196,9 @@ function RegularUserTabs() {
 
   return (
     <>
-      <RegularUserPresenceSync />
+<RegularUserPresenceSync />
       <PushNotificationSync />
+      <SystemNotificationSync />
       <FloatingNotification />
       <Tabs
         screenOptions={{

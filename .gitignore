@@ -34,6 +34,12 @@ yarn-error.*
 .env
 .env*.local
 
+# Firebase credentials (never commit secrets)
+google-services.json
+puredrop-capstone-project-firebase-adminsdk-*.json
+google-services.dev.json
+*.google-services.json
+
 # typescript
 *.tsbuildinfo
 
