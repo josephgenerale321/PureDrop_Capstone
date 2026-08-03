@@ -116,6 +116,60 @@ const getProjectId = (): string | undefined => {
       : undefined;
 };
 
+/**
+ * Reason why remote push could not be registered, when it is an EXPECTED and
+ * non-fatal condition (vs. a genuinely unexpected error).
+ *
+ * - "credentials": the BUILD does not have FCM/APNs credentials wired up
+ *   (e.g. `Default FirebaseApp is not initialized ... fcm-credentials`).
+ *   Common in dev/preview builds without a Google-APIs emulator.
+ * - "google-play-services": the RUNTIME cannot talk to Google Play Services /
+ *   Firebase InstanceID. This is a DEVICE-level condition, NOT a build
+ *   problem. Most commonly seen on an Android emulator image created WITHOUT
+ *   "Google APIs" (plain AOSP image), in Expo Go, or on a GMS-less physical
+ *   device. `MISSING_INSTANCEID_SERVICE` is the canonical Firebase InstanceID
+ *   error code for this case. Physical devices WITH Google Play Services
+ *   register FCM tokens fine.
+ */
+type PushRegistrationErrorKind = "credentials" | "google-play-services";
+
+const classifyPushRegistrationError = (
+  error: unknown,
+): PushRegistrationErrorKind | null => {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const normalized = message.toLowerCase();
+
+  // Dev/preview builds without FCM/APNs credentials baked in.
+  const isCredentialsIssue =
+    normalized.includes("fcm-credentials") ||
+    normalized.includes("firebaseapp is not initialized") ||
+    normalized.includes("apns") ||
+    normalized.includes("fcm");
+
+  if (isCredentialsIssue) {
+    return "credentials";
+  }
+
+  // Runtimes without Google Play Services / Firebase InstanceID.
+  // `MISSING_INSTANCEID_SERVICE` is the canonical InstanceID code for
+  // non-Google emulator images, Expo Go, and GMS-less devices. These are
+  // device-level conditions, not build/credential problems.
+  const isGooglePlayServicesIssue =
+    normalized.includes("missing_instanceid_service") ||
+    normalized.includes("instanceid") ||
+    normalized.includes("google play services") ||
+    normalized.includes("service_not_available") ||
+    normalized.includes("missing_google_app_id") ||
+    normalized.includes("google_api_unavailable");
+
+  if (isGooglePlayServicesIssue) {
+    return "google-play-services";
+  }
+
+  return null;
+};
+
 export const registerForPushNotificationsAsync =
   async (): Promise<PushRegistrationResult> => {
     try {
@@ -166,28 +220,51 @@ export const registerForPushNotificationsAsync =
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Push notification registration failed.";
+      const kind = classifyPushRegistrationError(error);
 
-      // In dev/preview builds that do not have FCM/APNs credentials configured,
-      // `getExpoPushTokenAsync` throws (e.g. "Default FirebaseApp is not
-      // initialized ... fcm-credentials"). This is EXPECTED and non-fatal, and
-      // the local system notification path (system_notif.tsx) covers delivery
-      // in those builds. Downgrade this expected case to a quiet debug log so
-      // it does not surface as a scary console warning. Remote push still
-      // works normally in production builds where FCM/APNs ARE configured.
-      const normalized = message.toLowerCase();
-      const isFcmNotConfigured =
-        normalized.includes("fcm-credentials") ||
-        normalized.includes("firebaseapp is not initialized") ||
-        normalized.includes("fcm") ||
-        normalized.includes("apns");
+      switch (kind) {
+        case "credentials": {
+          // In dev/preview builds that do not have FCM/APNs credentials
+          // configured, `getExpoPushTokenAsync` throws (e.g. "Default
+          // FirebaseApp is not initialized ... fcm-credentials"). This is
+          // EXPECTED and non-fatal, and the local system notification path
+          // (system_notif.tsx) covers delivery in those builds. Downgrade
+          // this expected case to a quiet debug log so it does not surface
+          // as a scary console warning. Remote push still works normally in
+          // production builds where FCM/APNs ARE configured.
+          console.debug(
+            "Remote push skipped (credentials not configured for this build):",
+            message,
+          );
+          return { token: null, enabled: false, error: message };
+        }
 
-      if (isFcmNotConfigured) {
-        console.debug("Remote push skipped (credentials not configured for this build):", message);
-      } else {
-        console.warn("Push notification setup skipped:", message);
+        case "google-play-services": {
+          // The runtime lacks Google Play Services / Firebase InstanceID
+          // (e.g. `MISSING_INSTANCEID_SERVICE` on a non-Google emulator image,
+          // Expo Go, or a GMS-less device). This is a DEVICE-level condition,
+          // NOT a build/credential problem. It is expected and non-fatal:
+          // local system notifications (system_notif.tsx) still deliver report
+          // updates, and remote push works on real devices with Google Play
+          // Services. Log at debug so it does not surface as a scary warning.
+          console.debug(
+            "Remote push skipped (device lacks Google Play Services / FCM support):",
+            message,
+          );
+          return {
+            token: null,
+            enabled: false,
+            error: `${message} (device lacks Google Play Services / FCM support)`,
+          };
+        }
+
+        default:
+          // Genuinely unexpected registration failure — surface it so it can
+          // be investigated. Existing push-onboarding logic treats this as a
+          // non-fatal skip (returns null token), so it never crashes.
+          console.warn("Push notification setup skipped:", message);
+          return { token: null, enabled: false, error: message };
       }
-
-      return { token: null, enabled: false, error: message };
     }
   };
 
