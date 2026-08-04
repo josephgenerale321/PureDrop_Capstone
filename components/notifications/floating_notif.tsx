@@ -41,13 +41,39 @@ const isNotificationsRoute = (pathname: string): boolean => {
  *
  * A report's Firestore document id does NOT change when the admin updates its
  * status — only `statusUpdatedAt` (and therefore `createdAtMs`) and `status`
- * change. Tracking by document id alone means a status update to an already
- * seen report is silently ignored (the banner / system notification never
- * appears). So we key on the triplet `reportId + createdAtMs + status`, which
+ * change. So we key on the triplet `reportId + createdAtMs + status`, which
  * changes every time the admin sets a new status.
  */
 const getNotificationKey = (item: NotificationItem): string =>
   `${item.id}:${item.createdAtMs}:${item.status}`;
+
+/**
+ * Module-level "already seen / already presented" trackers.
+ *
+ * These are intentionally NOT stored in a component ref: in expo-router the
+ * layout can remount (navigation re-render, tab switches, Fast Refresh, etc.),
+ * which would reset a component-scoped ref and cause the SAME notification to
+ * be re-presented (a duplicate banner). By hoisting the sets to module scope
+ * they survive remounts, so each notification is presented exactly once per
+ * app session. Keys are also pruned so the sets cannot grow unbounded.
+ */
+const seededKeysRef = new Set<string>();
+const presentedKeysRef = new Set<string>();
+const MAX_PRESENTED_KEYS = 200;
+
+/**
+ * Records a key into the module-level "presented" set, pruning the oldest
+ * entries when the set grows too large to avoid unbounded memory growth.
+ */
+const markPresented = (key: string): void => {
+  presentedKeysRef.add(key);
+  if (presentedKeysRef.size > MAX_PRESENTED_KEYS) {
+    const oldest = presentedKeysRef.values().next().value;
+    if (oldest !== undefined) {
+      presentedKeysRef.delete(oldest);
+    }
+  }
+};
 
 /**
  * Floating notification banner for the regular-user area.
@@ -73,14 +99,13 @@ export default function FloatingNotification() {
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
 
-  const { items, loading, lastSeenMs, markAllAsRead } = useReportNotifications();
+const { items, loading, lastSeenMs, markAllAsRead } = useReportNotifications();
 
   const [toast, setToast] = useState<NotificationItem | null>(null);
   const [visible, setVisible] = useState(false);
 
   const mountedRef = useRef(true);
   const appOpenResolvedRef = useRef(false);
-  const knownIdsRef = useRef<Set<string>>(new Set());
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animationRef = useRef<Animated.Value>(new Animated.Value(0));
   const animationLoopRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -167,7 +192,7 @@ export default function FloatingNotification() {
    * pending notifications. Subsequent snapshots only toast notifications
    * that are genuinely new AND unread.
    */
-  useEffect(() => {
+useEffect(() => {
     if (loading || items.length === 0) {
       return;
     }
@@ -177,8 +202,9 @@ export default function FloatingNotification() {
 
       let newestUnread: NotificationItem | null = null;
       items.forEach((item) => {
-        // Seed the known set so only genuinely new updates toast after this.
-        knownIdsRef.current.add(getNotificationKey(item));
+        // Seed the module-level known set so only genuinely new updates toast
+        // after this. Module scope means it survives remounts.
+        seededKeysRef.add(getNotificationKey(item));
         if (isNotificationUnread(item, lastSeenMs)) {
           if (!newestUnread || item.createdAtMs > newestUnread.createdAtMs) {
             newestUnread = item;
@@ -186,8 +212,12 @@ export default function FloatingNotification() {
         }
       });
 
-      if (newestUnread && mountedRef.current) {
-        present(newestUnread);
+      if (newestUnread) {
+        const key = getNotificationKey(newestUnread);
+        if (!presentedKeysRef.has(key) && mountedRef.current) {
+          markPresented(key);
+          present(newestUnread);
+        }
       }
       return;
     }
@@ -198,10 +228,10 @@ export default function FloatingNotification() {
     let newestNew: NotificationItem | null = null;
     for (const item of items) {
       const key = getNotificationKey(item);
-      if (knownIdsRef.current.has(key)) {
+      if (seededKeysRef.has(key)) {
         continue;
       }
-      knownIdsRef.current.add(key);
+      seededKeysRef.add(key);
       if (isNotificationUnread(item, lastSeenMs)) {
         if (!newestNew || item.createdAtMs > newestNew.createdAtMs) {
           newestNew = item;
@@ -209,8 +239,12 @@ export default function FloatingNotification() {
       }
     }
 
-    if (newestNew && mountedRef.current) {
-      present(newestNew);
+    if (newestNew) {
+      const key = getNotificationKey(newestNew);
+      if (!presentedKeysRef.has(key) && mountedRef.current) {
+        markPresented(key);
+        present(newestNew);
+      }
     }
   }, [items, lastSeenMs, loading, present]);
 

@@ -108,6 +108,32 @@ const getNotificationKey = (item: NotificationItem): string =>
   `${item.id}:${item.createdAtMs}:${item.status}`;
 
 /**
+ * Module-level "already seen / already presented" trackers.
+ *
+ * Same rationale as floating_notif.tsx: component-scoped refs reset when the
+ * layout remounts, which would re-present the same notification as a duplicate
+ * system notification. Hoisting the sets to module scope makes each
+ * notification present exactly once per app session.
+ */
+const seededKeysRef = new Set<string>();
+const presentedKeysRef = new Set<string>();
+const MAX_PRESENTED_KEYS = 200;
+
+/**
+ * Records a key into the module-level "presented" set, pruning the oldest
+ * entries when the set grows too large to avoid unbounded memory growth.
+ */
+const markPresented = (key: string): void => {
+  presentedKeysRef.add(key);
+  if (presentedKeysRef.size > MAX_PRESENTED_KEYS) {
+    const oldest = presentedKeysRef.values().next().value;
+    if (oldest !== undefined) {
+      presentedKeysRef.delete(oldest);
+    }
+  }
+};
+
+/**
  * Builds the human-readable message for a report-update local notification.
  * Mirrors the message used by the in-app banner and the push functions so the
  * wording is consistent everywhere.
@@ -209,7 +235,6 @@ export default function SystemNotificationSync() {
 
   const mountedRef = useRef(true);
   const appOpenResolvedRef = useRef(false);
-  const knownIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     mountedRef.current = true;
@@ -236,8 +261,9 @@ export default function SystemNotificationSync() {
       // the app when it arrived).
       let newestUnread: NotificationItem | null = null;
       items.forEach((item) => {
-        // Seed the known set so only genuinely new updates notify after this.
-        knownIdsRef.current.add(getNotificationKey(item));
+        // Seed the module-level known set so only genuinely new updates
+        // notify after this. Module scope means it survives remounts.
+        seededKeysRef.add(getNotificationKey(item));
         if (isNotificationUnread(item, lastSeenMs)) {
           if (!newestUnread || item.createdAtMs > newestUnread.createdAtMs) {
             newestUnread = item;
@@ -245,8 +271,12 @@ export default function SystemNotificationSync() {
         }
       });
 
-      if (newestUnread && mountedRef.current) {
-        void presentLocalNotification(Notifications, newestUnread);
+      if (newestUnread) {
+        const key = getNotificationKey(newestUnread);
+        if (!presentedKeysRef.has(key) && mountedRef.current) {
+          markPresented(key);
+          void presentLocalNotification(Notifications, newestUnread);
+        }
       }
       return;
     }
@@ -257,10 +287,10 @@ export default function SystemNotificationSync() {
     let newestNew: NotificationItem | null = null;
     for (const item of items) {
       const key = getNotificationKey(item);
-      if (knownIdsRef.current.has(key)) {
+      if (seededKeysRef.has(key)) {
         continue;
       }
-      knownIdsRef.current.add(key);
+      seededKeysRef.add(key);
       if (isNotificationUnread(item, lastSeenMs)) {
         if (!newestNew || item.createdAtMs > newestNew.createdAtMs) {
           newestNew = item;
@@ -268,8 +298,12 @@ export default function SystemNotificationSync() {
       }
     }
 
-    if (newestNew && mountedRef.current) {
-      void presentLocalNotification(Notifications, newestNew);
+    if (newestNew) {
+      const key = getNotificationKey(newestNew);
+      if (!presentedKeysRef.has(key) && mountedRef.current) {
+        markPresented(key);
+        void presentLocalNotification(Notifications, newestNew);
+      }
     }
   }, [items, lastSeenMs, loading]);
 
