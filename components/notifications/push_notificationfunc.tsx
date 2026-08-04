@@ -4,7 +4,7 @@ import { useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { useEffect, useRef } from "react";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import { auth, db } from "../../firebaseConfig";
 
 const PUSH_CHANNEL_ID = "report-updates";
@@ -275,26 +275,52 @@ export default function PushNotificationSync() {
   useEffect(() => {
     let isMounted = true;
 
-    const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
+    // Register (or re-register) the Expo push token for the signed-in user
+    // and persist it to their profile so the server can deliver remote pushes
+    // even when the app is fully closed. This is called on auth AND when the
+    // app returns to the foreground, so the token stays fresh and reliable.
+    const registerToken = async (uid: string) => {
+      try {
+        const result = await registerForPushNotificationsAsync();
+        if (!isMounted || !result.token) {
+          return;
+        }
+
+        try {
+          await updateDoc(doc(db, "regular_user", uid), {
+            expoPushToken: result.token,
+            pushNotificationEnabled: result.enabled,
+            pushTokenUpdatedAt: serverTimestamp(),
+          });
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Unable to save push token.";
+          console.warn("Push token save skipped:", message);
+        }
+      } catch {
+        // Registration must never crash the app. Expected failures (e.g. no
+        // FCM credentials in dev/preview builds) are already handled inside
+        // registerForPushNotificationsAsync.
+      }
+    };
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       if (!currentUser) {
         return;
       }
+      // Re-register on every auth state change (login, session restore).
+      void registerToken(currentUser.uid);
+    });
 
-      const result = await registerForPushNotificationsAsync();
-      if (!isMounted || !result.token) {
+    // Re-register when the app returns to the foreground so the token is
+    // refreshed (e.g. after a build update, permission change, or reboot).
+    const appStateSubscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active") {
         return;
       }
-
-      try {
-        await updateDoc(doc(db, "regular_user", currentUser.uid), {
-          expoPushToken: result.token,
-          pushNotificationEnabled: result.enabled,
-          pushTokenUpdatedAt: serverTimestamp(),
-        });
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Unable to save push token.";
-        console.warn("Push token save skipped:", message);
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        void registerToken(currentUser.uid);
       }
     });
 
@@ -313,6 +339,7 @@ export default function PushNotificationSync() {
     return () => {
       isMounted = false;
       unsubscribeAuth();
+      appStateSubscription.remove();
       responseSubscriptionRef.current?.remove();
       responseSubscriptionRef.current = null;
     };
