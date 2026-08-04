@@ -13,7 +13,10 @@ export const takeProfilePhoto = async (): Promise<ImagePicker.ImagePickerAsset |
   try {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (permission.status !== "granted") {
-      Alert.alert("Permission needed", "Please allow camera access to take a profile photo.");
+      Alert.alert(
+        "Permission needed",
+        "Please allow camera access to take a profile photo. You can also choose a photo from your library instead."
+      );
       return null;
     }
 
@@ -29,8 +32,14 @@ export const takeProfilePhoto = async (): Promise<ImagePicker.ImagePickerAsset |
     }
 
     return result.assets[0];
-  } catch {
-    Alert.alert("Camera error", "Unable to open the camera. Please try again.");
+  } catch (error) {
+    // Never crash on camera launch. Surface the error so the user can fall
+    // back to choosing from their library instead.
+    const message =
+      error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : "The camera could not be opened. Please choose a photo from your library instead.";
+    Alert.alert("Camera error", message);
     return null;
   }
 };
