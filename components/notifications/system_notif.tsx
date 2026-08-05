@@ -113,7 +113,10 @@ const getNotificationKey = (item: NotificationItem): string =>
  * Same rationale as floating_notif.tsx: component-scoped refs reset when the
  * layout remounts, which would re-present the same notification as a duplicate
  * system notification. Hoisting the sets to module scope makes each
- * notification present exactly once per app session.
+ * notification present exactly once per app session. They survive a reopen
+ * (background -> foreground, which keeps the same JS context), but are empty on
+ * a cold phone/emulator restart (new JS context), so the app-open presentation
+ * only fires after a genuine restart.
  */
 const seededKeysRef = new Set<string>();
 const presentedKeysRef = new Set<string>();
@@ -131,6 +134,17 @@ const markPresented = (key: string): void => {
       presentedKeysRef.delete(oldest);
     }
   }
+};
+
+/**
+ * Clears the module-scoped system-notification session state so a future
+ * sign-in starts clean (no stale "already seen / presented" keys leaking
+ * across sessions). Called on explicit logout. Crash-safe: it only mutates
+ * in-memory sets.
+ */
+export const resetSystemNotificationState = (): void => {
+  seededKeysRef.clear();
+  presentedKeysRef.clear();
 };
 
 /**
@@ -221,17 +235,20 @@ const presentLocalNotification = async (
  * or notification center, independent of the in-app banner.
  *
  * Behavior:
- * - On the first snapshot (app open / remount), it presents ONE local system
+ * - On a cold app start (new JS context) it presents ONE local system
  *   notification for the newest unread report update, so reopening the app
  *   surfaces pending updates.
  * - After that, it presents a local system notification for each genuinely
  *   NEW unread report update that arrives while the app is running.
+ * - A plain reopen (background -> foreground, same JS context) does NOT
+ *   re-present: the module-scoped dedup sets survive the reopen, so the same
+ *   notification is not shown again.
  * - It never crashes on dev/preview/web/Expo Go: all native calls are wrapped
  *   in try/catch, gated by a native-module availability check, and guarded by
  *   an `isMounted` flag.
  */
 export default function SystemNotificationSync() {
-  const { items, loading, lastSeenMs } = useReportNotifications();
+  const { items, loading, lastSeenMs, lastSeenLoaded } = useReportNotifications();
 
   const mountedRef = useRef(true);
   const appOpenResolvedRef = useRef(false);
@@ -244,7 +261,12 @@ export default function SystemNotificationSync() {
   }, []);
 
   useEffect(() => {
-    if (loading || items.length === 0) {
+    // Wait until the read timestamp has been resolved. On a fresh app/phone
+    // restart, lastSeenMs is briefly 0 while AsyncStorage/Firestore load — if
+    // we presented now, every notification would look unread and a phantom
+    // system/push notification would appear. Gating on lastSeenLoaded prevents
+    // that.
+    if (loading || !lastSeenLoaded || items.length === 0) {
       return;
     }
 
@@ -305,7 +327,7 @@ export default function SystemNotificationSync() {
         void presentLocalNotification(Notifications, newestNew);
       }
     }
-  }, [items, lastSeenMs, loading]);
+  }, [items, lastSeenMs, lastSeenLoaded, loading]);
 
   return null;
 }

@@ -268,6 +268,36 @@ export const registerForPushNotificationsAsync =
     }
   };
 
+/**
+ * Clears the push token for a user so the server stops delivering remote
+ * pushes (e.g. after an explicit logout).
+ *
+ * Best-effort and crash-safe: if the user doc does not exist or the Firestore
+ * write fails, this resolves without throwing so the logout flow is never
+ * blocked. The token is re-registered automatically on the next sign-in via
+ * PushNotificationSync (which listens to onAuthStateChanged), so clearing it
+ * here is safe.
+ *
+ * @param uid The Firebase Auth uid whose profile should lose its push token.
+ */
+export const unregisterPushNotificationsAsync = async (
+  uid: string,
+): Promise<void> => {
+  if (!uid) {
+    return;
+  }
+
+  try {
+    await updateDoc(doc(db, "regular_user", uid), {
+      expoPushToken: "",
+      pushNotificationEnabled: false,
+      pushTokenUpdatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-fatal: sign-out must never be blocked by a Firestore write error.
+  }
+};
+
 export default function PushNotificationSync() {
   const router = useRouter();
   const responseSubscriptionRef = useRef<{ remove: () => void } | null>(null);

@@ -19,7 +19,18 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { auth, db } from "../../firebaseConfig";
+
+/**
+ * Per-user AsyncStorage key for the last "seen/read" notification timestamp.
+ * Persisting it locally means a fresh app/phone restart can restore the read
+ * state immediately instead of briefly treating every notification as unread
+ * while the Firestore user snapshot (which carries `notificationsLastSeenAt`)
+ * is still loading.
+ */
+const lastSeenStorageKey = (uid: string): string =>
+  `@puredrop/notifications_last_seen/${uid}`;
 
 export type NotificationItem = {
   id: string;
@@ -217,6 +228,14 @@ export type NotificationContextValue = {
   refreshing: boolean;
   unreadCount: number;
   lastSeenMs: number;
+  /**
+   * True once the last-seen/read timestamp has been resolved from local
+   * storage and/or Firestore. Until this is true, unreadCount is 0 and the
+   * floating/system notification presenters wait — so a fresh app/phone
+   * restart never shows phantom unread notifications while the read state is
+   * still loading.
+   */
+  lastSeenLoaded: boolean;
   markAllAsRead: () => Promise<void>;
   refresh: () => void;
 };
@@ -227,6 +246,7 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [lastSeenMs, setLastSeenMs] = useState<number>(0);
+  const [lastSeenLoaded, setLastSeenLoaded] = useState<boolean>(false);
   const currentUidRef = useRef<string | null>(null);
   const lastSeenMsRef = useRef<number>(0);
   const itemsRef = useRef<NotificationItem[]>([]);
@@ -242,6 +262,21 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
     lastSeenMsRef.current = value;
     setLastSeenMs((prev) => (prev === value ? prev : value));
   }, []);
+
+// Persist the last-seen/read timestamp to local storage whenever it changes
+  // so a fresh app/phone restart can restore read state immediately (no false
+  // "everything unread" window while Firestore is still loading).
+  useEffect(() => {
+    const uid = currentUidRef.current;
+    if (!uid || lastSeenMs <= 0) {
+      return;
+    }
+    void AsyncStorage.setItem(lastSeenStorageKey(uid), String(lastSeenMs)).catch(
+      () => {
+        // Non-fatal: read state still lives in Firestore.
+      },
+    );
+  }, [lastSeenMs]);
 
   useEffect(() => {
     let unsubscribeReports: (() => void) | null = null;
@@ -261,6 +296,7 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
         currentUidRef.current = null;
         setItems([]);
         setLastSeenMsSafe(0);
+        setLastSeenLoaded(false);
         setLoading(false);
         setHasError(false);
         setRefreshing(false);
@@ -271,25 +307,51 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
       setLoading(itemsRef.current.length === 0);
       setHasError(false);
 
+      // Restore the read timestamp from local storage immediately so there is
+      // never a window where lastSeenMs is 0 (which would make every
+      // notification look unread on a fresh app/phone restart). This is
+      // best-effort and non-fatal.
+      void (async () => {
+        try {
+          const stored = await AsyncStorage.getItem(lastSeenStorageKey(currentUser.uid));
+          const parsed = stored ? Number(stored) : 0;
+          const resolved = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+          if (resolved > 0) {
+            setLastSeenMsSafe(Math.max(resolved, lastSeenMsRef.current));
+          }
+        } catch {
+          // Non-fatal: Firestore will provide the authoritative value below.
+        }
+      })();
+
       const userRef = doc(db, "regular_user", currentUser.uid);
       unsubscribeUser = onSnapshot(
         userRef,
         (userSnap) => {
           if (!userSnap.exists()) {
             setLastSeenMsSafe(0);
+            setLastSeenLoaded(true);
             return;
           }
 
           const userData = userSnap.data() as { notificationsLastSeenAt?: unknown };
           const resolvedLastSeenMs = resolveTimestampMs(userData.notificationsLastSeenAt);
 
-          // Preserve optimistic lastSeen while serverTimestamp is still pending.
+          // Take the max so a locally-restored value is never regressed by a
+          // stale server value, and vice versa. Read state only moves forward.
           if (resolvedLastSeenMs > 0 || lastSeenMsRef.current <= 0) {
-            setLastSeenMsSafe(resolvedLastSeenMs);
+            setLastSeenMsSafe(
+              resolvedLastSeenMs > lastSeenMsRef.current
+                ? resolvedLastSeenMs
+                : lastSeenMsRef.current,
+            );
           }
+          setLastSeenLoaded(true);
         },
         () => {
-          setLastSeenMsSafe(0);
+          // On error, still mark lastSeen as loaded so the UI is usable and
+          // the floating/system presenters are not blocked forever.
+          setLastSeenLoaded(true);
           setRefreshing(false);
         },
       );
@@ -326,7 +388,7 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
               }
             }
 
-            return prev;
+return prev;
           });
           setLoading(false);
           setHasError(false);
@@ -353,11 +415,19 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
   }, [refreshToken, setLastSeenMsSafe]);
 
   const unreadCount = useMemo(() => {
+    // Only count unread once the read timestamp has been resolved. Until then
+    // (fresh app/phone restart, snapshots still loading) there is a window
+    // where lastSeenMs is 0 — showing every notification as unread would be a
+    // false "phantom unread" count. Returning 0 + the presenters being gated on
+    // lastSeenLoaded avoids that.
+    if (!lastSeenLoaded) {
+      return 0;
+    }
     if (lastSeenMs <= 0) {
       return items.length;
     }
     return items.filter((item) => item.createdAtMs > lastSeenMs).length;
-  }, [items, lastSeenMs]);
+  }, [items, lastSeenMs, lastSeenLoaded]);
 
   const markAllAsRead = useCallback(async () => {
     const uid = currentUidRef.current;
@@ -399,13 +469,14 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
 
   return (
     <NotificationContext.Provider
-      value={{
+value={{
         items,
         loading,
         hasError,
         refreshing,
         unreadCount,
         lastSeenMs,
+        lastSeenLoaded,
         markAllAsRead,
         refresh,
       }}

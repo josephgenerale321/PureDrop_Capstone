@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -11,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { auth } from "../../firebaseConfig";
 import { type NotificationItem, useReportNotifications } from "./notif_func";
 import { isNotificationUnread } from "./notif_reddot";
 
@@ -50,20 +52,65 @@ const getNotificationKey = (item: NotificationItem): string =>
 /**
  * Module-level "already seen / already presented" trackers.
  *
- * These are intentionally NOT stored in a component ref: in expo-router the
- * layout can remount (navigation re-render, tab switches, Fast Refresh, etc.),
- * which would reset a component-scoped ref and cause the SAME notification to
- * be re-presented (a duplicate banner). By hoisting the sets to module scope
- * they survive remounts, so each notification is presented exactly once per
- * app session. Keys are also pruned so the sets cannot grow unbounded.
+ * - `seededKeysRef` tracks which notifications this app session has already
+ *   seen, so genuinely new arrivals can be detected.
+ * - `presentedKeysRef` tracks which notifications have already triggered a
+ *   floating banner. It is ALSO persisted to AsyncStorage (per user) so a
+ *   notification is presented only ONCE over the app's lifetime — it never
+ *   re-appears on a later app reopen or restart.
+ *
+ * Hoisting to module scope means they survive layout remounts (navigation,
+ * tab switches, Fast Refresh) without duplicating a banner.
  */
 const seededKeysRef = new Set<string>();
 const presentedKeysRef = new Set<string>();
 const MAX_PRESENTED_KEYS = 200;
 
+const presentedStoragePrefix = "@puredrop/presented_floating_notifs/";
+const getPresentedStorageKey = (uid: string): string =>
+  `${presentedStoragePrefix}${uid}`;
+
+/**
+ * Loads the persisted set of already-presented notification keys for a user.
+ * Survives app restarts so the same notification never re-presents a floating
+ * banner on a later app open.
+ */
+const loadPresentedKeys = async (uid: string): Promise<Set<string>> => {
+  try {
+    const raw = await AsyncStorage.getItem(getPresentedStorageKey(uid));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.filter((k): k is string => typeof k === "string"));
+      }
+    }
+  } catch {
+    // Non-fatal: fall back to an empty set.
+  }
+  return new Set();
+};
+
+/**
+ * Persists the current set of presented keys for a user (fire-and-forget).
+ * Bound to MAX_PRESENTED_KEYS so the stored array cannot grow unbounded.
+ */
+const persistPresentedKeys = (uid: string): void => {
+  try {
+    const arr = Array.from(presentedKeysRef).slice(-MAX_PRESENTED_KEYS);
+    void AsyncStorage.setItem(getPresentedStorageKey(uid), JSON.stringify(arr)).catch(
+      () => {
+        // Non-fatal.
+      },
+    );
+  } catch {
+    // Non-fatal.
+  }
+};
+
 /**
  * Records a key into the module-level "presented" set, pruning the oldest
- * entries when the set grows too large to avoid unbounded memory growth.
+ * entries when the set grows too large, and persists it to AsyncStorage so it
+ * survives app restarts/reopens.
  */
 const markPresented = (key: string): void => {
   presentedKeysRef.add(key);
@@ -73,24 +120,51 @@ const markPresented = (key: string): void => {
       presentedKeysRef.delete(oldest);
     }
   }
+const uid = auth.currentUser?.uid;
+  if (uid) {
+    persistPresentedKeys(uid);
+  }
+};
+
+/**
+ * Clears the module-scoped floating-banner session state so a future sign-in
+ * starts with a clean slate (no stale "already presented" keys leaking across
+ * sessions). Called on explicit logout. Crash-safe: it only mutates in-memory
+ * sets and best-effort clears the persisted keys for the supplied uid.
+ */
+export const resetFloatingNotificationState = (uid?: string | null): void => {
+  seededKeysRef.clear();
+  presentedKeysRef.clear();
+
+  if (uid) {
+    const key = getPresentedStorageKey(uid);
+    try {
+      void AsyncStorage.removeItem(key).catch(() => {
+        // Non-fatal.
+      });
+    } catch {
+      // Non-fatal.
+    }
+  }
 };
 
 /**
  * Floating notification banner for the regular-user area.
  *
  * Renders a small tappable toast above the bottom tab bar whenever a NEW
- * unread report notification arrives while the app is running. The component
- * is deliberately crash-safe:
+ * unread report notification arrives while the app is running. It deliberately
+ * does NOT show pending unread notifications on app open, so the same
+ * notification never re-appears every time the app is opened. Presented keys
+ * are persisted to AsyncStorage, so even across a full restart the same
+ * notification is not re-presented.
  *
- * - It imports only core React Native primitives, `@expo/vector-icons` and
- *   `react-native-safe-area-context` — every one of these is available on
- *   Android, iOS, web, Expo Go, preview builds and dev builds. There are no
- *   native-only modules (no ToastAndroid, no expo-notifications, no maps).
- * - All navigation and Firestore writes are wrapped in try/catch.
- * - On a fresh mount (app open / screen remount) a single banner is shown for
- *   the newest unread notification, so reopening the app surfaces pending
- *   notifications. After that, only genuinely new notifications that arrive
- *   while the app is running trigger the banner.
+ * The component is crash-safe:
+ * - It imports only core React Native primitives, `@expo/vector-icons`,
+ *   `react-native-safe-area-context` and the already-installed
+ *   `@react-native-async-storage/async-storage` — all available in dev,
+ *   preview, Expo Go, web and production builds.
+ * - All navigation, Firestore writes and AsyncStorage reads are wrapped in
+ *   try/catch.
  * - Timers and the animation are cleaned up on unmount, and every state
  *   update is guarded by a mounted flag to avoid setState-after-unmount.
  */
@@ -99,12 +173,17 @@ export default function FloatingNotification() {
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
 
-const { items, loading, lastSeenMs, markAllAsRead } = useReportNotifications();
+  const { items, loading, lastSeenMs, lastSeenLoaded, markAllAsRead } =
+    useReportNotifications();
 
   const [toast, setToast] = useState<NotificationItem | null>(null);
   const [visible, setVisible] = useState(false);
+  // True once the persisted "presented" keys have been restored. We gate the
+  // presentation effect on this so a notification is never (re)presented
+  // before we know what was already shown in a previous session.
+  const [presentedLoaded, setPresentedLoaded] = useState(false);
 
-  const mountedRef = useRef(true);
+const mountedRef = useRef(true);
   const appOpenResolvedRef = useRef(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animationRef = useRef<Animated.Value>(new Animated.Value(0));
@@ -184,47 +263,64 @@ const { items, loading, lastSeenMs, markAllAsRead } = useReportNotifications();
   );
 
   /**
+   * Restore the persisted "already presented" keys once on mount so the same
+   * notification is never re-presented after an app restart/reopen.
+   */
+  useEffect(() => {
+    let isMounted = true;
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setPresentedLoaded(true);
+      return;
+    }
+    void loadPresentedKeys(uid).then((loaded) => {
+      if (!isMounted) {
+        return;
+      }
+      loaded.forEach((k) => presentedKeysRef.add(k));
+      setPresentedLoaded(true);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+/**
    * Track the incoming notification stream.
    *
-   * The first non-empty snapshot (after loading finishes) resolves the
-   * "app open" state: it seeds the known-ids set AND shows a single banner
-   * for the newest unread notification, so reopening the app surfaces
-   * pending notifications. Subsequent snapshots only toast notifications
-   * that are genuinely new AND unread.
+   * The floating banner reacts ONLY to genuinely NEW unread report updates
+   * that arrive while the app is running. It deliberately does NOT show a
+   * banner for pending unread notifications on app open or cold start — the
+   * first snapshot simply seeds the "already seen" set. Pending unread updates
+   * are surfaced by the OS lock-screen/system notification instead
+   * (system_notif.tsx).
+   *
+   * Presented keys are persisted to AsyncStorage, so even on a cold start the
+   * same notification is never re-presented as a floating banner.
    */
-useEffect(() => {
-    if (loading || items.length === 0) {
+  useEffect(() => {
+    // Wait until the read timestamp and the persisted presented-key set have
+    // been resolved. On a fresh app/phone restart, lastSeenMs is briefly 0
+    // while AsyncStorage/Firestore load — if we presented now, every
+    // notification would look unread and a phantom banner would appear.
+    if (loading || !lastSeenLoaded || !presentedLoaded || items.length === 0) {
       return;
     }
 
+    // Seed the "already seen" set on the first resolved snapshot so only
+    // genuinely new updates toast after this. Module scope means it survives
+    // remounts.
     if (!appOpenResolvedRef.current) {
       appOpenResolvedRef.current = true;
-
-      let newestUnread: NotificationItem | null = null;
       items.forEach((item) => {
-        // Seed the module-level known set so only genuinely new updates toast
-        // after this. Module scope means it survives remounts.
         seededKeysRef.add(getNotificationKey(item));
-        if (isNotificationUnread(item, lastSeenMs)) {
-          if (!newestUnread || item.createdAtMs > newestUnread.createdAtMs) {
-            newestUnread = item;
-          }
-        }
       });
-
-      if (newestUnread) {
-        const key = getNotificationKey(newestUnread);
-        if (!presentedKeysRef.has(key) && mountedRef.current) {
-          markPresented(key);
-          present(newestUnread);
-        }
-      }
       return;
     }
 
     // Look for a genuinely new unread notification we have not seen before.
     // The key includes status + statusUpdatedAt, so an admin re-setting the
-    // status on an EXISTING report is treated as new and shown.
+    // status on an EXISTING report produces a new key and is treated as new.
     let newestNew: NotificationItem | null = null;
     for (const item of items) {
       const key = getNotificationKey(item);
@@ -246,7 +342,7 @@ useEffect(() => {
         present(newestNew);
       }
     }
-  }, [items, lastSeenMs, loading, present]);
+  }, [items, lastSeenMs, lastSeenLoaded, presentedLoaded, loading, present]);
 
   /**
    * Hide the banner when the user navigates to the notifications screen.
@@ -413,4 +509,3 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.08)",
   },
 });
-
