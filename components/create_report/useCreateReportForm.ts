@@ -1,9 +1,9 @@
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Alert, Platform } from "react-native";
 import { collection, doc, getDoc, runTransaction, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
-import { getPublicFileUrl, uploadFile } from "../../api/storage";
+import { getPublicFileUrl, removeFile, uploadFile } from "../../api/storage";
 import { autoCategorizeIssue } from "../../lib/regular_user/assistant_api";
 import { getCurrentGpsLocation, getLocationFromCoordinates } from "../../lib/regular_user/creategps";
 import { auth, db } from "../../firebaseConfig";
@@ -122,8 +122,11 @@ export function useCreateReportForm() {
     latitudeDelta: 0.02,
     longitudeDelta: 0.02,
   });
-  const [selectedPin, setSelectedPin] = useState<Coordinate | null>(null);
+const [selectedPin, setSelectedPin] = useState<Coordinate | null>(null);
   const [confirmedPin, setConfirmedPin] = useState<Coordinate | null>(null);
+  // Guards against a rapid double-tap on "Submit Report" running two
+  // concurrent submit transactions (double report ids, double uploads).
+  const submittingRef = useRef(false);
 
   const getFileExtension = (attachment: Attachment) => {
     const cleanUri = attachment.uri.split("?")[0];
@@ -189,20 +192,51 @@ export function useCreateReportForm() {
     };
   };
 
-  const cleanupCachedAttachments = async (list: Attachment[]) => {
-    await Promise.all(
-      list.map(async (attachment) => {
-        if (!isCachedAttachmentUri(attachment.uri)) {
+const cleanupCachedAttachments = async (list: Attachment[]) => {
+    // Wrap the whole routine so it can NEVER reject — a failure here must not
+    // break submit/reset flow on preview/dev builds. Each file is already
+    // individually guarded, and we swallow any unexpected error too.
+    try {
+      await Promise.all(
+        list.map(async (attachment) => {
+          if (!isCachedAttachmentUri(attachment.uri)) {
+            return;
+          }
+
+          try {
+            await FileSystem.deleteAsync(attachment.uri, { idempotent: true });
+          } catch {
+            // Cache cleanup failure should not block user flow.
+          }
+        }),
+      );
+    } catch {
+      // Non-fatal.
+    }
+  };
+
+  /**
+   * Best-effort deletes files that were uploaded to storage as part of a
+   * submit that later failed, so we do not leave orphaned objects. Never
+   * throws and never blocks the submit flow.
+   */
+  const cleanupOrphanedUploads = (paths: string[]): void => {
+    if (!paths || paths.length === 0) {
+      return;
+    }
+
+    void Promise.all(
+      paths.map((path) => {
+        if (!path || typeof path !== "string") {
           return;
         }
-
-        try {
-          await FileSystem.deleteAsync(attachment.uri, { idempotent: true });
-        } catch {
-          // Cache cleanup failure should not block user flow.
-        }
+        return removeFile(path).catch(() => {
+          // Non-fatal: orphan cleanup is best-effort.
+        });
       }),
-    );
+    ).catch(() => {
+      // Non-fatal.
+    });
   };
   const resolveUploadedFileUrl = (uploadedPath: string, fallbackPath: string) => {
     const resolved = getPublicFileUrl(uploadedPath || fallbackPath);
@@ -333,48 +367,56 @@ export function useCreateReportForm() {
     setSelectedPin(null);
   };
 
-  const launchPicker = async (source: "camera" | "gallery") => {
-    let result;
-    if (source === "camera") {
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
-      if (permission.status !== "granted") {
-        Alert.alert("Permission needed", "Please allow camera access to take photos.");
-        return;
-      }
-      result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.8,
-        allowsEditing: false,
-        base64: true,
-      });
-    } else {
-      if (Platform.OS !== "web") {
-        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+const launchPicker = async (source: "camera" | "gallery") => {
+    try {
+      let result;
+      if (source === "camera") {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
         if (permission.status !== "granted") {
-          Alert.alert("Permission needed", "Please allow photo library access.");
+          Alert.alert("Permission needed", "Please allow camera access to take photos.");
           return;
         }
+result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ["images"],
+          quality: 0.8,
+          allowsEditing: false,
+          base64: true,
+        });
+      } else {
+        if (Platform.OS !== "web") {
+          const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (permission.status !== "granted") {
+            Alert.alert("Permission needed", "Please allow photo library access.");
+            return;
+          }
+        }
+result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"],
+          quality: 0.8,
+          allowsMultipleSelection: false,
+          base64: true,
+        });
       }
-      result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.8,
-        allowsMultipleSelection: false,
-        base64: true,
-      });
-    }
 
-
-    if (!result.canceled && result.assets.length > 0) {
-      try {
-        const picked = result.assets[0];
-        const stableAttachment = await createStableAttachment(picked);
-        setAttachments((prev) => [...prev, stableAttachment]);
-      } catch {
-        Alert.alert(
-          "Attachment error",
-          "Unable to process the selected image. Please pick another image and try again.",
-        );
+      if (!result.canceled && result.assets.length > 0) {
+        try {
+          const picked = result.assets[0];
+          const stableAttachment = await createStableAttachment(picked);
+          setAttachments((prev) => [...prev, stableAttachment]);
+        } catch {
+          Alert.alert(
+            "Attachment error",
+            "Unable to process the selected image. Please pick another image and try again.",
+          );
+        }
       }
+    } catch {
+      // A rare native picker/permission failure must never crash the screen
+      // on preview/dev builds.
+      Alert.alert(
+        "Choose photo failed",
+        "Unable to open the camera or gallery. Please try again.",
+      );
     }
   };
 
@@ -469,84 +511,102 @@ export function useCreateReportForm() {
       return false;
     }
 
-    const currentUser = auth.currentUser;
+const currentUser = auth.currentUser;
     if (!currentUser) {
       Alert.alert("Not signed in", "Please log in again before submitting a report.");
       return false;
     }
 
+    // Guard against a rapid double-tap on "Submit Report". Without this, two
+    // concurrent transactions could reserve two report ids and upload twice.
+    if (submittingRef.current) {
+      return false;
+    }
+
     try {
+      submittingRef.current = true;
       setSubmitLoading(true);
       const reportId = await reserveNextReportId(currentUser.uid);
       const uploadedUrls: string[] = [];
+      const uploadedPaths: string[] = [];
       const usedStorageFileNames = new Set<string>();
 
-      for (let i = 0; i < attachments.length; i += 1) {
-        const attachment = attachments[i];
-        const extension = getFileExtension(attachment);
-        const storageFileName = getAttachmentStorageFileName(
-          attachment,
-          i,
-          extension,
-          usedStorageFileNames,
-        );
-        const destinationPath = `${reportId}/${storageFileName}`;
+      try {
+        for (let i = 0; i < attachments.length; i += 1) {
+          const attachment = attachments[i];
+          const extension = getFileExtension(attachment);
+          const storageFileName = getAttachmentStorageFileName(
+            attachment,
+            i,
+            extension,
+            usedStorageFileNames,
+          );
+          const destinationPath = `${reportId}/${storageFileName}`;
 
-        const uploaded = await uploadFile(attachment.uri, destinationPath, {
-          contentType: attachment.mimeType || getContentType(extension),
-          base64Data: attachment.base64 ?? undefined,
+          const uploaded = await uploadFile(attachment.uri, destinationPath, {
+            contentType: attachment.mimeType || getContentType(extension),
+            base64Data: attachment.base64 ?? undefined,
+          });
+
+          const uploadedPath =
+            typeof uploaded?.path === "string" && uploaded.path.length > 0
+              ? uploaded.path
+              : destinationPath;
+
+          uploadedPaths.push(uploadedPath);
+
+          const publicUrl = resolveUploadedFileUrl(uploadedPath, destinationPath);
+          uploadedUrls.push(publicUrl);
+        }
+
+        if (uploadedUrls.some((url) => !url || typeof url !== "string")) {
+          throw new Error("One or more attachment URLs are invalid.");
+        }
+
+        const userDocRef = doc(db, "regular_user", currentUser.uid);
+        const userDocSnap = await getDoc(userDocRef);
+
+        if (!userDocSnap.exists()) {
+          Alert.alert("Profile missing", "Your user profile was not found. Please contact support.");
+          return false;
+        }
+
+        const reportDocRef = doc(collection(db, "regular_user", currentUser.uid, "reports"), reportId);
+        const userData = userDocSnap.data() as {
+          fullName?: unknown;
+          profileImageUrl?: unknown;
+        };
+
+        await setDoc(reportDocRef, {
+          reportId,
+          userId: currentUser.uid,
+          reporterName: typeof userData.fullName === "string" ? userData.fullName : null,
+          reporterAvatarUrl:
+            typeof userData.profileImageUrl === "string" ? userData.profileImageUrl : null,
+          category: trimmedCategory,
+          issue: trimmedIssue,
+          address: trimmedAddress || null,
+          locationDetails: trimmedLocation || null,
+          location: combinedLocation || null,
+          gpsLocation: trimmedGpsLocation || null,
+          waterMeter: trimmedWaterMeter || null,
+          attachments: uploadedUrls,
+          submittedAt: new Date().toISOString(),
+          createdAt: serverTimestamp(),
+          status: "Pending",
         });
 
-        const uploadedPath =
-          typeof uploaded?.path === "string" && uploaded.path.length > 0
-            ? uploaded.path
-            : destinationPath;
-
-        const publicUrl = resolveUploadedFileUrl(uploadedPath, destinationPath);
-        uploadedUrls.push(publicUrl);
+        await updateDoc(userDocRef, {
+          lastReportAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        // Best-effort: delete any files that were uploaded before the failure so
+        // we do not leave orphaned objects in storage. Non-blocking and never
+        // crashes the submit flow.
+        void cleanupOrphanedUploads(uploadedPaths);
+        throw error;
       }
-
-      if (uploadedUrls.some((url) => !url || typeof url !== "string")) {
-        throw new Error("One or more attachment URLs are invalid.");
-      }
-
-      const userDocRef = doc(db, "regular_user", currentUser.uid);
-      const userDocSnap = await getDoc(userDocRef);
-
-      if (!userDocSnap.exists()) {
-        Alert.alert("Profile missing", "Your user profile was not found. Please contact support.");
-        return false;
-      }
-
-      const reportDocRef = doc(collection(db, "regular_user", currentUser.uid, "reports"), reportId);
-      const userData = userDocSnap.data() as {
-        fullName?: unknown;
-        profileImageUrl?: unknown;
-      };
-
-      await setDoc(reportDocRef, {
-        reportId,
-        userId: currentUser.uid,
-        reporterName: typeof userData.fullName === "string" ? userData.fullName : null,
-        reporterAvatarUrl:
-          typeof userData.profileImageUrl === "string" ? userData.profileImageUrl : null,
-        category: trimmedCategory,
-        issue: trimmedIssue,
-        address: trimmedAddress || null,
-        locationDetails: trimmedLocation || null,
-        location: combinedLocation || null,
-        gpsLocation: trimmedGpsLocation || null,
-        waterMeter: trimmedWaterMeter || null,
-        attachments: uploadedUrls,
-        submittedAt: new Date().toISOString(),
-        createdAt: serverTimestamp(),
-        status: "Pending",
-      });
-
-      await updateDoc(userDocRef, {
-        lastReportAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
 
       await cleanupCachedAttachments(attachments);
 
@@ -566,6 +626,7 @@ export function useCreateReportForm() {
       Alert.alert("Submit error", message);
       return false;
     } finally {
+      submittingRef.current = false;
       setSubmitLoading(false);
     }
   };
