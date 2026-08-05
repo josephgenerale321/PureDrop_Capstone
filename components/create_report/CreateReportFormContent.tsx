@@ -24,7 +24,8 @@ import type { Attachment } from "./useCreateReportForm";
 type CreateReportFormContentProps = {
   address: string;
   attachments: Attachment[];
-  category: string;
+category: string;
+  gpsAccuracy?: number | null;
   gpsLoading: boolean;
   gpsLocation: string;
   selectedPin?: { latitude: number; longitude: number } | null;
@@ -52,6 +53,7 @@ export function CreateReportFormContent({
   address,
   attachments,
   category,
+  gpsAccuracy,
   gpsLoading,
   gpsLocation,
   selectedPin,
@@ -250,8 +252,12 @@ export function CreateReportFormContent({
             </View>
 
             {selectedPin ? (
-              <TouchableOpacity onPress={onUseGps} activeOpacity={0.9}>
-                <MiniMapPreview gpsLocation={gpsLocation} selectedPin={selectedPin} />
+<TouchableOpacity onPress={onUseGps} activeOpacity={0.9}>
+                <MiniMapPreview
+                  gpsLocation={gpsLocation}
+                  gpsAccuracy={gpsAccuracy}
+                  selectedPin={selectedPin}
+                />
               </TouchableOpacity>
             ) : (
               <TouchableOpacity

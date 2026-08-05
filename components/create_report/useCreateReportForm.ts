@@ -1,11 +1,17 @@
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import { useRef, useState } from "react";
+import * as Location from "expo-location";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Platform } from "react-native";
 import { collection, doc, getDoc, runTransaction, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 import { getPublicFileUrl, removeFile, uploadFile } from "../../api/storage";
 import { autoCategorizeIssue } from "../../lib/regular_user/assistant_api";
-import { getCurrentGpsLocation, getLocationFromCoordinates } from "../../lib/regular_user/creategps";
+import {
+  getCurrentGpsLocation,
+  getLocationFromCoordinates,
+  loadLastGpsFix,
+  saveLastGpsFix,
+} from "../../lib/regular_user/creategps";
 import { auth, db } from "../../firebaseConfig";
 import type { Coordinate, Region } from "./MapPicker";
 
@@ -101,14 +107,30 @@ const reserveNextReportId = async (uid: string) => {
     return nextCounter;
   });
 
-  return String(nextValue);
+return String(nextValue);
+};
+
+// Checks foreground location permission, requesting it if not yet granted.
+// Fully guarded so a permission/platform failure can never reject/rethrow.
+const isPermissionGrantedForFollow = async (): Promise<boolean> => {
+  try {
+    const { status } = await Location.getForegroundPermissionsAsync();
+    if (status === "granted") {
+      return true;
+    }
+    const { status: requested } = await Location.requestForegroundPermissionsAsync();
+    return requested === "granted";
+  } catch {
+    return false;
+  }
 };
 
 export function useCreateReportForm() {
   const [category, setCategory] = useState("");
   const [address, setAddress] = useState("");
   const [location, setLocation] = useState("");
-  const [gpsLocation, setGpsLocation] = useState("");
+const [gpsLocation, setGpsLocation] = useState("");
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
   const [issue, setIssue] = useState("");
   const [waterMeter, setWaterMeter] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -124,6 +146,11 @@ export function useCreateReportForm() {
   });
 const [selectedPin, setSelectedPin] = useState<Coordinate | null>(null);
   const [confirmedPin, setConfirmedPin] = useState<Coordinate | null>(null);
+  const [followEnabled, setFollowEnabled] = useState(false);
+  const [mapCenter, setMapCenter] = useState<Coordinate | null>(null);
+  const [recenterKey, setRecenterKey] = useState(0);
+  // Keeps the live watch subscription so it can be removed on close/unmount.
+  const watchSubscriptionRef = useRef<{ remove: () => void } | null>(null);
   // Guards against a rapid double-tap on "Submit Report" running two
   // concurrent submit transactions (double report ids, double uploads).
   const submittingRef = useRef(false);
@@ -246,7 +273,7 @@ const cleanupCachedAttachments = async (list: Attachment[]) => {
     return resolved;
   };
 
-  const handleUseGps = async () => {
+const handleUseGps = async () => {
     if (selectedPin) {
       setMapVisible(true);
       return;
@@ -254,6 +281,28 @@ const cleanupCachedAttachments = async (list: Attachment[]) => {
 
     try {
       setGpsLoading(true);
+
+      // Fast-start: if we have a recent cached fix, open the map centered on
+      // it immediately so the user sees their last known position while the
+      // fresh acquisition continues. Crash-safe (returns null on any failure).
+      let lastFix = null;
+      try {
+        lastFix = await loadLastGpsFix();
+      } catch {
+        lastFix = null;
+      }
+      if (lastFix && Number.isFinite(lastFix.latitude) && Number.isFinite(lastFix.longitude)) {
+        setMapRegion({
+          latitude: lastFix.latitude,
+          longitude: lastFix.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        });
+        setSelectedPin({ latitude: lastFix.latitude, longitude: lastFix.longitude });
+        setGpsAccuracy(lastFix.accuracyMeters ?? null);
+        setMapVisible(true);
+      }
+
       const gpsResult = await getCurrentGpsLocation();
       const region: Region = {
         latitude: gpsResult.latitude,
@@ -266,6 +315,7 @@ const cleanupCachedAttachments = async (list: Attachment[]) => {
         latitude: gpsResult.latitude,
         longitude: gpsResult.longitude,
       });
+      setGpsAccuracy(gpsResult.accuracyMeters ?? null);
       setMapVisible(true);
     } catch (error) {
       if (error instanceof Error && error.message === "LOCATION_PERMISSION_DENIED") {
@@ -351,7 +401,119 @@ const cleanupCachedAttachments = async (list: Attachment[]) => {
     }
   };
 
+const handleRecenterMap = async () => {
+    try {
+      setGpsLoading(true);
+      const gpsResult = await getCurrentGpsLocation();
+      const region: Region = {
+        latitude: gpsResult.latitude,
+        longitude: gpsResult.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      };
+      setMapRegion(region);
+      setSelectedPin({
+        latitude: gpsResult.latitude,
+        longitude: gpsResult.longitude,
+      });
+      setGpsAccuracy(gpsResult.accuracyMeters ?? null);
+      // Force the map to visually recenter to the new fix.
+      setMapCenter({ latitude: gpsResult.latitude, longitude: gpsResult.longitude });
+      setRecenterKey((key) => key + 1);
+    } catch (error) {
+      if (error instanceof Error && error.message === "LOCATION_PERMISSION_DENIED") {
+        Alert.alert(
+          "Permission needed",
+          "Please allow location access to center the map on your current position.",
+        );
+      } else {
+        Alert.alert("GPS error", "Could not fetch current location.");
+      }
+    } finally {
+      setGpsLoading(false);
+    }
+  };
+
+  // Stops the live watch subscription (idempotent). Never throws.
+  const stopFollowing = () => {
+    const sub = watchSubscriptionRef.current;
+    watchSubscriptionRef.current = null;
+    if (sub && typeof sub.remove === "function") {
+      try {
+        sub.remove();
+      } catch {
+        // Non-fatal.
+      }
+    }
+    setFollowEnabled(false);
+  };
+
+  // Starts live follow tracking. Fully guarded so a permission/platform
+  // failure on dev/preview builds can never crash the screen.
+  const startFollowing = async () => {
+    try {
+      if (watchSubscriptionRef.current) {
+        return;
+      }
+      const granted = await isPermissionGrantedForFollow();
+      if (!granted) {
+        Alert.alert(
+          "Permission needed",
+          "Please allow location access to follow your current position.",
+        );
+        return;
+      }
+      const subscription = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.Balanced, distanceInterval: 5, timeInterval: 2000 },
+        (reading) => {
+          const latitude = reading?.coords?.latitude;
+          const longitude = reading?.coords?.longitude;
+          if (
+            typeof latitude !== "number" ||
+            typeof longitude !== "number" ||
+            !Number.isFinite(latitude) ||
+            !Number.isFinite(longitude)
+          ) {
+            return;
+          }
+          setSelectedPin({ latitude, longitude });
+          setMapRegion((current) => ({
+            ...current,
+            latitude,
+            longitude,
+          }));
+          const accuracy = reading.coords.accuracy;
+          if (typeof accuracy === "number" && Number.isFinite(accuracy)) {
+            setGpsAccuracy(accuracy);
+          }
+          setMapCenter({ latitude, longitude });
+          setRecenterKey((key) => key + 1);
+          void saveLastGpsFix({
+            latitude,
+            longitude,
+            accuracyMeters:
+              typeof accuracy === "number" && Number.isFinite(accuracy) ? accuracy : undefined,
+            timestamp: Date.now(),
+          });
+        },
+      );
+      watchSubscriptionRef.current = subscription;
+      setFollowEnabled(true);
+    } catch {
+      Alert.alert("Follow error", "Could not start following your location.");
+    }
+  };
+
+  const handleToggleFollow = () => {
+    if (followEnabled) {
+      stopFollowing();
+    } else {
+      void startFollowing();
+    }
+  };
+
   const handleCancelMapLocation = () => {
+    stopFollowing();
     setMapVisible(false);
 
     if (confirmedPin) {
@@ -366,6 +528,14 @@ const cleanupCachedAttachments = async (list: Attachment[]) => {
 
     setSelectedPin(null);
   };
+
+  // Always clean up the live watch when the screen unmounts.
+  useEffect(() => {
+    return () => {
+      stopFollowing();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
 const launchPicker = async (source: "camera" | "gallery") => {
     try {
@@ -612,8 +782,9 @@ const currentUser = auth.currentUser;
 
       setCategory("");
       setAddress("");
-      setLocation("");
+setLocation("");
       setGpsLocation("");
+      setGpsAccuracy(null);
       setIssue("");
       setWaterMeter("");
       setAttachments([]);
@@ -636,8 +807,9 @@ const currentUser = auth.currentUser;
 
     setCategory("");
     setAddress("");
-    setLocation("");
+setLocation("");
     setGpsLocation("");
+    setGpsAccuracy(null);
     setIssue("");
     setWaterMeter("");
     setAttachments([]);
@@ -648,24 +820,33 @@ const currentUser = auth.currentUser;
       latitudeDelta: 0.02,
       longitudeDelta: 0.02,
     });
-    setSelectedPin(null);
+setSelectedPin(null);
     setConfirmedPin(null);
+    setFollowEnabled(false);
+    setMapCenter(null);
+    setRecenterKey(0);
   };
 
   return {
     aiCategorizing,
     address,
     attachments,
-    category,
+category,
+    followEnabled,
+    gpsAccuracy,
     gpsLoading,
     gpsLocation,
-    handleConfirmMapLocation,
+    mapCenter,
+    recenterKey,
+handleConfirmMapLocation,
     handleCancelMapLocation,
+    handleRecenterMap,
     handleRegionChangeComplete,
     handlePickAttachment,
     handleRemoveAttachment,
     handleAutoCategorizeIssue,
     handleSubmit,
+    handleToggleFollow,
     handleUseGps,
     issue,
     location,

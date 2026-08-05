@@ -15,6 +15,11 @@ type MapPickerProps = {
   style?: StyleProp<ViewStyle>;
   initialRegion: Region;
   onRegionChangeComplete: (region: Region) => void;
+  center?: {
+    latitude: number;
+    longitude: number;
+  } | null;
+  recenterKey?: number;
 };
 
 export function MapPicker({ style }: MapPickerProps) {

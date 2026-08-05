@@ -141,7 +141,8 @@ export default function CreateReportScreen() {
       <CreateReportFormContent
         address={form.address}
         attachments={form.attachments}
-        category={form.category}
+category={form.category}
+        gpsAccuracy={form.gpsAccuracy}
         gpsLoading={form.gpsLoading}
         gpsLocation={form.gpsLocation}
         selectedPin={form.selectedPin}
@@ -162,12 +163,18 @@ export default function CreateReportScreen() {
         onWaterMeterChange={form.setWaterMeter}
       />
 
-      <GpsMapModal
+<GpsMapModal
+        gpsAccuracy={form.gpsAccuracy}
         gpsLoading={form.gpsLoading}
         initialRegion={form.mapRegion}
         visible={form.mapVisible}
+        followEnabled={form.followEnabled}
+        center={form.mapCenter}
+        recenterKey={form.recenterKey}
         onCancel={form.handleCancelMapLocation}
         onConfirm={form.handleConfirmMapLocation}
+        onRecenter={form.handleRecenterMap}
+        onToggleFollow={form.handleToggleFollow}
         onRegionChangeComplete={form.handleRegionChangeComplete}
       />
     </SafeAreaView>

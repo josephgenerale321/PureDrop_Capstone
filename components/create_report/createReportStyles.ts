@@ -227,11 +227,29 @@ export const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#E2E8F0",
   },
-  miniMapAddressText: {
+miniMapAddressText: {
     fontSize: 12,
     fontWeight: "600",
     color: "#334155",
     flex: 1,
+  },
+  miniMapAccuracyBadge: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  miniMapAccuracyText: {
+    fontSize: 10,
+    fontWeight: "700",
   },
   // Attachments
   attachmentsText: {
@@ -412,7 +430,7 @@ export const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
-  floatingCloseButton: {
+floatingCloseButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
@@ -424,6 +442,73 @@ export const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 8,
     elevation: 4,
+  },
+  floatingRecenterButton: {
+    height: 44,
+    paddingHorizontal: 16,
+    borderRadius: 22,
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+floatingRecenterText: {
+    color: "#0F172A",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+followLocationButton: {
+    position: "absolute",
+    // Positioned on the LEFT so it no longer overlaps the map's zoom controls
+    // (which live on the right at top:96). Prevents the conflicting-buttons bug.
+    left: 20,
+    top: 96,
+    zIndex: 20,
+    height: 44,
+    paddingHorizontal: 16,
+    borderRadius: 22,
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#BAE6FD",
+  },
+  followLocationButtonActive: {
+    backgroundColor: "#0EA5E9",
+    borderColor: "#0EA5E9",
+  },
+  followLocationText: {
+    color: "#0EA5E9",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  followLocationTextActive: {
+    color: "#FFFFFF",
+  },
+  gpsStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginBottom: 16,
+  },
+  gpsStatusText: {
+    color: "#475569",
+    fontSize: 13,
+    fontWeight: "600",
   },
   floatingBottomBar: {
     position: "absolute",
