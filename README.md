@@ -65,28 +65,88 @@ barangay, and optionally upload a photo as supporting evidence.
 
 ```
 PureDrop_Capstone-main/
-├── app/                    # expo-router file-based screens
-│   ├── index.tsx           # Entry / splash
+├── app/                        # expo-router file-based screens (routes)
+│   ├── _layout.tsx             # Root layout
+│   ├── index.tsx               # Entry / splash
 │   ├── start.jsx
-│   ├── login/              # Login, register, forgot password, OTP, address select
-│   └── regular_user/       # Main user screens (home, create_report, profile, reports…)
-├── components/             # Reusable UI + feature components
-│   ├── create_report/      # Report form, map picker, GPS modal, gestures
-│   ├── home/               # Home dashboard (styles, hook, content)
-│   ├── notifications/      # Push, floating, system notifications
-│   ├── profile/            # Profile editing, avatar camera/resize/validation
-│   └── main_layout/        # Layout & exit handler
-├── api/                    # Backend service wrappers (Supabase, storage, auth)
-├── lib/                    # Business logic (auth, login, regular_user helpers)
-├── supabase/               # Supabase config, migrations, edge functions
-│   └── functions/          # Edge functions (e.g. send-report-push)
-├── functions/              # Firebase Cloud Functions (admin SDK)
-├── assets/                 # Images, icons, splash
+│   └── login/                  # Login, register, forgot password, OTP, address select
+│       ├── _layout.tsx
+│       ├── index.tsx
+│       ├── register.tsx
+│       ├── forgot_password.tsx
+│       ├── address_select.tsx
+│       └── email_verification/ # verify_email, success
+│   └── regular_user/           # Main authenticated user screens
+│       ├── _layout.jsx         # Tab layout + notification providers
+│       ├── home.jsx            # Home dashboard
+│       ├── notifications.tsx   # Notifications tab
+│       ├── profile.tsx         # Profile tab
+│       ├── report.tsx / reports-list.tsx / view-reports.tsx
+│       ├── view_reportuser.tsx # Report detail (user)
+│       ├── directory.tsx / about.tsx
+│       ├── create_report/      # createreport, submitted
+│       ├── my_report/          # index, share_reportmain
+│       ├── all_reports/        # all_reportlist
+│       ├── view_allrep/        # viewallreports, attachment_lightbox
+│       ├── notifications/      # notification_main
+│       ├── profile/            # profileview
+│       ├── assistant/          # assistant_main
+│       ├── status/             # RegularUserPresenceSync
+│       └── signout/            # signout modal/page
+├── components/                 # Reusable UI + feature components
+│   ├── create_report/          # Form, map picker, GPS modal, gestures, ML validation
+│   ├── home/                   # Home dashboard (styles, hook, content)
+│   ├── notifications/          # floating_notif, system_notif, push_notificationfunc, notif_func, styles
+│   ├── profile/                # Profile editing, avatar camera/resize/validation
+│   ├── my_report/              # share_reports
+│   ├── all_reports/            # all_repcomponent
+│   ├── loading/                # homepage + restore_session loaders
+│   ├── login/                  # login backend helpers
+│   └── main_layout/            # save_loginfunc, home_exit_handler
+├── api/                        # Backend service wrappers (Supabase, storage, auth)
+├── lib/                        # Business logic
+│   ├── auth/                   # logoutState
+│   ├── login/                  # login/register/password/OTP logic
+│   └── regular_user/           # creategps, assistant_api
+├── supabase/                   # Supabase config, migrations, storage policies
+│   └── functions/              # Edge functions (e.g. send-report-push)
+├── functions/                  # Firebase Cloud Functions (admin SDK)
+├── assets/                     # Images, icons, splash
+├── scripts/                    # Utility scripts (avatar migration)
 ├── app.json / app.config.js
+├── firebase.json / firestore.rules / storage.rules
+├── google-services.json        # Gitignored (Android builds)
 ├── eas.json
 ├── package.json
 └── README.md
 ```
+
+---
+
+## 📱 System Requirements (Device Specs)
+
+Recommended hardware for running the PureDrop mobile app smoothly on a physical
+device.
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| **RAM** | 4 GB | 6 GB |
+| **Storage (free)** | 2 GB | 4 GB+ |
+| **App install size** | — | ~150–250 MB |
+| **CPU / Chipset** | Modern mid-range (Snapdragon 600-series / Dimensity 700 or equivalent) | Flagship / upper-mid range |
+| **OS (Android)** | Android 8.0 (API 26) | Android 10+ |
+| **OS (iOS)** | iOS 15+ | Latest stable |
+| **Network** | 4G | 5G / Wi‑Fi |
+| **Google Play Services** | Required (maps + FCM push) | Required |
+
+Other requirements:
+- Working **GPS / Location** for map-based report creation
+- **Camera** and **photo library** access for attachments & avatars
+- **Notification permission** enabled to receive report-status updates
+
+> ℹ️ The heaviest RAM consumers are Google Maps (`react-native-maps`), image
+> attachment handling, real-time Firestore listeners, and Reanimated animations —
+> so 4 GB is the floor, 6 GB is comfortable.
 
 ---
 
@@ -105,13 +165,90 @@ PureDrop_Capstone-main/
 > native libraries, so the app **cannot run in Expo Go**. You must build and run
 > a development client instead.
 
-### 1. Install dependencies
+### 1. Clone the repository
+
+```bash
+# Over HTTPS
+git clone https://github.com/josephgenerale321/PureDrop_Capstone.git
+
+# Or over SSH (if you have SSH keys configured)
+# git clone git@github.com:josephgenerale321/PureDrop_Capstone.git
+
+cd PureDrop_Capstone-main
+```
+
+> The repository folder is `PureDrop_Capstone-main` (the app lives inside it).
+> The admin web panel is a separate repo and is not included here.
+
+#### Cloning directly in VS Code (no terminal needed)
+
+1. Open **VS Code** and open the Source Control panel
+   (`View → Source Control`, or press `Ctrl+Shift+G`).
+2. Click **"Clone Repository"**.
+3. Paste the repository URL:
+   ```
+   https://github.com/josephgenerale321/PureDrop_Capstone.git
+   ```
+4. Choose a folder on your computer, then click **"Clone from URL"**.
+5. When prompted, select the `PureDrop_Capstone-main` folder to open.
+6. Done — the files are now on your machine. Open a VS Code integrated
+   terminal (`Ctrl+``) and continue with the steps below.
+
+> 💡 VS Code's Source Control panel also lets you **pull**, **commit**, **push**,
+> and **switch branches** without the command line.
+
+#### Forking the repository (for contributors)
+
+> 👋 **Please let the owner know if you fork this repository.** This is a
+> capstone project, and it's helpful (and appreciated) to be aware of forks and
+> any intended use. If you fork, you can open an issue, mention the owner, or
+> message them on GitHub so they're notified. Contributions are welcome through
+> pull requests.
+
+If you want your own copy to make changes and open pull requests, **fork** the
+repo first:
+
+1. Go to the repository on GitHub:
+   `https://github.com/josephgenerale321/PureDrop_Capstone`
+2. Click the **"Fork"** button (top-right), then **"Create fork"**. This creates
+   a copy under **your** GitHub account.
+3. Clone **your** fork instead of the original:
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/PureDrop_Capstone.git
+   cd PureDrop_Capstone-main
+   ```
+4. Add the original repo as an **upstream** remote so you can pull the latest
+   changes from the owner:
+   ```bash
+   git remote add upstream https://github.com/josephgenerale321/PureDrop_Capstone.git
+   ```
+5. Keep your fork up to date:
+   ```bash
+   git fetch upstream
+   git checkout main
+   git merge upstream/main
+   ```
+6. Make your changes on a **feature branch**, push to your fork, then open a
+   **Pull Request** back to the original repo:
+   ```bash
+   git checkout -b my-feature
+   # ... make your changes ...
+   git push origin my-feature
+   ```
+   Then click **"Compare & pull request"** on GitHub.
+
+> 💡 **Forking in VS Code:** open the Source Control panel → **"Clone
+> Repository"** → paste your fork's URL
+> (`https://github.com/YOUR_USERNAME/PureDrop_Capstone.git`). After cloning,
+> you can fetch/merge from `upstream` through the Source Control branches menu.
+
+### 2. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 2. Configure environment variables
+### 3. Configure environment variables
 
 > ⚠️ **For contributors:** The backend services (Firebase, Supabase, Google
 > Maps, MapTiler) belong to the **project owner**. If you are a contributor and
@@ -134,7 +271,7 @@ npm install
 > ⚠️ `google-services.json` is **gitignored** and must be provided for Android
 > builds. `app.config.js` reads it from the `GOOGLE_SERVICES_JSON` env var.
 
-### 3. Build & run the development client
+### 4. Build & run the development client
 
 Because this app uses native modules, you must first build a **development
 client** (it cannot run in Expo Go). Install and launch it on an emulator or a

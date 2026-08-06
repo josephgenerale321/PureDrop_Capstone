@@ -1,7 +1,7 @@
 import Constants from "expo-constants";
 import { requireOptionalNativeModule } from "expo-modules-core";
 import { useEffect, useRef } from "react";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import { type NotificationItem, useReportNotifications } from "./notif_func";
 import { isNotificationUnread } from "./notif_reddot";
 
@@ -256,13 +256,29 @@ const presentLocalNotification = async (
 export default function SystemNotificationSync() {
   const { items, loading, lastSeenMs, lastSeenLoaded } = useReportNotifications();
 
-  const mountedRef = useRef(true);
+const mountedRef = useRef(true);
   const appOpenResolvedRef = useRef(false);
+  // Tracks whether the app is currently in the foreground. While the app is
+  // ACTIVE the in-app floating banner (floating_notif.tsx) already surfaces a
+  // new status change, so we suppress the native heads-up notification to avoid
+  // showing the same update twice. When the app is backgrounded or on the lock
+  // screen there is no in-app banner, so the native notification is shown.
+  const appStateRef = useRef<boolean>(AppState.currentState === "active");
 
   useEffect(() => {
     mountedRef.current = true;
+
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        appStateRef.current = true;
+      } else if (nextState === "background" || nextState === "inactive") {
+        appStateRef.current = false;
+      }
+    });
+
     return () => {
       mountedRef.current = false;
+      subscription.remove();
     };
   }, []);
 
@@ -326,11 +342,21 @@ export default function SystemNotificationSync() {
       }
     }
 
-    if (newestNew) {
+if (newestNew) {
       const key = getNotificationKey(newestNew);
       if (!presentedKeysRef.has(key) && mountedRef.current) {
+        // Always record the key as "presented" so this update is never shown
+        // again later (e.g. when the app returns to the foreground).
         markPresented(key);
-        void presentLocalNotification(Notifications, newestNew);
+
+        // While the app is ACTIVE the in-app floating banner has already
+        // surfaced this update, so presenting a native heads-up notification
+        // here would show the same status change twice. Only fire the native
+        // notification when the app is NOT in the foreground (backgrounded or
+        // on the lock screen), where there is no in-app banner.
+        if (!appStateRef.current) {
+          void presentLocalNotification(Notifications, newestNew);
+        }
       }
     }
   }, [items, lastSeenMs, lastSeenLoaded, loading]);
