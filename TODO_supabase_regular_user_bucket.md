@@ -1,0 +1,2 @@
+- [x] 13. Fixed Android bundling 'Unable to resolve ./RealtimePresence' - reinstalled @supabase/supabase-js@2.112.1 + @supabase/realtime-js@2.112.1 to clear stale Metro cache; validated RealtimePresence resolves.
+- [x] 14. Root cause: @supabase/supabase-js@2.112.1 -> @supabase/realtime-js@2.112.1 CJS build uses require('./RealtimePresence') which Metro can't resolve. Fix: added metro.config.js forcing @supabase/realtime-js to its ESM build (dist/module/index.js). Verified: 'npx expo export --platform android' succeeded (5.26 MB bundle, no RealtimePresence error).

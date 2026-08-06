@@ -432,7 +432,7 @@ const avatarBucket =
           setPendingAvatar(null);
           setEditProfileVisible(true);
         }}
-        onBack={() => router.replace("/regular_user/home")}
+        onBack={() => router.replace("/regular_user/profile")}
       />
 
       <EditProfileLightbox

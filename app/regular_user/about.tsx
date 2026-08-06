@@ -12,7 +12,7 @@ export default function AboutScreen() {
       <View style={[styles.header, { paddingTop: Math.max(12, insets.top + 4) }]}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => router.back()}
+          onPress={() => router.replace("/regular_user/profile")}
           hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
         >
           <Ionicons name="arrow-back" size={24} color="#0F172A" />

@@ -15,7 +15,7 @@ const LOGIN_ROUTE = "/login" as Href;
 export default function SignOutModal() {
   const router = useRouter();
 
-const handleConfirm = async () => {
+  const handleConfirm = async () => {
     beginLogout();
 
     // Capture the uid BEFORE sign-out so we can clear the push token and the
@@ -77,7 +77,7 @@ const handleConfirm = async () => {
             <Text style={styles.buttonText}>YES</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.button, styles.noButton]} onPress={() => router.back()}>
+          <TouchableOpacity style={[styles.button, styles.noButton]} onPress={() => router.replace("/regular_user/profile")}>
             <Text style={[styles.buttonText, styles.noButtonText]}>NO</Text>
           </TouchableOpacity>
         </View>

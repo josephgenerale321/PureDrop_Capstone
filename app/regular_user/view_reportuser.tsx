@@ -152,8 +152,8 @@ return () => unsubscribe();
           <Text style={styles.emptyText}>
             The report could not be loaded. It may have been removed or you may have a connection issue.
           </Text>
-          <View style={styles.errorActions}>
-            <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+<View style={styles.errorActions}>
+            <TouchableOpacity style={styles.backButton} onPress={() => router.replace("/regular_user/my_report")}>
               <Text style={styles.backButtonText}>Go Back</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.retryButton} onPress={handleRetry} activeOpacity={0.85}>
@@ -168,10 +168,10 @@ return () => unsubscribe();
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: Math.max(16, insets.top + 6) }]}>
+<ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: Math.max(16, insets.top + 6) }]}>
         <TouchableOpacity
           style={styles.topBack}
-          onPress={() => router.back()}
+          onPress={() => router.replace("/regular_user/my_report")}
           activeOpacity={0.85}
           hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
         >
