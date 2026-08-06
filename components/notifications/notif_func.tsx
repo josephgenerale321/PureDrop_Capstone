@@ -49,10 +49,11 @@ const normalizeStatus = (value: unknown): string => {
     return "Pending";
   }
 
-  const normalized = value.trim().toLowerCase();
+const normalized = value.trim().toLowerCase();
   if (normalized === "approved") return "Approved";
   if (normalized === "resolving" || normalized === "resolved") return "Resolving";
   if (normalized === "pending") return "Pending";
+  if (normalized === "rejected") return "Rejected";
 
   return "Pending";
 };
@@ -144,8 +145,12 @@ const buildMessage = (status: string, reportId: string, changedByAdmin: boolean)
       return `Admin marked your report #${reportId} as resolving.`;
     }
 
-    if (status === "Pending") {
+if (status === "Pending") {
       return `Admin set your report #${reportId} to pending.`;
+    }
+
+    if (status === "Rejected") {
+      return `Admin rejected your report #${reportId}.`;
     }
   }
 
@@ -155,6 +160,10 @@ const buildMessage = (status: string, reportId: string, changedByAdmin: boolean)
 
   if (status === "Resolving") {
     return `Your report #${reportId} is now resolving.`;
+  }
+
+  if (status === "Rejected") {
+    return `Your report #${reportId} has been rejected.`;
   }
 
   return `Your report #${reportId} is still pending.`;

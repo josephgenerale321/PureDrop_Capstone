@@ -24,24 +24,28 @@ import { styles } from "../../../components/notifications/notif_styles";
 const getStatusColor = (status: string) => {
   if (status === "Approved") return "#166534";
   if (status === "Resolving") return "#1d4ed8";
+  if (status === "Rejected") return "#b91c1c";
   return "#1f2937";
 };
 
 const getStatusIcon = (status: string): keyof typeof Ionicons.glyphMap => {
   if (status === "Approved") return "checkmark-circle";
   if (status === "Resolving") return "construct";
+  if (status === "Rejected") return "close-circle";
   return "time";
 };
 
 const getStatusIconColor = (status: string) => {
   if (status === "Approved") return "#16A34A";
   if (status === "Resolving") return "#2563EB";
+  if (status === "Rejected") return "#DC2626";
   return "#94A3B8";
 };
 
 const getStatusWrapStyle = (status: string) => {
   if (status === "Approved") return styles.statusWrapApproved;
   if (status === "Resolving") return styles.statusWrapResolving;
+  if (status === "Rejected") return styles.statusWrapRejected;
   return styles.statusWrapPending;
 };
 

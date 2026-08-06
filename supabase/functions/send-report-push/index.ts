@@ -211,9 +211,10 @@ const normalizeStatus = (value: unknown): string => {
     return "Pending";
   }
 
-  const normalized = value.trim().toLowerCase();
+const normalized = value.trim().toLowerCase();
   if (normalized === "approved") return "Approved";
   if (normalized === "resolving" || normalized === "resolved") return "Resolving";
+  if (normalized === "rejected") return "Rejected";
   return "Pending";
 };
 
@@ -223,13 +224,15 @@ const buildPushBody = (
   changedByAdmin: boolean,
 ): string => {
   const id = typeof reportId === "string" && reportId.length > 0 ? reportId : "?";
-  if (changedByAdmin) {
+if (changedByAdmin) {
     if (status === "Approved") return `Admin approved your report #${id}.`;
     if (status === "Resolving") return `Admin marked your report #${id} as resolving.`;
+    if (status === "Rejected") return `Admin rejected your report #${id}.`;
     return `Admin set your report #${id} to pending.`;
   }
   if (status === "Approved") return `Your report #${id} has been approved.`;
   if (status === "Resolving") return `Your report #${id} is now resolving.`;
+  if (status === "Rejected") return `Your report #${id} has been rejected.`;
   return `Your report #${id} is still pending.`;
 };
 

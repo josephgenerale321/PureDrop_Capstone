@@ -31,10 +31,11 @@ type DetailedCommunityReport = {
 
 const normalizeStatus = (value: unknown) => {
   if (typeof value !== "string") return "Pending";
-  const normalized = value.trim().toLowerCase();
+const normalized = value.trim().toLowerCase();
   if (normalized === "approved") return "Approved";
   if (normalized === "resolving" || normalized === "resolved") return "Resolving";
   if (normalized === "pending" || normalized === "submitted") return "Pending";
+  if (normalized === "rejected") return "Rejected";
   return "Pending";
 };
 

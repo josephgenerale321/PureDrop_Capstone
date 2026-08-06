@@ -160,8 +160,11 @@ const buildLocalMessage = (item: NotificationItem): string => {
     if (item.status === "Resolving") {
       return `Admin marked your report #${item.reportId} as resolving.`;
     }
-    if (item.status === "Pending") {
+if (item.status === "Pending") {
       return `Admin set your report #${item.reportId} to pending.`;
+    }
+    if (item.status === "Rejected") {
+      return `Admin rejected your report #${item.reportId}.`;
     }
   }
 
@@ -170,6 +173,9 @@ const buildLocalMessage = (item: NotificationItem): string => {
   }
   if (item.status === "Resolving") {
     return `Your report #${item.reportId} is now resolving.`;
+  }
+  if (item.status === "Rejected") {
+    return `Your report #${item.reportId} has been rejected.`;
   }
   return `Your report #${item.reportId} is still pending.`;
 };

@@ -72,12 +72,14 @@ service cloud.firestore {
              && (
                !changed.hasAny(['status'])
                || request.resource.data.status in [
-                    'Pending',
+'Pending',
                     'Resolving',
                     'Approved',
+                    'Rejected',
                     'pending',
                     'resolving',
-                    'approved'
+                    'approved',
+                    'rejected'
                   ]
              );
     }

@@ -133,9 +133,13 @@ export const styles = StyleSheet.create({
     backgroundColor: "#EFF6FF",
     borderColor: "#BFDBFE",
   },
-  statusWrapPending: {
+statusWrapPending: {
     backgroundColor: "#F8FAFC",
     borderColor: "#E2E8F0",
+  },
+  statusWrapRejected: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FECACA",
   },
   status: {
     fontSize: 12,
