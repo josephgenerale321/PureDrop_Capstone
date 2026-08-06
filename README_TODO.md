@@ -7,3 +7,5 @@ Replace the default Expo starter `README.md` with a comprehensive PureDrop mobil
 - [x] 1. Write full PureDrop README content (description, features, tech stack, structure, setup, env vars, EAS builds)
 - [x] 2. Overwrite `PureDrop_Capstone-main/README.md`
 - [x] 3. Verify rendered markdown
+- [x] 4. Add contributor access-required note for env/config
+- [x] 5. Correct Expo Go → development build instructions

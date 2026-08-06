@@ -134,21 +134,28 @@ npm install
 > ⚠️ `google-services.json` is **gitignored** and must be provided for Android
 > builds. `app.config.js` reads it from the `GOOGLE_SERVICES_JSON` env var.
 
-### 3. Start the app
+### 3. Build & run the development client
+
+Because this app uses native modules, you must first build a **development
+client** (it cannot run in Expo Go). Install and launch it on an emulator or a
+connected device:
 
 ```bash
+# Start the Metro bundler
 npx expo start
 ```
 
-Then press:
-- `a` — open on an **Android emulator**
-- `i` — open on an **iOS simulator**
-- Scan the QR code with **Expo Go** on a physical device
-
-### 4. Run on Android (native build)
+Then, in another terminal, build and install the development client:
 
 ```bash
+# Android (builds native app and opens it on the emulator/device)
 npx expo run:android
+```
+
+Alternatively, build a development client with EAS and run it on a device:
+
+```bash
+eas build --profile development
 ```
 
 ---
@@ -179,6 +186,15 @@ eas build --profile production
 Each build profile ships the required `EXPO_PUBLIC_SUPABASE_*`,
 `GOOGLE_MAPS_ANDROID_API_KEY`, `MAPTILER_API_KEY`, and `GOOGLE_SERVICES_JSON`
 environment variables.
+
+> ⚠️ **For contributors — request the APK from the owner.** Running `eas build`
+> connects to the **owner's EAS project** and needs the owner's credentials
+> (EAS project access, `google-services.json`, and API keys). A contributor
+> generally **cannot** trigger a successful EAS build on their own. Instead,
+> **request a development or preview APK from the project owner**, who will run
+> the build and share the downloadable APK/install link with you. (If the owner
+> explicitly adds you to their EAS project and hands you the required
+> credentials, then you may build yourself.)
 
 ---
 
