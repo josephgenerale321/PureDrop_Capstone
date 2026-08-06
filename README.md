@@ -205,6 +205,41 @@ cd PureDrop_Capstone-main
 > message them on GitHub so they're notified. Contributions are welcome through
 > pull requests.
 
+> 🔑 **To actually run the app you will need the environment variables / API
+> keys from the owner.** This project depends on many external services
+> (Firebase, Supabase, Google Maps, MapTiler, EAS, `google-services.json`), and
+> those keys belong to the owner. If you want to contribute and run the app
+> locally, **contact the owner and request the required env vars** listed in the
+> **"### 3. Configure environment variables"** section below. The owner must
+> provide these before the app can build and run on your machine.
+
+#### What the owner will provide to a collaborator
+
+When the owner adds you as a collaborator (or grants you access to run/build the
+app), they should share the following credentials. The app will **not** run
+without them:
+
+| Item | Provided by owner | Purpose |
+|------|-------------------|---------|
+| `EXPO_PUBLIC_SUPABASE_URL` | ✅ | Supabase project URL |
+| `EXPO_PUBLIC_SUPABASE_ANON_KEY` | ✅ | Supabase anon/publishable key |
+| `EXPO_PUBLIC_SUPABASE_STORAGE_BUCKET` | ✅ | Report photo bucket (`reports`) |
+| `EXPO_PUBLIC_SUPABASE_AVATAR_BUCKET` | ✅ | Avatar bucket (`regular_user`) |
+| `EXPO_PUBLIC_SUPABASE_AVATAR_FOLDER` | ✅ | Avatar folder (`users`) |
+| `EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY` | ✅ | Google Maps Android key |
+| `EXPO_PUBLIC_MAPTILER_API_KEY` | ✅ | MapTiler key |
+| `google-services.json` | ✅ | Android build config (gitignored) |
+| Firebase project access | ✅ | Auth + Firestore dependency |
+| EAS project access (or APK) | ✅ | Builds / dev client / preview |
+
+> 🔐 **Security:** API keys and `google-services.json` are **secrets** — send them
+> privately (owner → collaborator), and **never commit them** to the repository
+> or share them in public issues/PRs. The `.env` file and `google-services.json`
+> are already gitignored.
+
+If you are a collaborator and the owner has **not** yet provided these, ask for
+them before trying to build or run the app.
+
 If you want your own copy to make changes and open pull requests, **fork** the
 repo first:
 
