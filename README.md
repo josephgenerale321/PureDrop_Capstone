@@ -96,7 +96,14 @@ PureDrop_Capstone-main/
 - **Node.js** (LTS recommended)
 - **npm** or **yarn**
 - [Expo CLI](https://docs.expo.dev) / Expo account (for EAS builds)
-- Android Studio / emulator or a physical device with **Expo Go** (optional)
+- **Android Studio / emulator** or a physical Android device
+
+> ⚠️ **Expo Go is not supported.** This app uses native modules
+> (`react-native-maps`, `react-native-reanimated`,
+> `react-native-gesture-handler`, `expo-notifications`, etc.) and a custom
+> **development build** via `expo-dev-client`. Expo Go does not bundle these
+> native libraries, so the app **cannot run in Expo Go**. You must build and run
+> a development client instead.
 
 ### 1. Install dependencies
 
