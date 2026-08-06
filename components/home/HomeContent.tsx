@@ -51,7 +51,6 @@ export default function HomeContent({ user, loading }: HomeContentProps) {
       <View style={[styles.headerBar, { paddingTop: Math.max(14, insets.top + 10) }]}>
         <View style={styles.headerLeft}>
           <Image source={require("../../assets/images/logo.png")} style={styles.headerLogo} />
-          <Text style={styles.headerTitle}>PureDrop</Text>
         </View>
       </View>
 

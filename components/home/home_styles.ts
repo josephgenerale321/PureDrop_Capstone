@@ -8,7 +8,7 @@ export const styles = StyleSheet.create({
   headerBar: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "center",
     paddingHorizontal: 20,
     paddingVertical: 14,
     backgroundColor: "#F8FAFC",
@@ -22,6 +22,10 @@ export const styles = StyleSheet.create({
     width: 32,
     height: 32,
     resizeMode: "contain",
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "center",
+    transform: [{ scale: 2 }],
   },
   headerTitle: {
     fontSize: 20,
@@ -205,4 +209,3 @@ export const styles = StyleSheet.create({
     elevation: 8,
   },
 });
-
