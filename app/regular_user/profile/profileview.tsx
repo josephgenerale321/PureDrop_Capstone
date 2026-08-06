@@ -48,10 +48,11 @@ export default function ProfileViewScreen() {
   type PendingAvatar = ImagePicker.ImagePickerAsset | null;
   const [pendingAvatar, setPendingAvatar] = useState<PendingAvatar>(null);
 
-  const avatarBucket = process.env.EXPO_PUBLIC_SUPABASE_AVATAR_BUCKET
-    || process.env.EXPO_PUBLIC_SUPABASE_STORAGE_BUCKET
-    || "reports";
-  const avatarFolder = process.env.EXPO_PUBLIC_SUPABASE_AVATAR_FOLDER || "users";
+const avatarBucket =
+    (process.env.EXPO_PUBLIC_SUPABASE_AVATAR_BUCKET || "").trim()
+    || (process.env.EXPO_PUBLIC_SUPABASE_STORAGE_BUCKET || "").trim()
+    || "regular_user";
+  const avatarFolder = (process.env.EXPO_PUBLIC_SUPABASE_AVATAR_FOLDER || "").trim() || "users";
 
   const createStableAvatarUri = async (uri: string, extension: string) => {
     if (!LOCAL_AVATAR_URI_PATTERN.test(uri) || !FileSystem.cacheDirectory) {

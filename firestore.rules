@@ -82,7 +82,7 @@ service cloud.firestore {
              );
     }
 
-    match /regular_user/{userId} {
+match /regular_user/{userId} {
       // Signed-in users can read profile docs.
       allow get, list: if isSignedIn();
 
@@ -90,6 +90,8 @@ service cloud.firestore {
       allow create: if isOwner(userId);
 
       // Owners and admins can update while preserving role and identity fields.
+      // This covers profile-image writes (profileImageUrl / profileImagePath)
+      // that the mobile app performs when a user edits their profile picture.
       allow update: if (
                       (isOwner(userId) || isAdmin())
                       && isSafeRegularUserUpdate()

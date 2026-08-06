@@ -32,6 +32,13 @@ type UploadFileOptions = {
 };
 
 const DEFAULT_BUCKET = process.env.EXPO_PUBLIC_SUPABASE_STORAGE_BUCKET || "reports";
+
+// Normalizes a bucket name so it can never be empty/whitespace. Falls back to
+// the given default so a missing/invalid env value never throws on dev/preview.
+const normalizeBucket = (bucket: string | undefined, fallback: string): string => {
+  const trimmed = (bucket || "").trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+};
 const LOCAL_URI_PATTERN = /^(file|content|ph|assets-library):/i;
 const NETWORK_FAILURE_PATTERN = /network request failed|fetch failed/i;
 
@@ -87,7 +94,8 @@ export async function uploadFile(
   destinationPath: string,
   options: UploadFileOptions = {}
 ) {
-  const { bucket = DEFAULT_BUCKET, contentType, upsert = false, base64Data } = options;
+const { bucket = DEFAULT_BUCKET, contentType, upsert = false, base64Data } = options;
+  const resolvedBucket = normalizeBucket(bucket, DEFAULT_BUCKET);
   const fileData = base64Data ? decodeBase64ToArrayBuffer(base64Data) : await readFileData(fileUri);
 
   let attempts = 0;
@@ -96,7 +104,7 @@ export async function uploadFile(
     attempts += 1;
 
     try {
-      const { data, error } = await supabase.storage.from(bucket).upload(destinationPath, fileData, {
+      const { data, error } = await supabase.storage.from(resolvedBucket).upload(destinationPath, fileData, {
         contentType,
         upsert,
       });
@@ -130,12 +138,14 @@ export async function uploadFile(
 }
 
 export function getPublicFileUrl(path: string, bucket = DEFAULT_BUCKET) {
-  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+  const resolvedBucket = normalizeBucket(bucket, DEFAULT_BUCKET);
+  const { data } = supabase.storage.from(resolvedBucket).getPublicUrl(path);
   return data.publicUrl;
 }
 
 export async function removeFile(path: string, bucket = DEFAULT_BUCKET) {
-  const { error } = await supabase.storage.from(bucket).remove([path]);
+  const resolvedBucket = normalizeBucket(bucket, DEFAULT_BUCKET);
+  const { error } = await supabase.storage.from(resolvedBucket).remove([path]);
 
   if (error) {
     throw error;
