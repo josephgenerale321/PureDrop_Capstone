@@ -71,6 +71,7 @@ type EditProfileLightboxProps = {
   saving: boolean;
   uploadingProfilePicture: boolean;
   profileImageUrl?: string | null;
+  pendingAvatarUri?: string | null;
   hasProfilePicture?: boolean;
   onClose: () => void;
   onSave: (values: EditableProfileValues) => void;
@@ -85,6 +86,7 @@ export default function EditProfileLightbox({
   saving,
   uploadingProfilePicture,
   profileImageUrl,
+  pendingAvatarUri,
   hasProfilePicture,
   onClose,
   onSave,
@@ -114,9 +116,11 @@ export default function EditProfileLightbox({
     barangay.toLowerCase().includes(addressQuery.trim().toLowerCase()),
   );
 
-  const avatarSource = profileImageUrl
-    ? { uri: profileImageUrl }
-    : require("../../assets/images/default_account.png");
+  const avatarSource = pendingAvatarUri
+    ? { uri: pendingAvatarUri }
+    : profileImageUrl
+      ? { uri: profileImageUrl }
+      : require("../../assets/images/default_account.png");
 
   const selectAddress = (barangay: string) => {
     updateField("address", `${barangay}${CITY_SUFFIX}`);
@@ -149,7 +153,15 @@ export default function EditProfileLightbox({
             contentContainerStyle={styles.form}
           >
             <View style={styles.avatarSection}>
-              <Image source={avatarSource} style={styles.avatar} contentFit="cover" />
+              <View style={styles.avatarWrap}>
+                <Image source={avatarSource} style={styles.avatar} contentFit="cover" />
+                {pendingAvatarUri ? (
+                  <View style={styles.previewBadge}>
+                    <Ionicons name="image-outline" size={12} color="#ffffff" />
+                    <Text style={styles.previewBadgeText}>New</Text>
+                  </View>
+                ) : null}
+              </View>
               <TouchableOpacity
                 style={[styles.photoButton, uploadingProfilePicture && styles.disabledButton]}
                 onPress={() => setPhotoOptionsVisible(true)}
@@ -162,18 +174,31 @@ export default function EditProfileLightbox({
                   <Ionicons name="camera-outline" size={18} color="#ffffff" />
                 )}
                 <Text style={styles.photoButtonText}>
-                  {uploadingProfilePicture ? "Uploading..." : "Edit Profile Picture"}
+                  {uploadingProfilePicture
+                    ? "Uploading..."
+                    : pendingAvatarUri
+                      ? "Change New Photo"
+                      : "Edit Profile Picture"}
                 </Text>
               </TouchableOpacity>
-              {hasProfilePicture && !uploadingProfilePicture ? (
+              {(pendingAvatarUri || hasProfilePicture) && !uploadingProfilePicture ? (
                 <TouchableOpacity
                   style={styles.removePhotoButton}
                   onPress={onRemoveProfilePicture}
                   disabled={saving}
                   activeOpacity={0.85}
                 >
-                  <Ionicons name="trash-outline" size={16} color="#ef4444" />
-                  <Text style={styles.removePhotoText}>Remove Photo</Text>
+                  {pendingAvatarUri ? (
+                    <>
+                      <Ionicons name="close-circle-outline" size={16} color="#ef4444" />
+                      <Text style={styles.removePhotoText}>Discard New Photo</Text>
+                    </>
+                  ) : (
+                    <>
+                      <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                      <Text style={styles.removePhotoText}>Remove Photo</Text>
+                    </>
+                  )}
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -400,6 +425,28 @@ const styles = StyleSheet.create({
   avatarSection: {
     alignItems: "center",
     marginBottom: 16,
+  },
+  avatarWrap: {
+    alignItems: "center",
+  },
+  previewBadge: {
+    position: "absolute",
+    right: -4,
+    bottom: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "#0284c7",
+    borderRadius: 10,
+    paddingVertical: 3,
+    paddingHorizontal: 7,
+    borderWidth: 2,
+    borderColor: "#ffffff",
+  },
+  previewBadgeText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "700",
   },
   avatar: {
     width: 92,

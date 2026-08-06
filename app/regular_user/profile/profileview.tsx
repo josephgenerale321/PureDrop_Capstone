@@ -45,6 +45,9 @@ export default function ProfileViewScreen() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [profileImagePath, setProfileImagePath] = useState<string | null>(null);
 
+  type PendingAvatar = ImagePicker.ImagePickerAsset | null;
+  const [pendingAvatar, setPendingAvatar] = useState<PendingAvatar>(null);
+
   const avatarBucket = process.env.EXPO_PUBLIC_SUPABASE_AVATAR_BUCKET
     || process.env.EXPO_PUBLIC_SUPABASE_STORAGE_BUCKET
     || "reports";
@@ -196,21 +199,48 @@ export default function ProfileViewScreen() {
       setSavingProfile(true);
       const userDocRef = doc(db, "regular_user", currentUserId);
 
+      let resolvedProfileImageUrl: string | null = null;
+      let resolvedProfileImagePath: string | null = null;
+      let uploadedNewAvatarPath: string | null = null;
+
+      if (pendingAvatar) {
+        const upload = await uploadPendingAvatar(pendingAvatar);
+        resolvedProfileImageUrl = upload.publicUrl;
+        resolvedProfileImagePath = upload.uploadedPath;
+        uploadedNewAvatarPath = upload.uploadedPath;
+      }
+
       await updateDoc(userDocRef, {
         fullName,
         address,
         email,
         waterMeter,
+        profileImageUrl: resolvedProfileImageUrl,
+        profileImagePath: resolvedProfileImagePath,
         updatedAt: serverTimestamp(),
       });
+
+      // Legacy cleanup only when a brand-new avatar replaced an existing one.
+      if (uploadedNewAvatarPath) {
+        const previousPath = profileImagePath;
+        if (previousPath && previousPath !== uploadedNewAvatarPath) {
+          try {
+            await removeFile(previousPath, avatarBucket);
+          } catch {
+            // The new avatar is already saved; legacy cleanup should not block the flow.
+          }
+        }
+      }
 
       setProfile((prev) => ({
         fullName,
         address,
         email,
         waterMeter,
-        profileImageUrl: prev?.profileImageUrl ?? null,
+        profileImageUrl: resolvedProfileImageUrl ?? prev?.profileImageUrl ?? null,
       }));
+      setProfileImagePath(resolvedProfileImagePath ?? profileImagePath);
+      setPendingAvatar(null);
       setEditProfileVisible(false);
     } catch (saveError) {
       const message =
@@ -221,26 +251,22 @@ export default function ProfileViewScreen() {
     }
   };
 
-  const processAndUploadImage = async (selected: ImagePicker.ImagePickerAsset) => {
+  const uploadPendingAvatar = async (selected: ImagePicker.ImagePickerAsset) => {
     if (!currentUserId) {
-      Alert.alert("Not signed in", "Please sign in again before updating your profile picture.");
-      return;
+      throw new Error("You must be signed in to update your profile picture.");
     }
 
     let cachedAvatarUri: string | null = null;
+    const userDocRef = doc(db, "regular_user", currentUserId);
 
     try {
-      setUploadingProfilePicture(true);
-      const userDocRef = doc(db, "regular_user", currentUserId);
-
       const validationError = await validateProfileImage(
         selected.uri,
         selected.mimeType,
         selected.fileSize ?? null
       );
       if (validationError) {
-        Alert.alert("Invalid image", validationError);
-        return;
+        throw new Error(validationError);
       }
 
       const resized = await resizeProfileImage(selected.uri, selected.mimeType);
@@ -275,40 +301,24 @@ export default function ProfileViewScreen() {
         throw new Error("Failed to resolve avatar URL.");
       }
 
-      await updateDoc(userDocRef, {
-        profileImageUrl: publicUrl,
-        profileImagePath: uploadedPath,
-        updatedAt: serverTimestamp(),
-      });
-
+      // Best-effort: try to clear the previously stored avatar file from storage.
+      // This does NOT block the upload, and it must never throw.
       const previousPath = previousPathFromDb || profileImagePath;
       if (previousPath && previousPath !== uploadedPath) {
         try {
           await removeFile(previousPath, avatarBucket);
         } catch {
-          // The new avatar is already saved, so legacy cleanup should not block the flow.
+          // Legacy cleanup should not block the new upload.
         }
       }
 
-      setProfileImagePath(uploadedPath);
-      setProfile((prev) => ({
-        fullName: prev?.fullName || "User",
-        address: prev?.address || "",
-        email: prev?.email || "No email",
-        waterMeter: prev?.waterMeter ?? null,
-        profileImageUrl: publicUrl,
-      }));
-    } catch (uploadError) {
-      const message =
-        uploadError instanceof Error ? uploadError.message : "Failed to upload profile picture.";
-      Alert.alert("Upload error", message);
+      return { publicUrl, uploadedPath };
     } finally {
       if (cachedAvatarUri) {
         void FileSystem.deleteAsync(cachedAvatarUri, { idempotent: true }).catch(() => {
           // Cache cleanup failure should not block profile upload flow.
         });
       }
-      setUploadingProfilePicture(false);
     }
   };
 
@@ -336,7 +346,8 @@ export default function ProfileViewScreen() {
         return;
       }
 
-      await processAndUploadImage(result.assets[0]);
+      // Only set a local preview. The upload happens on Save.
+      setPendingAvatar(result.assets[0]);
     } catch {
       Alert.alert("Image picker error", "Unable to open the photo library. Please try again.");
     }
@@ -353,12 +364,19 @@ export default function ProfileViewScreen() {
       return;
     }
 
-    await processAndUploadImage(selected);
+    // Only set a local preview. The upload happens on Save.
+    setPendingAvatar(selected);
   };
 
   const handleRemoveProfilePicture = async () => {
     if (!currentUserId) {
       Alert.alert("Not signed in", "Please sign in again before updating your profile picture.");
+      return;
+    }
+
+    // If there is a pending (unsaved) preview, just discard it and revert.
+    if (pendingAvatar) {
+      setPendingAvatar(null);
       return;
     }
 
@@ -409,7 +427,10 @@ export default function ProfileViewScreen() {
         loading={loading}
         error={error}
         savingProfile={savingProfile}
-        onEditProfile={() => setEditProfileVisible(true)}
+        onEditProfile={() => {
+          setPendingAvatar(null);
+          setEditProfileVisible(true);
+        }}
         onBack={() => router.replace("/regular_user/home")}
       />
 
@@ -419,9 +440,11 @@ export default function ProfileViewScreen() {
         saving={savingProfile}
         uploadingProfilePicture={uploadingProfilePicture}
         profileImageUrl={profile?.profileImageUrl ?? null}
+        pendingAvatarUri={pendingAvatar?.uri ?? null}
         hasProfilePicture={profile?.profileImageUrl != null}
         onClose={() => {
           if (!savingProfile && !uploadingProfilePicture) {
+            setPendingAvatar(null);
             setEditProfileVisible(false);
           }
         }}

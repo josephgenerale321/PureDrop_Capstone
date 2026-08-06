@@ -2,7 +2,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
-  PanResponder,
   Pressable,
   StyleSheet,
   Text,
@@ -12,16 +11,12 @@ import {
   type ViewStyle,
 } from "react-native";
 import type { Region } from "./MapPicker";
-import { useTwoFingerPinch } from "./twofingerpinch";
+import type { PixelPoint } from "./useMapTouchTracker";
+import { useMapGestures } from "./useMapGestures";
 
 const TILE_SIZE = 256;
 const MIN_ZOOM = 5;
 const MAX_ZOOM = 19;
-
-type PixelPoint = {
-  x: number;
-  y: number;
-};
 
 type OsmTileMapProps = {
   initialRegion: Region;
@@ -100,28 +95,30 @@ export function OsmTileMap({
   center,
   recenterKey = 0,
 }: OsmTileMapProps) {
-const [layout, setLayout] = useState({ width: 0, height: 0 });
+  const [layout, setLayout] = useState({ width: 0, height: 0 });
   const [zoom, setZoom] = useState(() => zoomForRegion(initialRegion));
   const [centerPixel, setCenterPixel] = useState(() =>
     regionToPixel(initialRegion, zoomForRegion(initialRegion)),
   );
-const [dragOffset, setDragOffset] = useState<PixelPoint>({ x: 0, y: 0 });
+  const [dragOffset, setDragOffset] = useState<PixelPoint>({ x: 0, y: 0 });
   const centerPixelRef = useRef(centerPixel);
   const dragOffsetRef = useRef<PixelPoint>({ x: 0, y: 0 });
 
   centerPixelRef.current = centerPixel;
   dragOffsetRef.current = dragOffset;
 
-  // Refs used by the gesture handlers so the latest values are always read
-  // inside PanResponder callbacks without needing to re-create them.
-const zoomRef = useRef(zoom);
+  const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
-  // Holds the animation frame id for the fling momentum, so it can be cancelled.
   const momentumFrameRef = useRef<number | null>(null);
 
-  // When the parent asks us to recenter (bumped `recenterKey`), snap the
-  // internal center to the provided coordinate. Guarded against invalid/NaN
-  // inputs so a bad fix can never corrupt the map state on dev/preview builds.
+  // Cancel any in-flight momentum (fling) animation.
+  const cancelMomentum = useCallback(() => {
+    if (momentumFrameRef.current != null) {
+      cancelAnimationFrame(momentumFrameRef.current);
+      momentumFrameRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     if (!center) {
       return;
@@ -135,16 +132,14 @@ const zoomRef = useRef(zoom);
     ) {
       return;
     }
-
-const nextPixel = regionToPixel({ latitude, longitude }, zoom);
+    const nextPixel = regionToPixel({ latitude, longitude }, zoom);
     setCenterPixel(nextPixel);
     setDragOffset({ x: 0, y: 0 });
+    dragOffsetRef.current = { x: 0, y: 0 };
     notifyRegionChange(nextPixel, zoom);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recenterKey]);
 
-  // Cancel any in-flight momentum animation when the map unmounts, so a
-  // requestAnimationFrame callback never fires after unmount (crash-safe).
   useEffect(() => {
     return () => {
       if (momentumFrameRef.current != null) {
@@ -159,16 +154,13 @@ const nextPixel = regionToPixel({ latitude, longitude }, zoom);
       if (!layout.width || !layout.height) {
         return;
       }
-
       onRegionChangeComplete?.(
         pixelToRegion(nextCenter, nextZoom, layout.width, layout.height),
       );
     },
-[layout.width, layout.height, onRegionChangeComplete],
+    [layout.width, layout.height, onRegionChangeComplete],
   );
 
-  // Change zoom level. Uses refs so it always reads the latest value even
-  // when called from within a PanResponder callback (which is memoized).
   const changeZoom = useCallback(
     (direction: 1 | -1) => {
       const currentZoom = zoomRef.current;
@@ -176,7 +168,6 @@ const nextPixel = regionToPixel({ latitude, longitude }, zoom);
       if (nextZoom === currentZoom) {
         return;
       }
-
       const scale = 2 ** (nextZoom - currentZoom);
       const currentCenter = centerPixelRef.current;
       const nextCenter = {
@@ -191,8 +182,6 @@ const nextPixel = regionToPixel({ latitude, longitude }, zoom);
     [notifyRegionChange],
   );
 
-  // Smooth fling/inertia after a quick pan. Fully guarded so it can never
-  // throw on preview/dev builds (velocity or frame id may be stale).
   const startMomentum = useCallback(
     (velocityX: number, velocityY: number) => {
       try {
@@ -205,12 +194,10 @@ const nextPixel = regionToPixel({ latitude, longitude }, zoom);
         if (speed < 0.15) {
           return;
         }
-        // Cancel any in-flight momentum animation.
         if (momentumFrameRef.current != null) {
           cancelAnimationFrame(momentumFrameRef.current);
           momentumFrameRef.current = null;
         }
-
         let fx = vx;
         let fy = vy;
         const step = () => {
@@ -234,19 +221,20 @@ const nextPixel = regionToPixel({ latitude, longitude }, zoom);
         };
         momentumFrameRef.current = requestAnimationFrame(step);
       } catch {
-        // Non-fatal: momentum is a polish feature.
         if (momentumFrameRef.current != null) {
           cancelAnimationFrame(momentumFrameRef.current);
           momentumFrameRef.current = null;
         }
       }
     },
-    [interactive, notifyRegionChange],
+[interactive, notifyRegionChange],
   );
 
-// Two-finger pinch gesture (zoom + pan) extracted into its own module so it
-  // can be reused and kept crash-safe. Refs wire the latest map state in.
-  const pinch = useTwoFingerPinch({
+  // ---- Master PanResponder (extracted to a separate module) ----
+  // useMapGestures owns single-finger pan + fling momentum. Pinch-to-zoom,
+  // double-tap zoom-in, and two-finger tap zoom-out were removed because they
+  // were unreliable on device. Zoom is controlled via the +/- zoom buttons.
+  const panResponder = useMapGestures({
     interactive,
     zoomRef,
     centerPixelRef,
@@ -255,87 +243,11 @@ const nextPixel = regionToPixel({ latitude, longitude }, zoom);
     setDragOffset,
     setCenterPixel,
     notifyRegionChange,
+    startMomentum,
+    cancelMomentum,
   });
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-// Claim the responder as soon as a finger touches the map so that
-        // single-finger tap-and-hold-then-slide panning works. We keep the
-        // *capture* phase returning false so the child zoom Pressable buttons
-        // still receive their own touches (children win responder negotiation
-        // in the bubble phase before this parent's non-capture handler).
-        onStartShouldSetPanResponder: () => interactive,
-        onStartShouldSetPanResponderCapture: () => false,
-        onMoveShouldSetPanResponder: (_event, gestureState) => {
-          if (!interactive) return false;
-          // A real drag: both fingers down (pinch) or a single-finger move.
-          // Return true so the map pans. Small movements (< 2px) are ignored so
-          // taps on the zoom buttons still register.
-          const isPinch = gestureState.numberActiveTouches >= 2;
-          return (
-            isPinch ||
-            Math.abs(gestureState.dx) + Math.abs(gestureState.dy) > 2
-          );
-        },
-        onMoveShouldSetPanResponderCapture: (_event, gestureState) => {
-          if (!interactive) return false;
-          const isPinch = gestureState.numberActiveTouches >= 2;
-          return (
-            isPinch ||
-            Math.abs(gestureState.dx) + Math.abs(gestureState.dy) > 4
-          );
-        },
-onPanResponderGrant: (event) => {
-          // A touch started on the map. The pinch module handles pinch, double-tap,
-          // and double-tap-and-slide detection.
-          if (momentumFrameRef.current != null) {
-            cancelAnimationFrame(momentumFrameRef.current);
-            momentumFrameRef.current = null;
-          }
-          pinch.onGrant(event);
-          setDragOffset({ x: 0, y: 0 });
-          dragOffsetRef.current = { x: 0, y: 0 };
-        },
-        onPanResponderMove: (_event, gesture) => {
-          // Pinch, double-tap-slide, and pan are handled by the pinch module.
-          // If it handled the gesture, do NOT fall through to single-finger pan.
-          if (pinch.onMove(_event, gesture)) {
-            return;
-          }
-          // Single-finger pan.
-          dragOffsetRef.current = { x: gesture.dx, y: gesture.dy };
-          setDragOffset({ x: gesture.dx, y: gesture.dy });
-        },
-        onPanResponderRelease: (_event, gesture) => {
-          // Pinch release, double-tap, and double-tap-slide end are all handled
-          // by the pinch module. If it handled the release, do NOT fall through.
-          if (pinch.onRelease(_event, gesture)) {
-            return;
-          }
-
-          // A real single-finger pan → commit the final center and start momentum.
-          const nextCenter = {
-            x: centerPixelRef.current.x - gesture.dx,
-            y: centerPixelRef.current.y - gesture.dy,
-          };
-centerPixelRef.current = nextCenter;
-          setCenterPixel(nextCenter);
-          setDragOffset({ x: 0, y: 0 });
-          dragOffsetRef.current = { x: 0, y: 0 };
-          notifyRegionChange(nextCenter, zoomRef.current);
-          startMomentum(gesture.vx, gesture.vy);
-        },
-        onPanResponderTerminate: () => {
-          pinch.onTerminate();
-          setDragOffset({ x: 0, y: 0 });
-          dragOffsetRef.current = { x: 0, y: 0 };
-        },
-      }),
-    [interactive, zoomRef, changeZoom, notifyRegionChange, startMomentum, pinch],
-  );
-
-const handleLayout = (event: LayoutChangeEvent) => {
+  const handleLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
     setLayout({ width, height });
   };
@@ -346,7 +258,6 @@ const handleLayout = (event: LayoutChangeEvent) => {
     if (!layout.width || !layout.height) {
       return [];
     }
-
     const worldTiles = 2 ** zoom;
     const viewportLeft = centerPixel.x - layout.width / 2 - dragOffset.x;
     const viewportTop = centerPixel.y - layout.height / 2 - dragOffset.y;
@@ -361,56 +272,60 @@ const handleLayout = (event: LayoutChangeEvent) => {
         if (y < 0 || y >= worldTiles) {
           continue;
         }
-
         const wrappedX = ((x % worldTiles) + worldTiles) % worldTiles;
-
-          visibleTiles.push({
-            key: `${zoom}-${x}-${y}`,
-            left: x * TILE_SIZE - viewportLeft,
-            top: y * TILE_SIZE - viewportTop,
-            uri: apiKey
-              ? `https://api.maptiler.com/tiles/satellite-v2/${zoom}/${wrappedX}/${y}.jpg?key=${apiKey}`
-              : undefined,
-          });
+        visibleTiles.push({
+          key: `${zoom}-${x}-${y}`,
+          left: x * TILE_SIZE - viewportLeft,
+          top: y * TILE_SIZE - viewportTop,
+          uri: apiKey
+            ? `https://api.maptiler.com/tiles/satellite-v2/${zoom}/${wrappedX}/${y}.jpg?key=${apiKey}`
+            : undefined,
+        });
       }
     }
-
-    // Filter out tiles when API key is missing to avoid invalid URIs.
     return visibleTiles.filter((t) => Boolean(t.uri));
   }, [centerPixel.x, centerPixel.y, dragOffset.x, dragOffset.y, layout.height, layout.width, zoom, apiKey]);
 
   return (
-    <View style={[styles.map, style]} onLayout={handleLayout} {...panResponder.panHandlers}>
-      <View style={styles.tileCanvas}>
-        {tiles.map((tile) => (
-          <Image
-            key={tile.key}
-            source={{ uri: tile.uri }}
-            style={[styles.tile, { left: tile.left, top: tile.top }]}
-          />
-        ))}
+    <View style={[styles.container, style]}>
+      <View
+        style={styles.map}
+        onLayout={handleLayout}
+        {...panResponder.panHandlers}
+      >
+        <View style={styles.tileCanvas}>
+          {tiles.map((tile) => (
+            <Image
+              key={tile.key}
+              source={{ uri: tile.uri }}
+              style={[styles.tile, { left: tile.left, top: tile.top }]}
+            />
+          ))}
+        </View>
+
+        {!layout.width || !layout.height ? (
+          <View style={styles.loading}>
+            <Text style={styles.loadingText}>Loading map...</Text>
+          </View>
+        ) : null}
+
+        {!apiKey ? (
+          <View style={styles.loading}>
+            <Text style={styles.loadingText}>Map tiles unavailable (missing MAPTILER key)</Text>
+          </View>
+        ) : null}
+
+        {selectedPin && !interactive ? (
+          <View style={styles.previewPin} pointerEvents="none">
+            <Ionicons name="location" size={30} color="#EF4444" />
+          </View>
+        ) : null}
+
+        <Text style={styles.attribution}>MapTiler</Text>
       </View>
 
-      {!layout.width || !layout.height ? (
-        <View style={styles.loading}>
-          <Text style={styles.loadingText}>Loading map...</Text>
-        </View>
-      ) : null}
-
-      {!apiKey ? (
-        <View style={styles.loading}>
-          <Text style={styles.loadingText}>Map tiles unavailable (missing MAPTILER key)</Text>
-        </View>
-      ) : null}
-
-      {selectedPin && !interactive ? (
-        <View style={styles.previewPin} pointerEvents="none">
-          <Ionicons name="location" size={30} color="#EF4444" />
-        </View>
-      ) : null}
-
       {interactive ? (
-        <View style={styles.zoomControls}>
+        <View style={styles.zoomControls} pointerEvents="box-none">
           <Pressable style={styles.zoomButton} onPress={() => changeZoom(1)}>
             <Ionicons name="add" size={22} color="#0F172A" />
           </Pressable>
@@ -419,16 +334,17 @@ const handleLayout = (event: LayoutChangeEvent) => {
           </Pressable>
         </View>
       ) : null}
-
-      <Text style={styles.attribution}>MapTiler</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  map: {
-    backgroundColor: "#DDE8EE",
+  container: {
     overflow: "hidden",
+  },
+  map: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#DDE8EE",
   },
   tileCanvas: {
     ...StyleSheet.absoluteFillObject,
