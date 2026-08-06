@@ -3,7 +3,8 @@ import { Tabs, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Image, StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, Text, View } from "react-native";
+import HomeMainLoading from "../../components/loading/homepage/homemain_loading";
 import FloatingNotification from "../../components/notifications/floating_notif";
 import { ReportNotificationsProvider, useReportNotifications } from "../../components/notifications/notif_func";
 import PushNotificationSync from "../../components/notifications/push_notificationfunc";
@@ -25,7 +26,8 @@ import {
 // the slowest supported network, the app will bounce to /login before the
 // session restores, then get redirected back once it does — that is the exact
 // "flip-flop" this grace window exists to prevent. 8s matches the 8s loading
-// overlay timeout in `saveloginwait.tsx` for coherent behavior.
+// overlay timeout in `components/loading/restore_session/loading_session.tsx`
+// for coherent behavior.
 const AUTH_RESTORE_GRACE_MS = 8000;
 
 export default function RegularUserLayout() {
@@ -186,12 +188,8 @@ function RegularUserTabs() {
     ? { uri: profileImageUrl }
     : require("../../assets/images/default_account.png");
 
-  if (!authChecked || !isAuthenticated) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color="#1e88e5" />
-      </View>
-    );
+if (!authChecked || !isAuthenticated) {
+    return <HomeMainLoading />;
   }
 
   return (

@@ -12,7 +12,8 @@ import { getSavedLogin } from "../../main_layout/save_loginfunc";
 const SESSION_RESTORE_TIMEOUT_MS = 8000;
 
 /**
- * `SavedLoginWait` — crash-safe loading overlay for the saved-login flow.
+ * `LoadingSession` (SavedLoginWait) — crash-safe loading overlay for the
+ * saved-login flow.
  *
  * When the app reopens (or the user navigates to a pre-login screen) with a
  * saved-login marker in AsyncStorage, Firebase needs a moment to restore the
@@ -32,7 +33,7 @@ const SESSION_RESTORE_TIMEOUT_MS = 8000;
  *   restore fails or the auth state never fires with a user.
  * - Renders `null` whenever there is no saved login, so the UI is untouched.
  */
-export default function SavedLoginWait() {
+export default function LoadingSession() {
   const [visible, setVisible] = useState(false);
   // Set to `true` the moment Firebase reports an authenticated user for this
   // mount. Used to close the race between the async auth listener and the
@@ -170,4 +171,3 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 });
-

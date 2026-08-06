@@ -1,7 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import {
-  ActivityIndicator,
   Image,
   ScrollView,
   Text,
@@ -9,6 +8,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import HomeMainLoading from "../loading/homepage/homemain_loading";
 import HomeExitHandler from "../main_layout/home_exit_handler";
 import { styles } from "./home_styles";
 import type { HomeUser } from "./useHomeDashboard";
@@ -32,12 +32,10 @@ export default function HomeContent({ user, loading }: HomeContentProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  if (loading) {
+if (loading) {
     return (
-      <View
-        style={[styles.container, { justifyContent: "center", alignItems: "center" }]}
-      >
-        <ActivityIndicator size="large" color="#0284c7" />
+      <View style={styles.container}>
+        <HomeMainLoading />
       </View>
     );
   }

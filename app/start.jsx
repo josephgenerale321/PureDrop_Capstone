@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, Image, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import SavedLoginWait from "../components/login/backend/saveloginwait";
+import SavedLoginWait from "../components/loading/restore_session/loading_session";
 
 export default function StartScreen() {
   const router = useRouter();

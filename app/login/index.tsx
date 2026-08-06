@@ -16,7 +16,7 @@ import {
 import { finishLogout } from "../../lib/auth/logoutState";
 import { getLoginErrorMessage } from "../../lib/login/logerror";
 import { loginUser } from "../../lib/login/loginfunctions";
-import SavedLoginWait from "../../components/login/backend/saveloginwait";
+import SavedLoginWait from "../../components/loading/restore_session/loading_session";
 
 const FORGOT_PASSWORD_ROUTE = "/login/forgot_password" as Href;
 
