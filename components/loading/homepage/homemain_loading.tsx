@@ -14,8 +14,8 @@ type HomeMainLoadingProps = {
  * profile is resolved).
  *
  * Styled to match the PureDrop Figma design ("iPhone 16 Pro Max - 31",
- * node 398:2): a white background, a large centered logo, a custom-designed
- * spinner, and the "Loading your dashboard..." caption below.
+ * node 398:2): a white background, a centered logo, a custom-designed
+ * spinner, and a short friendly caption below.
  *
  * The spinner is a custom-designed ring (a static track + a rotating arc with
  * the brand color) built on React Native's core `Animated` API. It is NOT a
@@ -31,7 +31,7 @@ type HomeMainLoadingProps = {
  */
 export default function HomeMainLoading({
   color = "#0284c7",
-  message = "Loading your dashboard...",
+  message = "Just a moment...",
 }: HomeMainLoadingProps) {
   // Rotates a full 360° continuously. `useNativeDriver: true` keeps it on the
   // UI thread on native; on web it falls back gracefully to the JS driver.
@@ -94,9 +94,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   logo: {
-    width: 295,
-    height: 295,
-    marginBottom: 28,
+    width: 180,
+    height: 180,
+    marginBottom: 20,
   },
   spinnerWrap: {
     width: SPINNER_SIZE,
@@ -117,11 +117,11 @@ const styles = StyleSheet.create({
     borderColor: "transparent",
   },
   message: {
-    color: "#000000",
-    fontSize: 24,
-    fontWeight: "400",
+    color: "#334155",
+    fontSize: 16,
+    fontWeight: "500",
     fontFamily: "Inter",
     textAlign: "center",
-    marginTop: 24,
+    marginTop: 16,
   },
 });
