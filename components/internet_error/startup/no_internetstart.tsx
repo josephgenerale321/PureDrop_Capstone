@@ -1,3 +1,4 @@
+import { usePathname } from "expo-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
@@ -84,7 +85,24 @@ function probeReachable(): Promise<boolean> {
   });
 }
 
+/**
+ * True when the current route is a pre-login / startup screen where the full
+ * screen offline overlay is appropriate (the user needs internet to sign in).
+ * Returns `false` for the signed-in area (`/regular_user/*`) where reports
+ * are cached locally and the app should keep working offline — only the
+ * lightweight in-app banner (`nointernet_notif.tsx`) shows there.
+ */
+const isPreLoginRoute = (pathname: string): boolean => {
+  return (
+    pathname === "/" ||
+    pathname === "/start" ||
+    pathname === "/login" ||
+    pathname.startsWith("/login/")
+  );
+};
+
 export default function NoInternetStart({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   // `true` when the device has no usable internet connection.
   const [offline, setOffline] = useState(false);
   // `true` while a manual "Try Again" check is in progress.
@@ -99,8 +117,19 @@ export default function NoInternetStart({ children }: { children: ReactNode }) {
   const floatY = useRef(new Animated.Value(0)).current;
   const floatAnim = useRef<Animated.CompositeAnimation | null>(null);
 
+const blocking = isPreLoginRoute(pathname);
+
   useEffect(() => {
     mountedRef.current = true;
+
+    // Only probe connectivity while on a pre-login screen. In the signed-in
+    // area the full-screen overlay is never shown (only the lightweight
+    // in-app banner), so skip the network probe there to save resources and
+    // avoid any interference with offline (cached) usage.
+    if (!blocking) {
+      setOffline(false);
+      return;
+    }
 
     const runProbe = () => {
       void probeReachable().then((ok) => {
@@ -131,7 +160,7 @@ export default function NoInternetStart({ children }: { children: ReactNode }) {
         floatAnim.current = null;
       }
     };
-  }, []);
+  }, [blocking]);
 
   // React to the offline state: fade the overlay in/out smoothly.
   useEffect(() => {
@@ -198,8 +227,10 @@ export default function NoInternetStart({ children }: { children: ReactNode }) {
     });
   };
 
-  // Online — render the real app. The overlay is gone in realtime.
-  if (!offline) {
+// Online, OR on a signed-in route (not blocking) — render the real app. The
+  // full-screen overlay is only ever shown on pre-login screens while offline,
+  // so cached features (e.g. reports on the home screen) keep working offline.
+  if (!offline || !blocking) {
     return <>{children}</>;
   }
 

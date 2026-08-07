@@ -246,7 +246,9 @@ export default function EditProfileLightbox({
               <Text style={styles.label}>Water Meter</Text>
               <TextInput
                 value={form.waterMeter}
-                onChangeText={(value) => updateField("waterMeter", value.replace(/[^\d]/g, ""))}
+onChangeText={(value) =>
+                  updateField("waterMeter", value.replace(/[^\d]/g, "").slice(0, 8))
+                }
                 style={styles.input}
                 placeholder="Enter water meter number"
                 placeholderTextColor="#94a3b8"

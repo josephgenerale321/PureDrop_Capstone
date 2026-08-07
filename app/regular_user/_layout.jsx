@@ -9,6 +9,8 @@ import FloatingNotification from "../../components/notifications/floating_notif"
 import { ReportNotificationsProvider, useReportNotifications } from "../../components/notifications/notif_func";
 import PushNotificationSync from "../../components/notifications/push_notificationfunc";
 import SystemNotificationSync from "../../components/notifications/system_notif";
+import NoInternetNotification from "../../components/notifications/nointernet_notif";
+import BackInternetNotification from "../../components/notifications/backinternet_notif";
 import { auth, db } from "../../firebaseConfig";
 import RegularUserPresenceSync from "./status/RegularUserPresenceSync";
 import {
@@ -195,9 +197,11 @@ if (!authChecked || !isAuthenticated) {
   return (
     <>
 <RegularUserPresenceSync />
-      <PushNotificationSync />
+<PushNotificationSync />
       <SystemNotificationSync />
-      <FloatingNotification />
+<FloatingNotification />
+      <NoInternetNotification />
+      <BackInternetNotification />
       <Tabs
         screenOptions={{
           headerShown: false,

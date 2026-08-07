@@ -193,8 +193,10 @@ export function CreateReportFormContent({
               <Text style={styles.label}>Water Meter (Optional)</Text>
               <TextInput
                 ref={createReportInputRef("waterMeter")}
-                value={waterMeter}
-                onChangeText={onWaterMeterChange}
+value={waterMeter}
+                onChangeText={(value) =>
+                  onWaterMeterChange(value.replace(/[^\d]/g, "").slice(0, 8))
+                }
                 onFocus={() => followFocusedField("waterMeter")}
                 onPressIn={() => followFocusedField("waterMeter")}
                 style={styles.input}

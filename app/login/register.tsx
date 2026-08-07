@@ -258,8 +258,10 @@ export default function RegisterScreen() {
             <TextInput
               ref={registerInputRef("waterMeter")}
               style={styles.input}
-              value={waterMeter}
-              onChangeText={setWaterMeter}
+value={waterMeter}
+              onChangeText={(value) =>
+                setWaterMeter(value.replace(/[^\d]/g, "").slice(0, 8))
+              }
               onFocus={() => followFocusedField("waterMeter")}
               onPressIn={() => followFocusedField("waterMeter")}
               keyboardType="numeric"
