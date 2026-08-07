@@ -1,6 +1,7 @@
 import { Stack, type ErrorBoundaryProps } from "expo-router";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import SaveLoginSync from "../components/main_layout/save_loginfunc";
+import NoInternetStart from "../components/internet_error/startup/no_internetstart";
 
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   return (
@@ -16,14 +17,14 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 
 export default function RootLayout() {
   return (
-    <>
+    <NoInternetStart>
       <SaveLoginSync />
       <Stack
         screenOptions={{
           headerShown: false,
         }}
       />
-    </>
+    </NoInternetStart>
   );
 }
 
