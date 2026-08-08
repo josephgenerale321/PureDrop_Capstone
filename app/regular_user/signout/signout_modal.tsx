@@ -4,6 +4,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { auth } from "../../../firebaseConfig";
 import { clearSavedLogin } from "../../../components/main_layout/save_loginfunc";
+import { clearProfileCache } from "../../../components/main_layout/offline_profile_cache";
+import { clearReports } from "../../../components/my_report/offlinefunc";
 import { beginLogout, finishLogout } from "../../../lib/auth/logoutState";
 import { markCurrentUserInactive } from "../status/RegularUserPresenceSync";
 import { unregisterPushNotificationsAsync } from "../../../components/notifications/push_notificationfunc";
@@ -30,12 +32,23 @@ export default function SignOutModal() {
       // Keep sign-out flow non-blocking even if presence update fails.
     }
 
-    // Forget the locally saved login marker so the app does NOT auto-login
+// Forget the locally saved login marker so the app does NOT auto-login
     // again on the next launch after an explicit sign-out.
     try {
       await clearSavedLogin();
     } catch {
       // Non-fatal — Firebase sign-out still proceeds.
+    }
+
+    // Clear the per-user offline profile + reports caches so the next account
+    // that signs in does not see this user's cached data.
+    try {
+      if (uid) {
+        await clearProfileCache(uid);
+        await clearReports(uid);
+      }
+    } catch {
+      // Non-fatal — sign-out still proceeds.
     }
 
     // Stop the server from delivering remote pushes to this (now signing-out)

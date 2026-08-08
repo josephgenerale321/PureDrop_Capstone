@@ -73,7 +73,7 @@ export function useMyReports() {
     let isMounted = true;
     let activeUid: string | null = null;
 
-    const mergeAndSetReports = (uid: string | null, fromCache = false) => {
+const mergeAndSetReports = (uid: string | null, fromCache = false) => {
       const mergedMap = new Map<string, ReportItem>();
       [...legacyReports, ...subcollectionReports].forEach((item) => {
         mergedMap.set(item.reportId, item);
@@ -93,7 +93,8 @@ export function useMyReports() {
 
       // Whenever we have fresh (online) data, cache it so the next offline
       // open can still show My Reports. Fire-and-forget; never throws.
-      if (!fromCache && uid && merged.length > 0) {
+      // Cache even when merged is empty so a cleared list is also persisted.
+      if (!fromCache && uid) {
         void saveReports(
           uid,
           merged.map((r) => ({
@@ -109,19 +110,24 @@ export function useMyReports() {
       }
     };
 
-    const fallbackToCache = async (uid: string) => {
+const fallbackToCache = async (uid: string) => {
       try {
         const cached = await getCachedReports(uid);
         if (!isMounted) {
           return;
         }
-        if (cached.length > 0) {
-          setReports(cached);
-          setOffline(true);
+        // Always resolve the loading state so the screen never hangs, even
+        // when there is nothing cached (falls back to the empty list).
+        setReports(cached);
+        setOffline(cached.length > 0);
+        setLoading(false);
+      } catch {
+        // Non-fatal: fall back to an empty list and stop loading.
+        if (isMounted) {
+          setReports([]);
+          setOffline(false);
           setLoading(false);
         }
-      } catch {
-        // Non-fatal: fall back to an empty list.
       }
     };
 
@@ -151,7 +157,7 @@ export function useMyReports() {
       const reportsRef = collection(db, "regular_user", uid, "reports");
       const userDocRef = doc(db, "regular_user", uid);
 
-      unsubscribeSubcollection = onSnapshot(
+unsubscribeSubcollection = onSnapshot(
         reportsRef,
         (snapshot) => {
           subcollectionReports = snapshot.docs.map((docSnap, index) =>
@@ -160,8 +166,12 @@ export function useMyReports() {
           mergeAndSetReports(activeUid);
         },
         () => {
+          // Offline / listener failure: do NOT call `mergeAndSetReports` here.
+          // That path would clear the in-memory list AND write an empty array
+          // to the offline cache (via the `!fromCache` save branch), wiping the
+          // last-known reports before the cache can be read back. Instead, go
+          // straight to the cached data so My Reports still shows offline.
           subcollectionReports = [];
-          mergeAndSetReports(activeUid);
           void fallbackToCache(uid);
         },
       );
@@ -183,8 +193,9 @@ export function useMyReports() {
           mergeAndSetReports(activeUid);
         },
         () => {
+          // See note above: avoid the online merge on error so the offline
+          // cache is never overwritten with an empty list.
           legacyReports = [];
-          mergeAndSetReports(activeUid);
           void fallbackToCache(uid);
         },
       );

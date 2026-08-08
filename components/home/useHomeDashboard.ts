@@ -4,6 +4,10 @@ import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { auth, db } from "../../firebaseConfig";
+import {
+  getProfileCache,
+  saveProfileCache,
+} from "../main_layout/offline_profile_cache";
 
 const SAVED_LOGIN_NAME_KEY = "@puredrop/saved_login_name";
 
@@ -103,11 +107,29 @@ export function useHomeDashboard() {
             return;
           }
 
-          if (userSnap.exists()) {
+if (userSnap.exists()) {
+            const data = userSnap.data();
             setUser({
               uid: currentUser.uid,
               email: currentUser.email,
-              ...userSnap.data(),
+              ...data,
+            });
+            // Persist the profile locally so it can be shown offline (name +
+            // downloaded profile picture) when Firestore is not reachable.
+            void saveProfileCache(currentUser.uid, {
+              fullName:
+                typeof data.fullName === "string" ? data.fullName : "",
+              address: typeof data.address === "string" ? data.address : "",
+              email: typeof data.email === "string" ? data.email : "",
+              waterMeter:
+                typeof data.waterMeter === "string" ||
+                typeof data.waterMeter === "number"
+                  ? data.waterMeter
+                  : null,
+              profileImageUrl:
+                typeof data.profileImageUrl === "string"
+                  ? data.profileImageUrl
+                  : null,
             });
           } else {
             setUser({ uid: currentUser.uid, email: currentUser.email });
@@ -121,15 +143,49 @@ export function useHomeDashboard() {
           }
 
           console.warn("Failed to subscribe to user profile after login", error);
-          // Keep the cached fast-path user (if any) or a minimal user, so the
-          // dashboard still renders instead of spinning forever.
-          setUser((prev) => {
-            if (prev) {
-              return prev;
+          // Offline fallback: try to restore the cached profile (name + local
+          // photo) so the home shows the real account instead of "Resident".
+          void (async () => {
+            try {
+              const cached = await getProfileCache(currentUser.uid);
+              if (!isMounted) {
+                return;
+              }
+              if (cached) {
+                setUser((prev) => {
+                  if (
+                    prev &&
+                    typeof prev.fullName === "string" &&
+                    prev.fullName.length > 0
+                  ) {
+                    return prev;
+                  }
+                  return {
+                    uid: currentUser.uid,
+                    email: currentUser.email,
+                    fullName: cached.fullName,
+                    profileImageUrl: cached.profileImageLocalUri || cached.profileImageUrl,
+                    profileImageLocalUri: cached.profileImageLocalUri,
+                  };
+                });
+              } else {
+                // Keep the cached fast-path user (if any) or a minimal user, so
+                // the dashboard still renders instead of spinning forever.
+                setUser((prev) => {
+                  if (prev) {
+                    return prev;
+                  }
+                  return { uid: currentUser.uid, email: currentUser.email };
+                });
+              }
+            } catch {
+              // Non-fatal.
+            } finally {
+              if (isMounted) {
+                setLoading(false);
+              }
             }
-            return { uid: currentUser.uid, email: currentUser.email };
-          });
-          setLoading(false);
+          })();
         },
       );
     });

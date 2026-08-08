@@ -17,6 +17,10 @@ import {
   clearSavedLogin,
   getSavedLogin,
 } from "../../components/main_layout/save_loginfunc";
+import {
+  getProfileCache,
+  saveProfileCache,
+} from "../../components/main_layout/offline_profile_cache";
 
 // While a saved-login marker exists, Firebase may need several seconds to
 // refresh the persisted session token after the app reopens (especially on a
@@ -131,14 +135,40 @@ function RegularUserTabs() {
             }
 
             const data = snap.data();
-            setProfileImageUrl(
+            const imgUrl =
               typeof data.profileImageUrl === "string" && data.profileImageUrl.length > 0
                 ? data.profileImageUrl
-                : null
-            );
+                : null;
+            setProfileImageUrl(imgUrl);
+            // Persist the profile photo locally so the tab avatar can be shown
+            // offline too.
+            void saveProfileCache(currentUser.uid, {
+              fullName: typeof data.fullName === "string" ? data.fullName : "",
+              address: typeof data.address === "string" ? data.address : "",
+              email: typeof data.email === "string" ? data.email : "",
+              waterMeter:
+                typeof data.waterMeter === "string" ||
+                typeof data.waterMeter === "number"
+                  ? data.waterMeter
+                  : null,
+              profileImageUrl: imgUrl,
+            });
           },
-          () => {
-            setProfileImageUrl(null);
+          async () => {
+            // Offline: fall back to the locally cached profile photo (if any)
+            // so the tab avatar still shows the user's picture.
+            try {
+              const cached = await getProfileCache(currentUser.uid);
+              if (isMounted) {
+                setProfileImageUrl(
+                  cached?.profileImageLocalUri || cached?.profileImageUrl || null
+                );
+              }
+            } catch {
+              if (isMounted) {
+                setProfileImageUrl(null);
+              }
+            }
           }
         );
       }

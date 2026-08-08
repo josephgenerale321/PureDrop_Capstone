@@ -19,6 +19,10 @@ import {
 import ProfileComponent, {
   type ProfileViewModel,
 } from "../../../components/profile/profilecomponent";
+import {
+  getProfileCache,
+  saveProfileCache,
+} from "../../../components/main_layout/offline_profile_cache";
 import { auth, db } from "../../../firebaseConfig";
 
 const LOGIN_ROUTE = "/login" as Href;
@@ -119,26 +123,62 @@ const avatarBucket =
           const data = profileSnap.data() as RegularUserDoc;
           setError(null);
           setProfileImagePath(typeof data.profileImagePath === "string" ? data.profileImagePath : null);
+          const imgUrl =
+            typeof data.profileImageUrl === "string" && data.profileImageUrl.length > 0
+              ? data.profileImageUrl
+              : null;
           setProfile({
             fullName: data.fullName || "User",
             address: data.address || "",
             email: data.email || currentUser.email || "No email",
             waterMeter: data.waterMeter ?? null,
-            profileImageUrl:
-              typeof data.profileImageUrl === "string" && data.profileImageUrl.length > 0
-                ? data.profileImageUrl
-                : null,
+            profileImageUrl: imgUrl,
+          });
+          // Persist the profile locally (name + downloaded photo) so the
+          // Profile screen can render offline too.
+          void saveProfileCache(currentUser.uid, {
+            fullName: data.fullName || "",
+            address: data.address || "",
+            email: data.email || currentUser.email || "",
+            waterMeter: data.waterMeter ?? null,
+            profileImageUrl: imgUrl,
           });
           setLoading(false);
         },
-        (profileError) => {
+        async (profileError) => {
           if (!isMounted) {
             return;
           }
 
           console.error("Failed to subscribe to profile:", profileError);
-          setError("Failed to load your profile.");
-          setLoading(false);
+          // Offline fallback: show the cached profile (name + local photo)
+          // instead of an error so the Profile screen still reflects the user.
+          try {
+            const cached = await getProfileCache(currentUser.uid);
+            if (!isMounted) {
+              return;
+            }
+            if (cached) {
+              setProfile({
+                fullName: cached.fullName || "User",
+                address: cached.address || "",
+                email: cached.email || currentUser.email || "No email",
+                waterMeter: cached.waterMeter ?? null,
+                profileImageUrl: cached.profileImageLocalUri || cached.profileImageUrl,
+              });
+              setError(null);
+            } else {
+              setError("Failed to load your profile.");
+            }
+          } catch {
+            if (isMounted) {
+              setError("Failed to load your profile.");
+            }
+          } finally {
+            if (isMounted) {
+              setLoading(false);
+            }
+          }
         },
       );
     });

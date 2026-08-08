@@ -76,9 +76,13 @@ export function GpsMapModal({
           </TouchableOpacity>
         </View>
 
-        {/* Follow My Location Toggle */}
+{/* Follow My Location Toggle */}
         <TouchableOpacity
-          style={[styles.followLocationButton, followEnabled && styles.followLocationButtonActive]}
+          style={[
+            styles.followLocationButton,
+            { top: Math.max(20, insets.top + 10) + 44 + 12 },
+            followEnabled && styles.followLocationButtonActive,
+          ]}
           onPress={onToggleFollow}
           activeOpacity={0.8}
         >

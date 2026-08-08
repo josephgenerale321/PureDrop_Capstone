@@ -198,14 +198,33 @@ export function OsmTileMap({
           cancelAnimationFrame(momentumFrameRef.current);
           momentumFrameRef.current = null;
         }
-        let fx = vx;
-        let fy = vy;
+        // PanResponder `gesture.vx/vy` are in PIXELS PER MILLISECOND. We must
+        // scale them by the real elapsed time of each animation frame
+        // otherwise a fast swipe is treated as a tiny per-frame step and the
+        // fling "creeps then stops". Decay is time-based too so it is smooth
+        // and frame-rate independent.
+        let fx = vx; // px/ms
+        let fy = vy; // px/ms
+        let lastTime = Date.now();
         const step = () => {
-          fx *= 0.92;
-          fy *= 0.92;
-          const dx = fx;
-          const dy = fy;
-          if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) {
+          const now = Date.now();
+          const dt = Math.min((now - lastTime) / 16.667, 3); // frames elapsed (clamped)
+          lastTime = now;
+          // ~0.9 velocity retention per base frame (60fps) => ~60% per second,
+          // a natural, glide-then-settle fling instead of an abrupt stop.
+          const decay = Math.pow(0.9, dt);
+          fx *= decay;
+          fy *= decay;
+          // Distance for this frame = velocity (px/ms) * elapsed time (ms),
+          // converted so a fast swipe actually glides fast.
+          const dx = fx * dt * 16.667;
+          const dy = fy * dt * 16.667;
+          if (
+            Math.abs(dx) < 0.05 &&
+            Math.abs(dy) < 0.05 &&
+            Math.abs(fx) < 0.05 &&
+            Math.abs(fy) < 0.05
+          ) {
             momentumFrameRef.current = null;
             return;
           }
@@ -254,13 +273,20 @@ export function OsmTileMap({
 
   const apiKey: string | undefined = process.env.EXPO_PUBLIC_MAPTILER_API_KEY;
 
+// Tile layout is computed from the settled center ONLY (NOT the drag
+  // offset). During a finger drag the offset is applied as a transform on the
+  // tile canvas container, so React does not have to recompute + reconcile all
+  // the tile <Image> components on every move frame — the existing image views
+  // simply translate, which is far cheaper on the JS thread and reduces lag on
+  // hold+slide (especially on emulator / preview / lower-end devices). New
+  // tiles are fetched on release (when centerPixel settles).
   const tiles = useMemo(() => {
     if (!layout.width || !layout.height) {
       return [];
     }
     const worldTiles = 2 ** zoom;
-    const viewportLeft = centerPixel.x - layout.width / 2 - dragOffset.x;
-    const viewportTop = centerPixel.y - layout.height / 2 - dragOffset.y;
+    const viewportLeft = centerPixel.x - layout.width / 2;
+    const viewportTop = centerPixel.y - layout.height / 2;
     const minTileX = Math.floor(viewportLeft / TILE_SIZE) - 1;
     const maxTileX = Math.floor((viewportLeft + layout.width) / TILE_SIZE) + 1;
     const minTileY = Math.floor(viewportTop / TILE_SIZE) - 1;
@@ -284,7 +310,7 @@ export function OsmTileMap({
       }
     }
     return visibleTiles.filter((t) => Boolean(t.uri));
-  }, [centerPixel.x, centerPixel.y, dragOffset.x, dragOffset.y, layout.height, layout.width, zoom, apiKey]);
+  }, [centerPixel.x, centerPixel.y, layout.height, layout.width, zoom, apiKey]);
 
   return (
     <View style={[styles.container, style]}>
@@ -293,7 +319,19 @@ export function OsmTileMap({
         onLayout={handleLayout}
         {...panResponder.panHandlers}
       >
-        <View style={styles.tileCanvas}>
+<View
+          style={[
+            styles.tileCanvas,
+            dragOffset.x !== 0 || dragOffset.y !== 0
+              ? ({
+                  transform: [
+                    { translateX: dragOffset.x },
+                    { translateY: dragOffset.y },
+                  ],
+                } as ViewStyle)
+              : null,
+          ]}
+        >
           {tiles.map((tile) => (
             <Image
               key={tile.key}
@@ -372,10 +410,12 @@ const styles = StyleSheet.create({
     marginLeft: -15,
     marginTop: -30,
   },
-  zoomControls: {
+zoomControls: {
     position: "absolute",
     right: 16,
-    top: 96,
+    // Moved down a bit so the +/- buttons clear the floating top bar and sit
+    // lower on the map (previously they were tucked high at top:96).
+    top: 120,
     gap: 8,
   },
   zoomButton: {

@@ -445,6 +445,10 @@ floatingCloseButton: {
   },
   floatingRecenterButton: {
     height: 44,
+    // Keep a stable pill width in BOTH states so swapping the icon+text for a
+    // bare loading spinner (gpsLoading) does not make the button collapse or
+    // jump horizontally in the top bar next to the round Close button.
+    minWidth: 132,
     paddingHorizontal: 16,
     borderRadius: 22,
     backgroundColor: "#FFFFFF",
@@ -465,10 +469,11 @@ floatingRecenterText: {
   },
 followLocationButton: {
     position: "absolute",
-    // Positioned on the LEFT so it no longer overlaps the map's zoom controls
-    // (which live on the right at top:96). Prevents the conflicting-buttons bug.
+    // Positioned on the LEFT, directly below the floating top bar. Its `top`
+    // is set dynamically in GpsMapModal (insets.top + 10 + 44 + 12) so it
+    // always clears the top bar and never overlaps the map's zoom controls
+    // (which live on the right at top:96).
     left: 20,
-    top: 96,
     zIndex: 20,
     height: 44,
     paddingHorizontal: 16,
