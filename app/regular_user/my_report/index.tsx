@@ -1,66 +1,19 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { onAuthStateChanged } from "firebase/auth";
-import { collection, doc, onSnapshot } from "firebase/firestore";
-import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
-  StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { ShareReportButton } from "../../../components/my_report/share_reports";
-import { auth, db } from "../../../firebaseConfig";
-
-type ReportItem = {
-  reportId: string;
-  category: string;
-  issue: string;
-  location: string | null;
-  gpsLocation: string | null;
-  status: string;
-  submittedAt: string;
-};
-
-const normalizeStatus = (value: unknown) => {
-  if (typeof value !== "string") {
-    return "Pending";
-  }
-
-const normalized = value.trim().toLowerCase();
-  if (normalized === "approved") return "Approved";
-  if (normalized === "resolving" || normalized === "resolved") return "Resolving";
-  if (normalized === "pending" || normalized === "submitted") return "Pending";
-  if (normalized === "rejected") return "Rejected";
-  return "Pending";
-};
-
-const normalizeReport = (value: unknown, fallbackId: string): ReportItem => {
-  const item = (value ?? {}) as Partial<ReportItem>;
-  return {
-    reportId:
-      typeof item.reportId === "string" && item.reportId.length > 0
-        ? item.reportId
-        : fallbackId,
-    category: typeof item.category === "string" ? item.category : "Uncategorized",
-    issue: typeof item.issue === "string" ? item.issue : "",
-    location: typeof item.location === "string" ? item.location : null,
-    gpsLocation: typeof item.gpsLocation === "string" ? item.gpsLocation : null,
-    status: normalizeStatus(item.status),
-    submittedAt: typeof item.submittedAt === "string" ? item.submittedAt : "",
-  };
-};
-
-const toEpoch = (value: unknown) => {
-  if (typeof value === "string") {
-    const ms = Date.parse(value);
-    return Number.isNaN(ms) ? 0 : ms;
-  }
-  return 0;
-};
+import { styles } from "../../../components/my_report/myreportstyles";
+import {
+  ReportItem,
+  useMyReports,
+} from "../../../components/my_report/useMyReports";
 
 type ReportRowProps = {
   item: ReportItem;
@@ -86,97 +39,7 @@ function ReportRow({ item, onOpen }: ReportRowProps) {
 export default function MyReportScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [loading, setLoading] = useState(true);
-  const [reports, setReports] = useState<ReportItem[]>([]);
-
-  useEffect(() => {
-    let unsubscribeSubcollection: (() => void) | null = null;
-    let unsubscribeUserDoc: (() => void) | null = null;
-    let subcollectionReports: ReportItem[] = [];
-    let legacyReports: ReportItem[] = [];
-
-    const mergeAndSetReports = () => {
-      const mergedMap = new Map<string, ReportItem>();
-      [...legacyReports, ...subcollectionReports].forEach((item) => {
-        mergedMap.set(item.reportId, item);
-      });
-
-      const merged = Array.from(mergedMap.values()).sort(
-        (a, b) => toEpoch(b.submittedAt) - toEpoch(a.submittedAt),
-      );
-
-      setReports(merged);
-      setLoading(false);
-    };
-
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      if (unsubscribeSubcollection) {
-        unsubscribeSubcollection();
-        unsubscribeSubcollection = null;
-      }
-      if (unsubscribeUserDoc) {
-        unsubscribeUserDoc();
-        unsubscribeUserDoc = null;
-      }
-
-      if (!currentUser) {
-        subcollectionReports = [];
-        legacyReports = [];
-        setReports([]);
-        setLoading(false);
-        return;
-      }
-
-      const reportsRef = collection(db, "regular_user", currentUser.uid, "reports");
-      const userDocRef = doc(db, "regular_user", currentUser.uid);
-
-      unsubscribeSubcollection = onSnapshot(
-        reportsRef,
-        (snapshot) => {
-          subcollectionReports = snapshot.docs.map((docSnap, index) =>
-            normalizeReport(docSnap.data(), docSnap.id || `report-sub-${index}`),
-          );
-          mergeAndSetReports();
-        },
-        () => {
-          subcollectionReports = [];
-          mergeAndSetReports();
-        },
-      );
-
-      unsubscribeUserDoc = onSnapshot(
-        userDocRef,
-        (userSnap) => {
-          if (!userSnap.exists()) {
-            legacyReports = [];
-            mergeAndSetReports();
-            return;
-          }
-
-          const rawReports = userSnap.data().reports;
-          const legacy = Array.isArray(rawReports) ? rawReports : [];
-          legacyReports = legacy.map((item, index) =>
-            normalizeReport(item, `report-legacy-${index}`),
-          );
-          mergeAndSetReports();
-        },
-        () => {
-          legacyReports = [];
-          mergeAndSetReports();
-        },
-      );
-    });
-
-    return () => {
-      unsubscribeAuth();
-      if (unsubscribeSubcollection) {
-        unsubscribeSubcollection();
-      }
-      if (unsubscribeUserDoc) {
-        unsubscribeUserDoc();
-      }
-    };
-  }, []);
+  const { loading, reports, offline } = useMyReports();
 
   const handleOpenReport = (item: ReportItem) => {
     router.push({
@@ -218,6 +81,15 @@ export default function MyReportScreen() {
         <View style={styles.headerSpacer} />
       </View>
 
+      {offline ? (
+        <View style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={16} color="#B45309" />
+          <Text style={styles.offlineText}>
+            Offline — showing last saved reports
+          </Text>
+        </View>
+      ) : null}
+
       <FlatList
         data={reports}
         keyExtractor={(item) => item.reportId}
@@ -251,134 +123,3 @@ export default function MyReportScreen() {
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-  },
-  centered: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  title: {
-    color: "#0F172A",
-    fontSize: 24,
-    fontWeight: "800",
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: "#FFFFFF",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 2,
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  headerSpacer: {
-    width: 40,
-  },
-  listContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 40,
-    gap: 16,
-  },
-  card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-    padding: 20,
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  cardTitle: {
-    color: "#0F172A",
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: 6,
-  },
-  cardIssue: {
-    color: "#475569",
-    fontSize: 14,
-    marginBottom: 12,
-    lineHeight: 20,
-  },
-  metaText: {
-    color: "#64748B",
-    fontSize: 13,
-    marginTop: 4,
-  },
-  emptyContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingTop: 60,
-    paddingHorizontal: 24,
-  },
-  emptyIconWrap: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: "#F1F5F9",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 20,
-  },
-  emptyTitle: {
-    color: "#0F172A",
-    fontSize: 20,
-    fontWeight: "800",
-    textAlign: "center",
-    marginBottom: 10,
-  },
-  emptySubtitle: {
-    color: "#64748B",
-    fontSize: 15,
-    textAlign: "center",
-    lineHeight: 22,
-    marginBottom: 28,
-    maxWidth: 300,
-  },
-  emptyCta: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: "#0EA5E9",
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    borderRadius: 16,
-    shadowColor: "#0EA5E9",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 6,
-  },
-  emptyCtaText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  emptyText: {
-    color: "#64748B",
-    textAlign: "center",
-    marginTop: 40,
-    fontSize: 16,
-  },
-});
