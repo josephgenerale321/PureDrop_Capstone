@@ -9,6 +9,118 @@ import { defineSecret } from "firebase-functions/params";
 
 initializeApp();
 
+const ADMIN_PROFILE_COLLECTION = "admin_user";
+
+/**
+ * Determines whether the authenticated caller is an admin.
+ * Mirrors the Firestore rules isAdmin() helper:
+ * - has an admin=true or role='admin' custom claim, OR
+ * - has an admin_user/{uid} document with role='admin' or isAdmin=true.
+ */
+const isAdminCaller = async (authUid) => {
+  if (!authUid) {
+    return false;
+  }
+
+  try {
+    const userRecord = await getAuth().getUser(authUid);
+    const claims = userRecord?.customClaims || {};
+
+    if (claims.admin === true || claims.role === "admin") {
+      return true;
+    }
+  } catch (error) {
+    logger.warn("deleteRegularUserAccount customClaim check failed", {
+      authUid,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    const adminDoc = await getFirestore()
+      .collection(ADMIN_PROFILE_COLLECTION)
+      .doc(authUid)
+      .get();
+
+    if (!adminDoc.exists) {
+      return false;
+    }
+
+    const adminData = adminDoc.data() || {};
+    return adminData.role === "admin" || adminData.isAdmin === true;
+  } catch (error) {
+    logger.warn("deleteRegularUserAccount admin profile check failed", {
+      authUid,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+};
+
+/**
+ * Deletes a regular user's Firebase Authentication account.
+ * Called by the admin dashboard after Firestore user documents have been
+ * removed. Requires the caller to be an admin (custom claim or admin_user
+ * profile). Uses the Firebase Admin SDK, so it must run as a Cloud Function
+ * and the project must be on the Blaze (pay-as-you-go) plan.
+ */
+export const deleteRegularUserAccount = onCall(
+  {
+    region: REGION,
+    maxInstances: 10,
+  },
+  async (request) => {
+    try {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Please sign in again before deleting a user.");
+      }
+
+      const callerUid = request.auth.uid;
+      const isAdmin = await isAdminCaller(callerUid);
+      if (!isAdmin) {
+        throw new HttpsError("permission-denied", "Only admins can delete user accounts.");
+      }
+
+      const targetUid =
+        typeof request.data?.uid === "string" ? request.data.uid.trim() : "";
+
+      if (!targetUid) {
+        throw new HttpsError("invalid-argument", "A target user uid is required.");
+      }
+
+      if (targetUid === callerUid) {
+        throw new HttpsError("failed-precondition", "Admins cannot delete their own account.");
+      }
+
+      await getAuth().deleteUser(targetUid);
+
+      logger.info("deleteRegularUserAccount succeeded", {
+        callerUid,
+        targetUid,
+      });
+
+      return { success: true };
+    } catch (error) {
+      logger.error("deleteRegularUserAccount failed", {
+        authUid: request.auth?.uid ?? null,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message.trim()
+          : "Unexpected server error during user deletion.";
+
+      throw new HttpsError("internal", message, { message });
+    }
+  },
+);
+
 const SIGHTENGINE_API_USER = defineSecret("SIGHTENGINE_API_USER");
 const SIGHTENGINE_API_SECRET = defineSecret("SIGHTENGINE_API_SECRET");
 
