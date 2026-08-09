@@ -26,7 +26,13 @@ const writePresence = async (uid: string, status: string, source: string): Promi
       presenceSource: source,
       presenceUpdatedAt: serverTimestamp(),
       lastSeenAt: serverTimestamp(),
-      ...(isActive ? { lastActiveAt: serverTimestamp() } : {}),
+      // BUG FIX: when the user goes inactive (background/logout), clear
+      // `lastActiveAt` so the admin's "Last Active" field does not keep showing
+      // a stale "now" from the active phase. `lastSeenAt` still records the
+      // last time they were seen, which is the correct semantic for "Inactive".
+      ...(isActive
+        ? { lastActiveAt: serverTimestamp() }
+        : { lastActiveAt: null }),
       updatedAt: serverTimestamp(),
     },
     { merge: true },
