@@ -1,6 +1,5 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
-  FlatList,
   Modal,
   StyleSheet,
   Text,
@@ -8,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 
 const CITY_SUFFIX = ", Toledo City";
 
@@ -44,7 +44,7 @@ const BARANGAYS: string[] = [
   "Putingbato",
   "Sam-ang",
   "Sangi",
-  "Santo Niño",
+  "Santo Niï¿½o",
   "Subayon",
   "Tancor",
   "Tubod",
@@ -79,18 +79,15 @@ export function LightboxCreateReport({
   onClose,
   onSelectAddress,
 }: LightboxCreateReportProps) {
-  const [query, setQuery] = useState("");
+const selectedBarangay = getBaseBarangay(selectedAddress);
+  const [searchQuery, setSearchQuery] = useState("");
 
-  const filtered = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) {
-      return BARANGAYS;
-    }
-
-    return BARANGAYS.filter((item) => item.toLowerCase().includes(normalized));
-  }, [query]);
-
-  const selectedBarangay = getBaseBarangay(selectedAddress);
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredBarangays = normalizedQuery
+    ? BARANGAYS.filter((barangay) =>
+        barangay.toLowerCase().includes(normalizedQuery)
+      )
+    : BARANGAYS;
 
   const handlePick = (barangay: string) => {
     onSelectAddress(`${barangay}${CITY_SUFFIX}`);
@@ -102,25 +99,30 @@ export function LightboxCreateReport({
     onClose();
   };
 
-  return (
+return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
         <View style={styles.lightbox}>
           <Text style={styles.title}>Select Address</Text>
 
           <TextInput
-            value={query}
-            onChangeText={setQuery}
             style={styles.searchInput}
-            placeholder="Search barangay"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Search barangay..."
             placeholderTextColor="#94a3b8"
+            autoCorrect={false}
+            autoCapitalize="none"
+            clearButtonMode="while-editing"
+            accessibilityLabel="Search barangay"
           />
 
-          <FlatList
-            data={filtered}
+          <FlashList
+            data={filteredBarangays}
             keyExtractor={(item) => item}
             style={styles.list}
             keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator
             renderItem={({ item }) => {
               const isSelected = item === selectedBarangay;
 
@@ -168,7 +170,7 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 8,
   },
-  title: {
+title: {
     fontSize: 16,
     fontWeight: "700",
     color: "#0f172a",
@@ -176,17 +178,18 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   searchInput: {
-    height: 40,
-    borderRadius: 6,
+    height: 44,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: "#cbd5e1",
+    backgroundColor: "#f8fafc",
     paddingHorizontal: 12,
+    fontSize: 14,
     color: "#0f172a",
     marginBottom: 12,
-    backgroundColor: "#ffffff",
   },
-  list: {
-    maxHeight: 330,
+list: {
+    height: 330,
   },
   item: {
     borderRadius: 6,

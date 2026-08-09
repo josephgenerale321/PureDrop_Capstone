@@ -12,12 +12,12 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AllRepComponent, { type AllReportListItem } from "../../../components/all_reports/all_repcomponent";
 import { auth, db } from "../../../firebaseConfig";
@@ -259,11 +259,11 @@ export default function AllReportListScreen() {
             <Text style={styles.retryButtonText}>Try Again</Text>
           </TouchableOpacity>
         </View>
-      ) : (
-        <FlatList
+) : (
+        <FlashList
           data={reports}
           keyExtractor={(item) => `${item.userId}-${item.reportId}`}
-          contentContainerStyle={styles.listContent}
+contentContainerStyle={styles.listContent}
           ListEmptyComponent={<Text style={styles.emptyText}>No reports yet.</Text>}
           renderItem={({ item }) => (
             <AllRepComponent

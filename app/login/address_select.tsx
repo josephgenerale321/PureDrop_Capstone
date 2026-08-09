@@ -2,7 +2,6 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
-  FlatList,
   Pressable,
   StyleSheet,
   Text,
@@ -10,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 import { setSelectedAddress } from "../../lib/login/addressSelectionStore";
 
 const CITY_SUFFIX = ", Toledo City";
@@ -114,7 +114,7 @@ export default function AddressSelectScreen() {
             onChangeText={setQuery}
           />
 
-          <FlatList
+<FlashList
             data={filteredBarangays}
             keyExtractor={(item) => item}
             renderItem={({ item }) => (

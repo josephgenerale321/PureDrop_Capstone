@@ -140,10 +140,33 @@ export const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
   },
-  emptyText: {
+emptyText: {
     color: "#64748B",
     textAlign: "center",
     marginTop: 40,
     fontSize: 16,
+  },
+  rowActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 14,
+  },
+  deleteButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  deleteButtonText: {
+    color: "#DC2626",
+    fontSize: 14,
+    fontWeight: "800",
   },
 });

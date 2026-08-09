@@ -1,15 +1,17 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { ShareReportButton } from "../../../components/my_report/share_reports";
 import { styles } from "../../../components/my_report/myreportstyles";
+import DeleteReportLightbox from "../../../components/my_report/DeleteReportLightbox";
 import {
   ReportItem,
   useMyReports,
@@ -18,9 +20,10 @@ import {
 type ReportRowProps = {
   item: ReportItem;
   onOpen: (item: ReportItem) => void;
+  onDelete: (item: ReportItem) => void;
 };
 
-function ReportRow({ item, onOpen }: ReportRowProps) {
+function ReportRow({ item, onOpen, onDelete }: ReportRowProps) {
   return (
     <View style={styles.card}>
       <TouchableOpacity activeOpacity={0.88} onPress={() => onOpen(item)}>
@@ -31,7 +34,18 @@ function ReportRow({ item, onOpen }: ReportRowProps) {
         </Text>
         <Text style={styles.metaText}>Status: {item.status}</Text>
       </TouchableOpacity>
-      <ShareReportButton report={item} />
+      <View style={styles.rowActions}>
+        <ShareReportButton report={item} />
+        <TouchableOpacity
+          style={styles.deleteButton}
+          onPress={() => onDelete(item)}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={`Delete report ${item.reportId}`}
+        >
+          <Text style={styles.deleteButtonText}>Delete</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -40,12 +54,19 @@ export default function MyReportScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { loading, reports, offline } = useMyReports();
+  const [deleteTarget, setDeleteTarget] = useState<ReportItem | null>(null);
 
   const handleOpenReport = (item: ReportItem) => {
     router.push({
       pathname: "/regular_user/view_reportuser",
       params: { reportId: item.reportId },
     });
+  };
+
+  const handleDeleteReport = (item: ReportItem) => {
+    // Open the in-screen delete lightbox for the selected report instead of
+    // navigating to a separate route (avoids cross-navigator navigation errors).
+    setDeleteTarget(item);
   };
 
   const handleCreateReport = () => {
@@ -90,10 +111,10 @@ export default function MyReportScreen() {
         </View>
       ) : null}
 
-      <FlatList
+      <FlashList
         data={reports}
         keyExtractor={(item) => item.reportId}
-        contentContainerStyle={styles.listContent}
+contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <View style={styles.emptyIconWrap}>
@@ -117,8 +138,16 @@ export default function MyReportScreen() {
           <ReportRow
             item={item}
             onOpen={handleOpenReport}
+            onDelete={handleDeleteReport}
           />
         )}
+      />
+
+      <DeleteReportLightbox
+        visible={deleteTarget !== null}
+        reportId={deleteTarget?.reportId}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={() => setDeleteTarget(null)}
       />
     </SafeAreaView>
   );

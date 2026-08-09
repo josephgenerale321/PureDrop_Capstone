@@ -3,7 +3,6 @@ import { Image } from "expo-image";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -14,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 
 const CITY_SUFFIX = ", Toledo City";
 
@@ -343,7 +343,7 @@ onChangeText={(value) =>
                 onChangeText={setAddressQuery}
               />
 
-              <FlatList
+<FlashList
                 data={filteredBarangays}
                 keyExtractor={(item) => item}
                 keyboardShouldPersistTaps="handled"

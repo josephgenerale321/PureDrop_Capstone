@@ -31,10 +31,10 @@ import {
 // NOTE ON TUNING: if this is set LOWER than the actual token-refresh time on
 // the slowest supported network, the app will bounce to /login before the
 // session restores, then get redirected back once it does — that is the exact
-// "flip-flop" this grace window exists to prevent. 8s matches the 8s loading
+// "flip-flop" this grace window exists to prevent. 6s matches the 6s loading
 // overlay timeout in `components/loading/restore_session/loading_session.tsx`
 // for coherent behavior.
-const AUTH_RESTORE_GRACE_MS = 8000;
+const AUTH_RESTORE_GRACE_MS = 6000;
 
 export default function RegularUserLayout() {
   return (
@@ -317,7 +317,7 @@ listeners={{
       <Tabs.Screen name="view-reports" options={{ href: null }} />
       <Tabs.Screen name="create_report/createreport" options={{ href: null }} />
       <Tabs.Screen name="profile/profileview" options={{ href: null }} />
-      <Tabs.Screen name="my_report/index" options={{ href: null }} />
+<Tabs.Screen name="my_report/index" options={{ href: null }} />
       <Tabs.Screen name="my_report/share_reportmain" options={{ href: null }} />
       <Tabs.Screen name="reports-list" options={{ href: null }} />
       <Tabs.Screen name="all_reports/all_reportlist" options={{ href: null }} />

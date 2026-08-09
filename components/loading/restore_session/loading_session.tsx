@@ -9,7 +9,7 @@ import { getSavedLogin } from "../../main_layout/save_loginfunc";
  * this window, hide the loading overlay so the user can still sign in manually
  * instead of being stuck on a spinner forever.
  */
-const SESSION_RESTORE_TIMEOUT_MS = 8000;
+const SESSION_RESTORE_TIMEOUT_MS = 6000;
 
 /**
  * `LoadingSession` (SavedLoginWait) — crash-safe loading overlay for the

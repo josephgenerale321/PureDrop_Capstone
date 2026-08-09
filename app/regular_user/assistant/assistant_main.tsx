@@ -1,7 +1,6 @@
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import {
-  FlatList,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { askAssistantQuestion } from "../../../lib/regular_user/assistant_api";
 
@@ -95,7 +95,7 @@ export default function AssistantMainScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={Platform.OS === "ios" ? 18 : 0}
       >
-        <FlatList
+<FlashList
           data={messages}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.chatList}

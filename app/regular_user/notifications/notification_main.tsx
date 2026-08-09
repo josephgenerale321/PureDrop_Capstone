@@ -2,12 +2,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import {
   ActivityIndicator,
-  FlatList,
   RefreshControl,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   type NotificationItem,
@@ -219,7 +219,7 @@ export default function NotificationScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          <FlatList
+<FlashList
             data={sections}
             keyExtractor={(section) => section.bucket}
             contentContainerStyle={styles.listContent}
