@@ -41,13 +41,15 @@ export default function LoginScreen() {
     }
   };
 
-  const handleLogin = async () => {
+const handleLogin = async () => {
     try {
       setLoading(true);
 
+      // `loginUser` now resolves as soon as Firebase Auth succeeds (profile
+      // fetch + presence write happen in the background). Navigate straight to
+      // Home instead of blocking on an extra success alert.
       await loginUser({ email, password });
 
-      Alert.alert("Success", "Logged in successfully");
       router.replace("/regular_user/home");
     } catch (err: unknown) {
       Alert.alert("Error", getLoginErrorMessage(err));

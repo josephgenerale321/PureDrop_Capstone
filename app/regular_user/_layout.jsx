@@ -269,7 +269,7 @@ if (!authChecked || !isAuthenticated) {
                 size={24}
                 color={focused ? "#0EA5E9" : "#94A3B8"}
               />
-              {unreadCount > 0 && !focused ? (
+{unreadCount > 0 && !focused ? (
                 <View style={styles.notifDot}>
                   <Text style={styles.notifDotText}>{unreadCount > 9 ? "9+" : String(unreadCount)}</Text>
                 </View>
@@ -278,13 +278,13 @@ if (!authChecked || !isAuthenticated) {
             </View>
           ),
         }}
-        listeners={{
-          focus: () => {
-            // Mark read once when the tab gains focus. The hook is
-            // idempotent — it skips the Firestore write when there are
-            // no unread notifications — so repeated focus events cost
-            // nothing. (The old code also wired tabPress and a pathname
-            // effect, causing up to 3 redundant writes.)
+listeners={{
+          // Mark notifications as read only when the user LEAVES the
+          // notifications tab (blur), not when they open it. This way the
+          // unread highlights in the list stay visible while the user is
+          // viewing them, and only clear once they navigate away (e.g. to
+          // Home) and come back — matching YouTube-style read behavior.
+          blur: () => {
             markAllAsRead();
           },
         }}
@@ -392,7 +392,7 @@ const styles = StyleSheet.create({
     borderColor: "#0EA5E9",
   },
 
-  notifDot: {
+notifDot: {
     position: "absolute",
     top: -4,
     right: -8,

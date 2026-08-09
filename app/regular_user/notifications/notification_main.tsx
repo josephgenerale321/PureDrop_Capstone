@@ -152,10 +152,12 @@ export default function NotificationScreen() {
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.animatedScreen}>
         <View style={[styles.header, { paddingTop: Math.max(8, insets.top + 2) }]}>
-          <TouchableOpacity
+<TouchableOpacity
             style={styles.backButton}
             onPress={() => router.navigate("/regular_user/home")}
             hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+            accessibilityRole="button"
+            accessibilityLabel="Go back to home"
           >
             <Ionicons name="chevron-back" size={24} color="#0F172A" />
           </TouchableOpacity>
@@ -163,10 +165,12 @@ export default function NotificationScreen() {
           <Text style={styles.title}>Notifications</Text>
           <View style={styles.badgeWrap}>
             {unreadCount > 0 ? (
-              <TouchableOpacity
+<TouchableOpacity
                 style={styles.markReadButton}
                 onPress={markAllAsRead}
                 activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Mark all notifications as read"
               >
                 <Text style={styles.markReadText}>Read</Text>
               </TouchableOpacity>
