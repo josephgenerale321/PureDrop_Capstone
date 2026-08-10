@@ -63,9 +63,13 @@ const TOLEDO_CENTER = { latitude: 10.3775, longitude: 123.6388 };
 // A generous bounding box around Toledo City. GPS-triangulation and reverse
 // geocoding can be imprecise near the border, so we give a small tolerance so
 // a user standing just outside the official boundary is not wrongly rejected.
+//
+// maxLatitude is capped below Toledo's northern border with Balamban:
+// Balamban's start area (e.g. 10.495676, 123.714515) sits above 10.49, so
+// that neighboring municipality is correctly excluded from the geofence.
 const TOLEDO_BOUNDS = {
   minLatitude: 10.24,
-  maxLatitude: 10.5,
+  maxLatitude: 10.49,
   minLongitude: 123.56,
   maxLongitude: 123.76,
 };
@@ -260,34 +264,30 @@ export async function getCurrentGpsLocation(): Promise<GpsResult> {
     // the user can still pin the location manually.
   }
 
-const reading = await acquireBestReading();
+  const reading = await acquireBestReading();
   const location = await getLocationFromCoordinates(reading.latitude, reading.longitude);
 
-  const fallbackLocation = location.isOutsideToledo
-    ? {
-        ...location,
-        city: "Toledo City",
-        formattedLocation: formatLocation("Toledo City", TOLEDO_CENTER.latitude, TOLEDO_CENTER.longitude),
-        latitude: TOLEDO_CENTER.latitude,
-        longitude: TOLEDO_CENTER.longitude,
-      }
-    : {
-        ...location,
-        latitude: reading.latitude,
-        longitude: reading.longitude,
-      };
+  // Always keep the user's actual GPS coordinates. If the fix is outside
+  // Toledo (e.g. Balamban), `isOutsideToledo` stays true so the confirm
+  // handler can reject it — but the map still centers on where the user
+  // really is instead of silently jumping to the Toledo center.
+  const resolvedLocation = {
+    ...location,
+    latitude: reading.latitude,
+    longitude: reading.longitude,
+  };
 
   // Persist the last known fix so the next time the map opens we can center
   // instantly. Guarded inside saveLastGpsFix so it can never reject/crash.
   void saveLastGpsFix({
-    latitude: fallbackLocation.latitude,
-    longitude: fallbackLocation.longitude,
+    latitude: resolvedLocation.latitude,
+    longitude: resolvedLocation.longitude,
     accuracyMeters: reading.accuracyMeters,
     timestamp: Date.now(),
   });
 
   return {
-    ...fallbackLocation,
+    ...resolvedLocation,
     accuracyMeters: reading.accuracyMeters,
   };
 }

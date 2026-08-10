@@ -274,11 +274,6 @@ const cleanupCachedAttachments = async (list: Attachment[]) => {
   };
 
 const handleUseGps = async () => {
-    if (selectedPin) {
-      setMapVisible(true);
-      return;
-    }
-
     try {
       setGpsLoading(true);
 
@@ -316,6 +311,9 @@ const handleUseGps = async () => {
         longitude: gpsResult.longitude,
       });
       setGpsAccuracy(gpsResult.accuracyMeters ?? null);
+      // Force the map to visually recenter to the fresh GPS fix.
+      setMapCenter({ latitude: gpsResult.latitude, longitude: gpsResult.longitude });
+      setRecenterKey((key) => key + 1);
       setMapVisible(true);
     } catch (error) {
       if (error instanceof Error && error.message === "LOCATION_PERMISSION_DENIED") {
