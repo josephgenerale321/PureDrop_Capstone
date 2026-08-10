@@ -90,12 +90,14 @@ export default function AddressSelectScreen() {
   }, [query]);
 
   const selectAddress = (selectedAddress: string): void => {
-    setSelectedAddress(normalizeAddress(selectedAddress));
+    const normalized = normalizeAddress(selectedAddress);
+    setSelectedAddress(normalized);
     router.back();
   };
 
   const cancelSelection = (): void => {
-    setSelectedAddress(currentAddress);
+    const normalizedCurrentAddress = normalizeAddress(currentAddress);
+    setSelectedAddress(normalizedCurrentAddress);
     router.back();
   };
 
@@ -105,16 +107,23 @@ export default function AddressSelectScreen() {
 
       <SafeAreaView style={styles.safeArea} pointerEvents="box-none">
         <View style={styles.sheet}>
-          <Text style={styles.title}>Select Address</Text>
+          <View style={styles.header}>
+            <Text style={styles.title}>Select Barangay</Text>
+            <Text style={styles.subtitle}>Toledo City only</Text>
+          </View>
 
           <TextInput
             style={styles.searchInput}
             placeholder="Search barangay"
+            placeholderTextColor="#94a3b8"
             value={query}
             onChangeText={setQuery}
+            returnKeyType="search"
+            autoCapitalize="none"
+            autoCorrect={false}
           />
 
-<FlashList
+          <FlashList
             data={filteredBarangays}
             keyExtractor={(item) => item}
             renderItem={({ item }) => (
@@ -125,6 +134,7 @@ export default function AddressSelectScreen() {
                 <Text style={styles.itemText}>{item}</Text>
               </TouchableOpacity>
             )}
+            style={styles.list}
             contentContainerStyle={styles.listContent}
             keyboardShouldPersistTaps="handled"
           />
@@ -149,55 +159,81 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     justifyContent: "center",
-    padding: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
   },
   sheet: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 8,
-    padding: 16,
-    maxHeight: "88%",
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 14,
+    maxHeight: "90%",
+    width: "100%",
+    maxWidth: 480,
+    minHeight: 420,
+    alignSelf: "center",
+    overflow: "hidden",
     shadowColor: "#000000",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.16,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  header: {
+    marginBottom: 12,
+    alignItems: "center",
   },
   title: {
     fontSize: 18,
     fontWeight: "700",
-    marginBottom: 12,
+    marginBottom: 2,
     textAlign: "center",
     color: "#0f172a",
+  },
+  subtitle: {
+    fontSize: 12,
+    color: "#64748b",
+    textAlign: "center",
   },
   searchInput: {
     borderWidth: 1,
     borderColor: "#cbd5e1",
-    borderRadius: 6,
+    borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 12,
-    backgroundColor: "#ffffff",
+    backgroundColor: "#f8fafc",
     color: "#0f172a",
+  },
+  list: {
+    flex: 1,
+    minHeight: 220,
   },
   listContent: {
     paddingBottom: 8,
+    paddingTop: 2,
   },
   itemButton: {
     borderWidth: 1,
     borderColor: "#e2e8f0",
-    borderRadius: 6,
-    paddingVertical: 10,
+    borderRadius: 10,
+    paddingVertical: 0,
     paddingHorizontal: 12,
     marginBottom: 8,
     backgroundColor: "#ffffff",
+    minHeight: 48,
+    justifyContent: "center",
   },
   itemText: {
     color: "#334155",
+    fontSize: 14,
+    lineHeight: 20,
   },
   cancelButton: {
     marginTop: 8,
     paddingVertical: 12,
-    borderRadius: 6,
+    borderRadius: 10,
     backgroundColor: "#f1f5f9",
   },
   cancelText: {

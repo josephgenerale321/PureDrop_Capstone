@@ -37,6 +37,17 @@ const getWebShareUrl = (reportId: string) => {
   return `${window.location.origin}${path}`;
 };
 
+const openMessengerFallback = (message: string) => {
+  if (typeof window !== "undefined" && typeof window.open === "function") {
+    window.open("https://www.messenger.com/", "_blank", "noopener,noreferrer");
+  }
+
+  Alert.alert(
+    "Share unavailable",
+    "The share feature is unavailable here, so the report was not sent automatically. You can copy the details or open Messenger manually."
+  );
+};
+
 export const shareReportToFacebook = async (report: ShareableReport) => {
   const message = buildReportShareMessage(report);
   const webShareUrl = getWebShareUrl(report.reportId);
@@ -44,9 +55,11 @@ export const shareReportToFacebook = async (report: ShareableReport) => {
   try {
     if (Platform.OS === "web") {
       const facebookUrl = new URL("https://www.facebook.com/sharer/sharer.php");
-      facebookUrl.searchParams.set("u", webShareUrl || window.location.href);
+      facebookUrl.searchParams.set("u", webShareUrl || (typeof window !== "undefined" ? window.location.href : ""));
       facebookUrl.searchParams.set("quote", message);
-      window.open(facebookUrl.toString(), "_blank", "noopener,noreferrer");
+      if (typeof window !== "undefined" && typeof window.open === "function") {
+        window.open(facebookUrl.toString(), "_blank", "noopener,noreferrer");
+      }
       return;
     }
 
@@ -63,32 +76,48 @@ export const shareReportToFacebook = async (report: ShareableReport) => {
 export const shareReportToMessenger = async (report: ShareableReport) => {
   const message = buildReportShareMessage(report);
   const webShareUrl = getWebShareUrl(report.reportId);
+  const shareText = `${message}${webShareUrl ? `\n\n${webShareUrl}` : ""}`;
 
   try {
     if (Platform.OS === "web") {
       const webNavigator = typeof navigator === "undefined" ? null : navigator;
-      if (webNavigator && "share" in webNavigator && typeof webNavigator.share === "function") {
-        await webNavigator.share({
-          title: "Share PureDrop Report",
-          text: message,
-          url: webShareUrl || undefined,
-        });
-        return;
+
+      if (webNavigator && typeof webNavigator.share === "function") {
+        try {
+          await webNavigator.share({
+            title: "Share PureDrop Report",
+            text: shareText,
+            url: webShareUrl || undefined,
+          });
+          return;
+        } catch {
+          // Fall back to clipboard or manual messenger open.
+        }
       }
 
       if (webNavigator?.clipboard?.writeText) {
-        await webNavigator.clipboard.writeText(message);
+        try {
+          await webNavigator.clipboard.writeText(shareText);
+          Alert.alert("Report copied", "The report details were copied to your clipboard.");
+          return;
+        } catch {
+          // Continue to manual fallback.
+        }
       }
-      window.open("https://www.messenger.com/", "_blank", "noopener,noreferrer");
-      Alert.alert("Report copied", "Paste the copied report details into Messenger.");
+
+      openMessengerFallback(shareText);
       return;
     }
 
-    await Share.share({
-      title: "Share PureDrop Report to Messenger",
-      message,
-      url: webShareUrl || undefined,
-    });
+    try {
+      await Share.share({
+        title: "Share PureDrop Report to Messenger",
+        message: shareText,
+        url: webShareUrl || undefined,
+      });
+    } catch {
+      Alert.alert("Unable to share", "Sharing is not available on this device right now.");
+    }
   } catch {
     Alert.alert("Unable to share", "Please try sharing this report again.");
   }
@@ -103,12 +132,14 @@ export function ShareReportButton({ report }: ShareReportButtonProps) {
     <TouchableOpacity
       style={styles.shareButton}
       activeOpacity={0.85}
-      onPress={() => shareReportToMessenger(report)}
+      onPress={() => {
+        void shareReportToMessenger(report);
+      }}
       accessibilityRole="button"
       accessibilityLabel={`Share report ${report.reportId}`}
+      hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
     >
-      <Ionicons name="share-social" size={18} color="#FFFFFF" />
-      <Text style={styles.shareButtonText}>Share</Text>
+      <Ionicons name="share-social" size={20} color="#FFFFFF" />
     </TouchableOpacity>
   );
 }
@@ -253,21 +284,12 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   shareButton: {
-    marginTop: 14,
-    alignSelf: "flex-start",
-    flexDirection: "row",
+    width: 40,
+    height: 40,
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
     backgroundColor: "#0284C7",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
     borderRadius: 12,
-  },
-  shareButtonText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "800",
   },
   primaryButton: {
     marginTop: 18,

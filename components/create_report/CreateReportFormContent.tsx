@@ -44,6 +44,10 @@ category: string;
   onSubmit: () => void;
   onUseGps: () => void;
   onWaterMeterChange: (value: string) => void;
+  /** Optional override for the page title. Defaults to "Report a Problem". */
+  pageTitle?: string;
+  /** Optional override for the submit button label. Defaults to "Submit Report". */
+  submitLabel?: string;
 };
 
 const CATEGORY_OPTIONS = ["No water", "Dirty water", "Water leaking"];
@@ -72,6 +76,8 @@ export function CreateReportFormContent({
   onSubmit,
   onUseGps,
   onWaterMeterChange,
+  pageTitle = "Report a Problem",
+  submitLabel = "Submit Report",
 }: CreateReportFormContentProps) {
   const [addressModalVisible, setAddressModalVisible] = useState(false);
   const insets = useSafeAreaInsets();
@@ -126,7 +132,7 @@ export function CreateReportFormContent({
             >
               <Ionicons name="arrow-back" size={24} color="#0F172A" />
             </TouchableOpacity>
-            <Text style={styles.pageTitle}>Report a Problem</Text>
+            <Text style={styles.pageTitle}>{pageTitle}</Text>
             <View style={{ width: 40 }} />
           </View>
 
@@ -314,7 +320,11 @@ value={waterMeter}
           </View>
 
           <TouchableOpacity style={styles.submitButton} onPress={onSubmit} disabled={submitLoading} activeOpacity={0.85}>
-            <Text style={styles.submitText}>{submitLoading ? "Submitting..." : "Submit Report"}</Text>
+            <Text style={styles.submitText}>
+              {submitLoading
+                ? "Saving..."
+                : submitLabel}
+            </Text>
             {!submitLoading && <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />}
           </TouchableOpacity>
         </ScrollView>

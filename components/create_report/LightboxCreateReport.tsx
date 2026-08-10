@@ -103,7 +103,8 @@ return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
         <View style={styles.lightbox}>
-          <Text style={styles.title}>Select Address</Text>
+          <Text style={styles.title}>Select Barangay</Text>
+          <Text style={styles.subtitle}>Toledo City only</Text>
 
           <TextInput
             style={styles.searchInput}
@@ -121,6 +122,7 @@ return (
             data={filteredBarangays}
             keyExtractor={(item) => item}
             style={styles.list}
+            contentContainerStyle={styles.listContent}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator
             renderItem={({ item }) => {
@@ -157,25 +159,35 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "rgba(15, 23, 42, 0.58)",
     justifyContent: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
   },
   lightbox: {
-    maxHeight: "80%",
-    borderRadius: 6,
+    maxHeight: "90%",
+    width: "100%",
+    maxWidth: 520,
+    minHeight: 420,
+    borderRadius: 20,
     backgroundColor: "#ffffff",
-    padding: 16,
+    padding: 18,
     shadowColor: "#000000",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.16,
+    shadowRadius: 20,
+    elevation: 10,
   },
-title: {
+  title: {
     fontSize: 16,
     fontWeight: "700",
     color: "#0f172a",
-    marginBottom: 12,
+    marginBottom: 2,
     textAlign: "center",
+  },
+  subtitle: {
+    fontSize: 12,
+    color: "#64748b",
+    textAlign: "center",
+    marginBottom: 12,
   },
   searchInput: {
     height: 44,
@@ -188,17 +200,24 @@ title: {
     color: "#0f172a",
     marginBottom: 12,
   },
-list: {
-    height: 330,
+  list: {
+    flex: 1,
+    minHeight: 240,
+  },
+  listContent: {
+    paddingBottom: 8,
+    paddingTop: 2,
   },
   item: {
-    borderRadius: 6,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: "#e2e8f0",
     backgroundColor: "#ffffff",
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 12,
     marginBottom: 8,
+    minHeight: 48,
+    justifyContent: "center",
   },
   itemSelected: {
     borderColor: "#0284c7",

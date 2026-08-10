@@ -149,24 +149,34 @@ emptyText: {
   rowActions: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
     gap: 12,
     marginTop: 14,
   },
-  deleteButton: {
+  rowActionsRight: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 8,
+  },
+  editButton: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
     justifyContent: "center",
-    gap: 6,
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    borderRadius: 12,
+  },
+  deleteButton: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: "#FEF2F2",
     borderWidth: 1,
     borderColor: "#FECACA",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
     borderRadius: 12,
-  },
-  deleteButtonText: {
-    color: "#DC2626",
-    fontSize: 14,
-    fontWeight: "800",
   },
 });

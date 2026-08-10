@@ -317,7 +317,11 @@ listeners={{
       <Tabs.Screen name="view-reports" options={{ href: null }} />
       <Tabs.Screen name="create_report/createreport" options={{ href: null }} />
       <Tabs.Screen name="profile/profileview" options={{ href: null }} />
-<Tabs.Screen name="my_report/index" options={{ href: null }} />
+      <Tabs.Screen name="my_report/index" options={{ href: null }} />
+      <Tabs.Screen
+        name="my_report/edit_myreport"
+        options={{ href: null, tabBarStyle: { display: "none" } }}
+      />
       <Tabs.Screen name="my_report/share_reportmain" options={{ href: null }} />
       <Tabs.Screen name="reports-list" options={{ href: null }} />
       <Tabs.Screen name="all_reports/all_reportlist" options={{ href: null }} />

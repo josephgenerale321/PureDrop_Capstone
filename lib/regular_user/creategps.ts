@@ -261,22 +261,33 @@ export async function getCurrentGpsLocation(): Promise<GpsResult> {
   }
 
 const reading = await acquireBestReading();
-  const location = await getLocationFromCoordinates(
-    reading.latitude,
-    reading.longitude
-  );
+  const location = await getLocationFromCoordinates(reading.latitude, reading.longitude);
+
+  const fallbackLocation = location.isOutsideToledo
+    ? {
+        ...location,
+        city: "Toledo City",
+        formattedLocation: formatLocation("Toledo City", TOLEDO_CENTER.latitude, TOLEDO_CENTER.longitude),
+        latitude: TOLEDO_CENTER.latitude,
+        longitude: TOLEDO_CENTER.longitude,
+      }
+    : {
+        ...location,
+        latitude: reading.latitude,
+        longitude: reading.longitude,
+      };
 
   // Persist the last known fix so the next time the map opens we can center
   // instantly. Guarded inside saveLastGpsFix so it can never reject/crash.
   void saveLastGpsFix({
-    latitude: reading.latitude,
-    longitude: reading.longitude,
+    latitude: fallbackLocation.latitude,
+    longitude: fallbackLocation.longitude,
     accuracyMeters: reading.accuracyMeters,
     timestamp: Date.now(),
   });
 
   return {
-    ...location,
+    ...fallbackLocation,
     accuracyMeters: reading.accuracyMeters,
   };
 }

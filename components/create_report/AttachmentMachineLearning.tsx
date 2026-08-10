@@ -48,6 +48,15 @@ const initialStatus: AttachmentMachineLearningStatus = {
   summary: "Add an attachment to start the authenticity review.",
 };
 
+// Remote URLs (https/http) point to already-submitted attachments in Supabase
+// storage. They were reviewed for authenticity when the report was first
+// created, so they must NOT be re-read with FileSystem (which only supports
+// local file URIs) and must not be re-sent to the review edge function.
+const isRemoteAttachmentUri = (uri: string) => {
+  const trimmed = (uri || "").trim().toLowerCase();
+  return trimmed.startsWith("http://") || trimmed.startsWith("https://");
+};
+
 const formatScore = (value?: number) => `${Math.round((value ?? 0) * 100)}%`;
 const SCREENSHOT_NAME_PATTERN = /(screen\s*shot|screenshot|screen[_-]?capture)/i;
 
@@ -215,17 +224,39 @@ export function AttachmentMachineLearning({
       };
     }
 
+    // Only newly-added LOCAL attachments need authenticity review. Remote
+    // attachments (already-uploaded Supabase URLs) were reviewed at original
+    // submission time and cannot be read with FileSystem.readAsStringAsync.
+    const localAttachments = attachments.filter(
+      (attachment) => !isRemoteAttachmentUri(attachment.uri),
+    );
+
+    // If every attachment is remote (e.g. editing an existing report without
+    // adding new photos), skip the review entirely — they already passed.
+    if (localAttachments.length === 0) {
+      updateStatus({
+        attachmentUris: attachments.map((attachment) => attachment.uri),
+        canSubmit: true,
+        items: [],
+        state: "passed",
+        summary: "Existing attachments were already reviewed when this report was submitted.",
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     updateStatus({
       attachmentUris: attachments.map((attachment) => attachment.uri),
       canSubmit: false,
       items: [],
       state: "analyzing",
-      summary: "Checking the attachments with secure server review...",
+      summary: "Checking the new attachments with secure server review...",
     });
 
     void (async () => {
       const items = await Promise.all(
-        attachments.map((attachment) => buildItemReview(attachment, category))
+        localAttachments.map((attachment) => buildItemReview(attachment, category))
       );
 
       if (cancelled) {

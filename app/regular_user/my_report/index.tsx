@@ -20,10 +20,11 @@ import {
 type ReportRowProps = {
   item: ReportItem;
   onOpen: (item: ReportItem) => void;
+  onEdit: (item: ReportItem) => void;
   onDelete: (item: ReportItem) => void;
 };
 
-function ReportRow({ item, onOpen, onDelete }: ReportRowProps) {
+function ReportRow({ item, onOpen, onEdit, onDelete }: ReportRowProps) {
   return (
     <View style={styles.card}>
       <TouchableOpacity activeOpacity={0.88} onPress={() => onOpen(item)}>
@@ -36,15 +37,28 @@ function ReportRow({ item, onOpen, onDelete }: ReportRowProps) {
       </TouchableOpacity>
       <View style={styles.rowActions}>
         <ShareReportButton report={item} />
-        <TouchableOpacity
-          style={styles.deleteButton}
-          onPress={() => onDelete(item)}
-          activeOpacity={0.85}
-          accessibilityRole="button"
-          accessibilityLabel={`Delete report ${item.reportId}`}
-        >
-          <Text style={styles.deleteButtonText}>Delete</Text>
-        </TouchableOpacity>
+        <View style={styles.rowActionsRight}>
+          <TouchableOpacity
+            style={styles.editButton}
+            onPress={() => onEdit(item)}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={`Edit report ${item.reportId}`}
+            hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+          >
+            <Ionicons name="create-outline" size={20} color="#0284C7" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.deleteButton}
+            onPress={() => onDelete(item)}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={`Delete report ${item.reportId}`}
+            hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+          >
+            <Ionicons name="trash-outline" size={20} color="#DC2626" />
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
@@ -61,6 +75,17 @@ export default function MyReportScreen() {
       pathname: "/regular_user/view_reportuser",
       params: { reportId: item.reportId },
     });
+  };
+
+  const handleEditReport = (item: ReportItem) => {
+    try {
+      router.push({
+        pathname: "/regular_user/my_report/edit_myreport",
+        params: { reportId: item.reportId },
+      });
+    } catch {
+      // Silently fail - navigation errors should not crash the app
+    }
   };
 
   const handleDeleteReport = (item: ReportItem) => {
@@ -138,6 +163,7 @@ contentContainerStyle={styles.listContent}
           <ReportRow
             item={item}
             onOpen={handleOpenReport}
+            onEdit={handleEditReport}
             onDelete={handleDeleteReport}
           />
         )}
