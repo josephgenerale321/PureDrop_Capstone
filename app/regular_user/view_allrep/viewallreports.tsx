@@ -14,6 +14,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { uidToNumber } from "../../../lib/uidToNumber";
 import { auth, db } from "../../../firebaseConfig";
 
 type DetailedCommunityReport = {
@@ -95,7 +96,7 @@ export default function ViewAllReportsScreen() {
         const fallbackName =
           typeof userData.fullName === "string" && userData.fullName.length > 0
             ? userData.fullName
-            : `User ${selectedUserId.slice(0, 6)}`;
+            : `User ${uidToNumber(selectedUserId)}`;
         const fallbackAvatar =
           typeof userData.profileImageUrl === "string" && userData.profileImageUrl.length > 0
             ? userData.profileImageUrl

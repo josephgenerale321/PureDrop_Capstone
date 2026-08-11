@@ -20,6 +20,7 @@ import {
 import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AllRepComponent, { type AllReportListItem } from "../../../components/all_reports/all_repcomponent";
+import { uidToNumber } from "../../../lib/uidToNumber";
 import { auth, db } from "../../../firebaseConfig";
 
 const LOGIN_ROUTE = "/login" as Href;
@@ -160,7 +161,7 @@ export default function AllReportListScreen() {
                 reporterName:
                   item.reporterName
                   || profile?.fullName
-                  || (item.userId ? `User ${item.userId.slice(0, 6)}` : "Unknown User"),
+                  || (item.userId ? `User ${uidToNumber(item.userId)}` : "Unknown User"),
                 reporterAvatarUrl: item.reporterAvatarUrl || profile?.profileImageUrl || null,
               } satisfies AllReportListItem;
             })
