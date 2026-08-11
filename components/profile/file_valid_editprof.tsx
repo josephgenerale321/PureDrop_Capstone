@@ -13,11 +13,16 @@ export const getFileExtension = (
   if (parts.length > 1) {
     const extension = parts[parts.length - 1].toLowerCase();
     if (extension.length > 0 && extension.length <= 5) {
-      return extension;
+      // Normalize "jpeg" -> "jpg" so the stable storage path is ALWAYS
+      // `profile-image.jpg` regardless of whether the source file was
+      // `*.jpg` or `*.jpeg`. Without this, upsert would create TWO
+      // different files (`profile-image.jpg` AND `profile-image.jpeg`).
+      return extension === "jpeg" ? "jpg" : extension;
     }
   }
 
   const mime = (mimeType || "").toLowerCase();
+  if (mime.includes("jpeg")) return "jpg";
   if (mime.includes("png")) return "png";
   if (mime.includes("webp")) return "webp";
   if (mime.includes("heic")) return "heic";

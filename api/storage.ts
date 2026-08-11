@@ -29,6 +29,7 @@ type UploadFileOptions = {
   contentType?: string;
   upsert?: boolean;
   base64Data?: string;
+  timeoutMs?: number;
 };
 
 const DEFAULT_BUCKET = process.env.EXPO_PUBLIC_SUPABASE_STORAGE_BUCKET || "reports";
@@ -41,6 +42,25 @@ const normalizeBucket = (bucket: string | undefined, fallback: string): string =
 };
 const LOCAL_URI_PATTERN = /^(file|content|ph|assets-library):/i;
 const NETWORK_FAILURE_PATTERN = /network request failed|fetch failed/i;
+// Generous timeout: after the app has been idle for 10-30 min, the first
+// upload can be slow (token refresh, cold connection). Never fail a request
+// that is still completing in the background.
+const DEFAULT_UPLOAD_TIMEOUT_MS = 60_000;
+
+const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s. Please check your connection and try again.`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+};
 
 const readLocalFileAsBase64 = async (fileUri: string): Promise<string> => {
   try {
@@ -66,7 +86,11 @@ const readFileData = async (fileUri: string) => {
   }
 
   if (LOCAL_URI_PATTERN.test(trimmedUri)) {
-    return readLocalFileData(trimmedUri);
+    return withTimeout(
+      readLocalFileData(trimmedUri),
+      DEFAULT_UPLOAD_TIMEOUT_MS,
+      "File read"
+    );
   }
 
   const response = await fetch(trimmedUri);
@@ -94,7 +118,7 @@ export async function uploadFile(
   destinationPath: string,
   options: UploadFileOptions = {}
 ) {
-const { bucket = DEFAULT_BUCKET, contentType, upsert = false, base64Data } = options;
+  const { bucket = DEFAULT_BUCKET, contentType, upsert = false, base64Data, timeoutMs = DEFAULT_UPLOAD_TIMEOUT_MS } = options;
   const resolvedBucket = normalizeBucket(bucket, DEFAULT_BUCKET);
   const fileData = base64Data ? decodeBase64ToArrayBuffer(base64Data) : await readFileData(fileUri);
 
@@ -104,10 +128,12 @@ const { bucket = DEFAULT_BUCKET, contentType, upsert = false, base64Data } = opt
     attempts += 1;
 
     try {
-      const { data, error } = await supabase.storage.from(resolvedBucket).upload(destinationPath, fileData, {
+      const uploadPromise = supabase.storage.from(resolvedBucket).upload(destinationPath, fileData, {
         contentType,
         upsert,
       });
+
+      const { data, error } = await withTimeout(uploadPromise, timeoutMs, "Upload");
 
       if (error) {
         throw error;

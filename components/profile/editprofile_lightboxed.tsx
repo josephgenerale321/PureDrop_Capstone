@@ -14,6 +14,7 @@ import {
   View,
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
+import type { EditableProfileValues } from "./useProfileBackend";
 
 const CITY_SUFFIX = ", Toledo City";
 
@@ -57,13 +58,6 @@ const BARANGAYS: string[] = [
   "Tancor",
   "Tubod",
 ];
-
-export type EditableProfileValues = {
-  fullName: string;
-  address: string;
-  email: string;
-  waterMeter: string;
-};
 
 type EditProfileLightboxProps = {
   visible: boolean;
@@ -177,7 +171,7 @@ export default function EditProfileLightbox({
                   {uploadingProfilePicture
                     ? "Uploading..."
                     : pendingAvatarUri
-                      ? "Change New Photo"
+                      ? "Replace New Photo"
                       : "Edit Profile Picture"}
                 </Text>
               </TouchableOpacity>

@@ -15,6 +15,7 @@ export interface ProfileViewModel {
   email: string;
   waterMeter?: number | string | null;
   profileImageUrl?: string | null;
+  uid?: string | null;
 }
 
 interface ProfileComponentProps {
@@ -80,6 +81,14 @@ export default function ProfileComponent({
                 {savingProfile ? "Saving profile..." : "Edit Profile"}
               </Text>
             </TouchableOpacity>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>USER ID (UID):</Text>
+              <Text style={styles.fieldValue} selectable>
+                {profile?.uid || "No UID"}
+              </Text>
+              <View style={styles.line} />
+            </View>
 
             <View style={styles.fieldGroup}>
               <Text style={styles.fieldLabel}>ADDRESS:</Text>
