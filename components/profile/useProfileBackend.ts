@@ -430,13 +430,22 @@ export function useProfileBackend() {
           ? uploaded.path
           : destinationPath;
 
-      // Clean up ALL previous profile image files (any extension, any timestamp)
-      // so the bucket never accumulates files. Best-effort; never blocks.
+      // Clean up the previous profile image file(s) so the bucket never
+      // accumulates files. The current upload uses a unique timestamped path,
+      // so the previous file is the one stored in the user doc's
+      // profileImagePath (if it differs from the path we just uploaded).
+      // Fall back to cleaning stable `profile-image.{ext}` variants too.
+      // Best-effort; never blocks the upload flow.
       const userFolderPath = `${avatarFolder}/${currentUserId}`;
+      const previousPath = profileImagePath;
       const legacyVariants = ["jpg", "jpeg", "png", "webp", "heic"]
         .map((ext) => `${userFolderPath}/profile-image.${ext}`)
         .concat([`${userFolderPath}/profile-image-${Date.now()}.${extension}`]);
-      for (const legacyPath of legacyVariants) {
+      const candidatesToRemove = legacyVariants;
+      if (typeof previousPath === "string" && previousPath.length > 0) {
+        candidatesToRemove.unshift(previousPath);
+      }
+      for (const legacyPath of candidatesToRemove) {
         if (legacyPath !== uploadedPath) {
           void removeFile(legacyPath, avatarBucket).catch(() => {
             // Legacy variant cleanup is best-effort; never blocks the flow.
