@@ -302,6 +302,11 @@ export function useProfileBackend() {
       return;
     }
 
+    if (waterMeterText.length > 6) {
+      Alert.alert("Invalid water meter", "Water meter must be at most 6 digits.");
+      return;
+    }
+
     try {
       setSavingProfile(true);
       const userDocRef = doc(db, "regular_user", currentUserId);

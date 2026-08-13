@@ -241,7 +241,7 @@ export default function EditProfileLightbox({
               <TextInput
                 value={form.waterMeter}
 onChangeText={(value) =>
-                  updateField("waterMeter", value.replace(/[^\d]/g, "").slice(0, 8))
+                  updateField("waterMeter", value.replace(/[^\d]/g, "").slice(0, 6))
                 }
                 style={styles.input}
                 placeholder="Enter water meter number"
@@ -340,8 +340,10 @@ onChangeText={(value) =>
 <FlashList
                 data={filteredBarangays}
                 keyExtractor={(item) => item}
+                style={styles.list}
                 keyboardShouldPersistTaps="handled"
                 contentContainerStyle={styles.listContent}
+                showsVerticalScrollIndicator
                 renderItem={({ item }) => (
                   <TouchableOpacity
                     style={styles.itemButton}
@@ -598,6 +600,9 @@ const styles = StyleSheet.create({
   },
   pickerSheet: {
     maxHeight: "82%",
+    minHeight: 420,
+    width: "100%",
+    maxWidth: 520,
     borderRadius: 8,
     backgroundColor: "#ffffff",
     padding: 16,
@@ -623,6 +628,10 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     backgroundColor: "#ffffff",
     color: "#0f172a",
+  },
+  list: {
+    flex: 1,
+    minHeight: 240,
   },
   listContent: {
     paddingBottom: 8,

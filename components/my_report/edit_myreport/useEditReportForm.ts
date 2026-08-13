@@ -95,6 +95,27 @@ const normalizeToledoAddress = (value: string): string => {
   return remainder ? `${match}, Toledo City ${remainder}` : `${match}, Toledo City`;
 };
 
+/**
+ * Parses latitude/longitude from a GPS location string.
+ * Supports formats like "Toledo City (10.377500, 123.638800)" or "10.377500, 123.638800".
+ * Returns null if coordinates cannot be extracted.
+ */
+const parseGpsCoordinates = (value: string): { latitude: number; longitude: number } | null => {
+  const match = value.match(/\(?(-?\d+\.?\d*),\s*(-?\d+\.?\d*)\)?/);
+  if (!match) {
+    return null;
+  }
+
+  const latitude = Number.parseFloat(match[1]);
+  const longitude = Number.parseFloat(match[2]);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  return { latitude, longitude };
+};
+
 // Checks foreground location permission, requesting it if not yet granted.
 // Fully guarded so a permission/platform failure can never reject/rethrow.
 const isPermissionGrantedForFollow = async (): Promise<boolean> => {
@@ -204,12 +225,28 @@ export function useEditReportForm(reportId: string) {
                 ? data.location
                 : "",
           );
-          setGpsLocation(
-            typeof data.gpsLocation === "string" ? data.gpsLocation : "",
-          );
+          const rawGpsLocation =
+            typeof data.gpsLocation === "string" ? data.gpsLocation : "";
+          setGpsLocation(rawGpsLocation);
           setWaterMeter(
             typeof data.waterMeter === "string" ? data.waterMeter : "",
           );
+          // Parse coordinates from the stored GPS location string so the
+          // mini-map preview and the full map modal open at the report's
+          // original pinned location instead of the default Toledo center.
+          const parsedCoords = rawGpsLocation
+            ? parseGpsCoordinates(rawGpsLocation)
+            : null;
+          if (parsedCoords) {
+            setSelectedPin(parsedCoords);
+            setConfirmedPin(parsedCoords);
+            setMapRegion({
+              latitude: parsedCoords.latitude,
+              longitude: parsedCoords.longitude,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            });
+          }
           // Existing remote attachments (Supabase URLs) are displayed as-is.
           // New local attachments are uploaded on save.
           setAttachments(
@@ -331,6 +368,20 @@ export function useEditReportForm(reportId: string) {
   };
 
   const handleUseGps = async () => {
+    // If the report already has a saved pin, open the map at that saved
+    // location instead of fetching the user's current GPS position.
+    if (confirmedPin) {
+      setMapRegion({
+        latitude: confirmedPin.latitude,
+        longitude: confirmedPin.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      });
+      setSelectedPin(confirmedPin);
+      setMapVisible(true);
+      return;
+    }
+
     try {
       setGpsLoading(true);
 
@@ -657,6 +708,10 @@ export function useEditReportForm(reportId: string) {
       const waterMeterNumber = Number(trimmedWaterMeter);
       if (Number.isNaN(waterMeterNumber) || waterMeterNumber < 0) {
         Alert.alert("Invalid water meter", "Water meter must be a valid non-negative number.");
+        return false;
+      }
+      if (trimmedWaterMeter.replace(/[^\d]/g, "").length > 6) {
+        Alert.alert("Invalid water meter", "Water meter must be at most 6 digits.");
         return false;
       }
     }

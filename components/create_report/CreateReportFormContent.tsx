@@ -201,7 +201,7 @@ export function CreateReportFormContent({
                 ref={createReportInputRef("waterMeter")}
 value={waterMeter}
                 onChangeText={(value) =>
-                  onWaterMeterChange(value.replace(/[^\d]/g, "").slice(0, 8))
+                  onWaterMeterChange(value.replace(/[^\d]/g, "").slice(0, 6))
                 }
                 onFocus={() => followFocusedField("waterMeter")}
                 onPressIn={() => followFocusedField("waterMeter")}

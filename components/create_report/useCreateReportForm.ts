@@ -669,6 +669,10 @@ result = await ImagePicker.launchImageLibraryAsync({
         Alert.alert("Invalid water meter", "Water meter must be a valid non-negative number.");
         return false;
       }
+      if (trimmedWaterMeter.replace(/[^\d]/g, "").length > 6) {
+        Alert.alert("Invalid water meter", "Water meter must be at most 6 digits.");
+        return false;
+      }
     }
 
     if (!trimmedCategory || !trimmedIssue || (!combinedLocation && !trimmedGpsLocation)) {

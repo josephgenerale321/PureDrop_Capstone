@@ -260,7 +260,7 @@ export default function RegisterScreen() {
               style={styles.input}
 value={waterMeter}
               onChangeText={(value) =>
-                setWaterMeter(value.replace(/[^\d]/g, "").slice(0, 8))
+                setWaterMeter(value.replace(/[^\d]/g, "").slice(0, 6))
               }
               onFocus={() => followFocusedField("waterMeter")}
               onPressIn={() => followFocusedField("waterMeter")}
