@@ -60,6 +60,8 @@ service cloud.firestore {
                'statusUpdatedAt',
                'statusUpdatedBy',
                'statusUpdatedByUid',
+               'editedBy',
+               'editedByUid',
                'updatedAt',
                'issue',
                'category',
@@ -72,19 +74,19 @@ service cloud.firestore {
              && (
                !changed.hasAny(['status'])
                || request.resource.data.status in [
-'Pending',
-                    'Resolving',
-                    'Approved',
-                    'Rejected',
-                    'pending',
-                    'resolving',
-                    'approved',
-                    'rejected'
-                  ]
+ 'Pending',
+                     'Resolving',
+                     'Approved',
+                     'Rejected',
+                     'pending',
+                     'resolving',
+                     'approved',
+                     'rejected'
+                   ]
              );
     }
 
-match /regular_user/{userId} {
+    match /regular_user/{userId} {
       // Signed-in users can read profile docs.
       allow get, list: if isSignedIn();
 
@@ -144,5 +146,6 @@ match /regular_user/{userId} {
                       || isAdmin()
                     );
     }
+
   }
 }

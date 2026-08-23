@@ -9,6 +9,7 @@ import { defineSecret } from "firebase-functions/params";
 
 initializeApp();
 
+
 const ADMIN_PROFILE_COLLECTION = "admin_user";
 
 /**
@@ -493,3 +494,4 @@ export const sendReportStatusPush = onDocumentUpdated(
     }
   },
 );
+
