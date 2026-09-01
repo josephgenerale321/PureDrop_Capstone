@@ -30,6 +30,8 @@
     },
     "plugins": [
       "expo-router",
+      "expo-build-properties",
+      "./plugins/withMlKit16KB",
       [
         "expo-splash-screen",
         {
