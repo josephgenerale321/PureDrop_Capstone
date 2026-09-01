@@ -52,10 +52,16 @@
         }
       ],
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow PureDrop to access your camera for identity verification and taking photos."
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "Allow PureDrop to access your photos so you can choose a profile picture.",
-          "cameraPermission": "Allow PureDrop to access your camera so you can take a profile picture.",
+          "cameraPermission": "Allow PureDrop to access your camera for identity verification and taking photos.",
           "microphonePermission": false
         }
       ]
