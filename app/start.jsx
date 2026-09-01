@@ -37,6 +37,15 @@ export default function StartScreen() {
         >
           <Text style={[styles.buttonText, styles.registerButtonText]}>Register</Text>
         </TouchableOpacity>
+
+        {/* Valid ID verification flow — opens the Identify Yourself screen */}
+        <TouchableOpacity
+          style={[styles.button, styles.registerButton]}
+          onPress={() => router.push("/verification/verificationmain")}
+          activeOpacity={0.8}
+        >
+          <Text style={[styles.buttonText, styles.registerButtonText]}>Valid ID</Text>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );

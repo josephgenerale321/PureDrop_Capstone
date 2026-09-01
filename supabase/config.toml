@@ -11,3 +11,9 @@ verify_jwt = false
 
 [functions.send-report-push]
 verify_jwt = false
+
+[functions.send-report-status-email]
+verify_jwt = false
+
+[functions.send-account-update-email]
+verify_jwt = false
