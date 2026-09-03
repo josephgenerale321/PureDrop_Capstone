@@ -1,19 +1,29 @@
-import { Text, TouchableOpacity, View } from "react-native";
+import { Image, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { styles } from "./valididstyles";
 
 export type IdPhotoBoxProps = {
   label: string;
   attached: boolean;
+  /** Captured photo URI — shows the real photo when provided. */
+  photoUri?: string | null;
   onToggle: () => void;
+  /** Retake chip handler — defaults to onToggle when omitted. */
+  onRetakePress?: () => void;
 };
 
 /**
- * Mockup attach box — dashed "dropzone" when empty, shows a stylized fake ID
- * preview with a Retake chip when attached. The real camera capture and photo
- * preview will be wired up later.
+ * Attach box — dashed "dropzone" when empty; when attached it shows the real
+ * captured photo (when a URI exists) or a stylized fake ID preview, with a
+ * Retake chip on top.
  */
-export default function IdPhotoBox({ label, attached, onToggle }: IdPhotoBoxProps) {
+export default function IdPhotoBox({
+  label,
+  attached,
+  photoUri,
+  onToggle,
+  onRetakePress,
+}: IdPhotoBoxProps) {
   return (
     <TouchableOpacity
       style={[styles.photoBox, attached && styles.photoBoxAttached]}
@@ -30,19 +40,27 @@ export default function IdPhotoBox({ label, attached, onToggle }: IdPhotoBoxProp
 
       {attached ? (
         <View style={styles.previewArea}>
-          {/* Simulated photo preview — the real capture preview will be wired up later. */}
-          <View style={styles.previewCard}>
-            <View style={styles.previewPortrait} />
-            <View style={styles.previewLinesWrap}>
-              <View style={[styles.previewLine, { width: "72%" }]} />
-              <View style={[styles.previewLine, { width: "54%" }]} />
-              <View style={[styles.previewLine, { width: "63%" }]} />
+          {photoUri ? (
+            <Image
+              source={{ uri: photoUri }}
+              style={styles.previewPhoto}
+              resizeMode="cover"
+            />
+          ) : (
+            /* Simulated photo preview — shown when no captured URI exists yet. */
+            <View style={styles.previewCard}>
+              <View style={styles.previewPortrait} />
+              <View style={styles.previewLinesWrap}>
+                <View style={[styles.previewLine, { width: "72%" }]} />
+                <View style={[styles.previewLine, { width: "54%" }]} />
+                <View style={[styles.previewLine, { width: "63%" }]} />
+              </View>
             </View>
-          </View>
+          )}
 
           <TouchableOpacity
             style={styles.retakeChip}
-            onPress={onToggle}
+            onPress={onRetakePress ?? onToggle}
             activeOpacity={0.8}
             accessibilityRole="button"
             accessibilityLabel={`Retake ${label.toLowerCase()} photo`}

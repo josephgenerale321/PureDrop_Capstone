@@ -1,18 +1,31 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
+  Image,
+  Modal,
   Platform,
   ScrollView,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+// Legacy subpath — the root "expo-file-system" import deprecates these
+// methods in SDK 54 (same convention as useCreateReportForm, offline cache).
+import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { type Href, useRouter } from "expo-router";
+import { useIsFocused } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { styles } from "../../../components/verification/validid/valididstyles";
 import IdPhotoBox from "../../../components/verification/validid/idphotobox";
+import {
+  consumeCapturedIdPhoto,
+  type IdPhotoSide,
+} from "../../../components/verification/validid/valididcapture/idcapturefunc";
+
+// Route of the Valid ID camera capture screen.
+const ID_CAPTURE_ROUTE = "/verification/valid_id/validid_cam/valididcapture";
 
 // Mockup ID types — the real list will come from the backend later.
 const VALID_ID_TYPES: string[] = [
@@ -36,12 +49,61 @@ export default function ValidIdMainScreen() {
   const router = useRouter();
   const [selectedIdType, setSelectedIdType] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [frontAttached, setFrontAttached] = useState(false);
-  const [backAttached, setBackAttached] = useState(false);
-  const [passportAttached, setPassportAttached] = useState(false);
+  // Captured photo URIs per side (null = not captured yet).
+  const [frontPhoto, setFrontPhoto] = useState<string | null>(null);
+  const [backPhoto, setBackPhoto] = useState<string | null>(null);
+  const [passportPhoto, setPassportPhoto] = useState<string | null>(null);
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
+  // Side whose attached-photo action card (View Image / Retake) is open.
+  const [actionSheetSide, setActionSheetSide] = useState<IdPhotoSide | null>(null);
+  // Side whose full-screen photo lightbox is open.
+  const [lightboxSide, setLightboxSide] = useState<IdPhotoSide | null>(null);
 
   const isPassport = selectedIdType === PASSPORT_ID_TYPE;
+  const frontAttached = frontPhoto !== null;
+  const backAttached = backPhoto !== null;
+  const passportAttached = passportPhoto !== null;
+
+  // The capture screen hands photos back through a module-level store (back()
+  // cannot pass params to the previous screen); consume it whenever this
+  // screen regains focus.
+  const isFocused = useIsFocused();
+  useEffect(() => {
+    if (!isFocused) {
+      return;
+    }
+
+    const front = consumeCapturedIdPhoto("front");
+    const back = consumeCapturedIdPhoto("back");
+    const passport = consumeCapturedIdPhoto("passport");
+    if (front) {
+      setFrontPhoto(front);
+    }
+    if (back) {
+      setBackPhoto(back);
+    }
+    if (passport) {
+      setPassportPhoto(passport);
+    }
+  }, [isFocused]);
+
+  // Delete the orphaned temp file whenever a retake replaces a photo.
+  const prevPhotosRef = useRef<{
+    front: string | null;
+    back: string | null;
+    passport: string | null;
+  }>({ front: null, back: null, passport: null });
+  useEffect(() => {
+    const current = { front: frontPhoto, back: backPhoto, passport: passportPhoto };
+    (Object.keys(current) as IdPhotoSide[]).forEach((side) => {
+      const prev = prevPhotosRef.current[side];
+      const curr = current[side];
+      if (prev && prev !== curr) {
+        FileSystem.deleteAsync(prev, { idempotent: true }).catch(() => {});
+      }
+    });
+    prevPhotosRef.current = current;
+  }, [frontPhoto, backPhoto, passportPhoto]);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -49,19 +111,48 @@ export default function ValidIdMainScreen() {
     }
   };
 
-  // Mockup attach — toggles the photo state so the flow can be demoed.
-  // Real ID photo capture/upload logic will be wired up later.
-  const handleAttachPhoto = (side: "front" | "back" | "passport") => {
+  const goToCapture = (side: IdPhotoSide) => {
+    router.push({ pathname: ID_CAPTURE_ROUTE, params: { side } } as Href);
+  };
+
+  const getPhotoForSide = (side: IdPhotoSide): string | null =>
+    side === "front" ? frontPhoto : side === "back" ? backPhoto : passportPhoto;
+
+  const getSideLabel = (side: IdPhotoSide): string =>
+    side === "front" ? "Front" : side === "back" ? "Back" : "Passport";
+
+  // Empty box → opens the camera; attached box → opens the action card
+  // (View Image / Retake) instead of the old system alert.
+  const handleAttachPhoto = (side: IdPhotoSide) => {
     if (Platform.OS !== "web") {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     }
 
-    if (side === "front") {
-      setFrontAttached((attached) => !attached);
-    } else if (side === "back") {
-      setBackAttached((attached) => !attached);
-    } else {
-      setPassportAttached((attached) => !attached);
+    if (getPhotoForSide(side)) {
+      setActionSheetSide(side);
+      return;
+    }
+
+    goToCapture(side);
+  };
+
+  // From the action card: dismiss it and open the full-screen photo lightbox.
+  const handleActionViewImage = () => {
+    const side = actionSheetSide;
+    setActionSheetSide(null);
+    if (side) {
+      setLightboxSide(side);
+    }
+  };
+
+  // From the action card: dismiss it and go straight to the capture screen.
+  // The retake replaces the current photo; the orphaned temp file cleanup
+  // effect runs automatically once the new capture lands.
+  const handleActionRetake = () => {
+    const side = actionSheetSide;
+    setActionSheetSide(null);
+    if (side) {
+      goToCapture(side);
     }
   };
 
@@ -70,9 +161,9 @@ export default function ValidIdMainScreen() {
   const handleSelectIdType = (idType: string) => {
     setSelectedIdType(idType);
     setIsDropdownOpen(false);
-    setFrontAttached(false);
-    setBackAttached(false);
-    setPassportAttached(false);
+    setFrontPhoto(null);
+    setBackPhoto(null);
+    setPassportPhoto(null);
   };
 
   const handleSubmit = () => {
@@ -117,6 +208,12 @@ export default function ValidIdMainScreen() {
       `Valid ID submission is not implemented yet. (Selected: ${selectedIdType})`,
     );
   };
+
+  // Photo + label backing the action card / lightbox for the active side.
+  const actionPhoto = actionSheetSide ? getPhotoForSide(actionSheetSide) : null;
+  const actionLabel = actionSheetSide ? getSideLabel(actionSheetSide) : "";
+  const lightboxPhoto = lightboxSide ? getPhotoForSide(lightboxSide) : null;
+  const lightboxLabel = lightboxSide ? getSideLabel(lightboxSide) : "";
 
   return (
     <>
@@ -183,22 +280,28 @@ export default function ValidIdMainScreen() {
           <IdPhotoBox
             label="Passport"
             attached={passportAttached}
+            photoUri={passportPhoto}
             onToggle={() => handleAttachPhoto("passport")}
+            onRetakePress={() => goToCapture("passport")}
           />
         ) : (
           <>
-            {/* Front ID photo (mockup) */}
+            {/* Front ID photo */}
             <IdPhotoBox
               label="Front"
               attached={frontAttached}
+              photoUri={frontPhoto}
               onToggle={() => handleAttachPhoto("front")}
+              onRetakePress={() => goToCapture("front")}
             />
 
-            {/* Back ID photo (mockup) */}
+            {/* Back ID photo */}
             <IdPhotoBox
               label="Back"
               attached={backAttached}
+              photoUri={backPhoto}
               onToggle={() => handleAttachPhoto("back")}
+              onRetakePress={() => goToCapture("back")}
             />
           </>
         )}
@@ -250,6 +353,100 @@ export default function ValidIdMainScreen() {
           </View>
         </View>
       )}
+      {/* Attached-photo action card — opened by tapping an attached box. */}
+      <Modal
+        visible={actionSheetSide !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setActionSheetSide(null)}
+      >
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>{actionLabel} photo attached</Text>
+
+            {actionPhoto && (
+              <Image
+                source={{ uri: actionPhoto }}
+                style={styles.actionThumbnail}
+                resizeMode="cover"
+              />
+            )}
+
+            <Text style={styles.confirmMessage}>
+              View the full photo, or retake it to replace the current capture.
+            </Text>
+
+            <View style={styles.actionButtonsWrap}>
+              <TouchableOpacity
+                style={[styles.actionButton, styles.actionButtonPrimary]}
+                onPress={handleActionViewImage}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={`View the ${actionLabel.toLowerCase()} photo full screen`}
+              >
+                <Ionicons name="eye-outline" size={18} color="#FFFFFF" />
+                <Text style={styles.confirmButtonText}>View Image</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionButton, styles.actionButtonSecondary]}
+                onPress={handleActionRetake}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={`Retake the ${actionLabel.toLowerCase()} photo`}
+              >
+                <Ionicons name="camera-outline" size={18} color="#475569" />
+                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                  Retake Photo
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.actionCancelButton}
+              onPress={() => setActionSheetSide(null)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Close without changes"
+            >
+              <Text style={styles.actionCancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Full-screen photo lightbox for the attached Valid ID photo. */}
+      <Modal
+        visible={lightboxSide !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLightboxSide(null)}
+      >
+        <SafeAreaView style={styles.lightboxOverlay}>
+          <View style={styles.lightboxHeader}>
+            <TouchableOpacity
+              style={styles.lightboxCloseButton}
+              onPress={() => setLightboxSide(null)}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Close image preview"
+            >
+              <Ionicons name="close" size={24} color="#FFFFFF" />
+            </TouchableOpacity>
+            <Text style={styles.lightboxTitle}>{lightboxLabel} photo</Text>
+          </View>
+
+          <View style={styles.lightboxImageWrap}>
+            {lightboxPhoto && (
+              <Image
+                source={{ uri: lightboxPhoto }}
+                style={styles.lightboxImage}
+                resizeMode="contain"
+              />
+            )}
+          </View>
+        </SafeAreaView>
+      </Modal>
     </>
   );
 }

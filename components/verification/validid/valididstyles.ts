@@ -136,6 +136,11 @@ export const styles = StyleSheet.create({
     marginTop: 10,
     borderRadius: 10,
     backgroundColor: "#E2E8F0",
+    // Clips the absolutely-filled photo to the rounded preview area so it
+    // always fits neatly inside the box below the header (the box's remaining
+    // height is smaller than the CR80 1.586 ratio, so the photo must be sized
+    // by the container, not by its own aspect ratio).
+    overflow: "hidden",
   },
   previewCard: {
     flexDirection: "row",
@@ -269,6 +274,99 @@ export const styles = StyleSheet.create({
   },
   confirmCancelButtonText: {
     color: "#475569",
+  },
+  // Real captured ID photo preview (from valididcapture). Fills the preview
+  // area edge-to-edge; resizeMode="cover" crops instead of distorting, and the
+  // previewArea clips it to the box's remaining space below the header.
+  previewPhoto: {
+    ...StyleSheet.absoluteFillObject,
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#0F172A",
+  },
+
+  // Attached-photo action card (View Image / Retake) — reuses the confirm
+  // modal card styles (confirmOverlay / confirmCard / confirmTitle /
+  // confirmMessage / confirmButtonText) for the shared look.
+  actionThumbnail: {
+    width: "100%",
+    aspectRatio: 1.586, // CR80 ID card ratio, matches the attach box
+    borderRadius: 10,
+    backgroundColor: "#E2E8F0",
+    marginBottom: 14,
+  },
+  actionButtonsWrap: {
+    width: "100%",
+    gap: 10,
+  },
+  actionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    height: 46,
+    borderRadius: 12,
+  },
+  actionButtonPrimary: {
+    backgroundColor: "#0EA5E9",
+    shadowColor: "#0EA5E9",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  actionButtonSecondary: {
+    backgroundColor: "#F1F5F9",
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+  },
+  actionCancelButton: {
+    marginTop: 6,
+    paddingVertical: 10,
+  },
+  actionCancelButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#94A3B8",
+  },
+
+  // Full-screen photo lightbox (same look as the report attachment lightbox).
+  lightboxOverlay: {
+    flex: 1,
+    backgroundColor: "#000000",
+  },
+  lightboxHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 10,
+  },
+  lightboxCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
+  },
+  lightboxTitle: {
+    flex: 1,
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  lightboxImageWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    paddingBottom: 20,
+  },
+  lightboxImage: {
+    width: "100%",
+    height: "100%",
   },
 });
 

@@ -1,7 +1,7 @@
-﻿import { useCallback, useEffect, useRef, useState, memo } from "react";
+import { memo, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
+  Linking,
   Platform,
   StyleSheet,
   Text,
@@ -9,42 +9,29 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useIsFocused } from "@react-navigation/native";
-import { type Href, useRouter } from "expo-router";
-import * as FileSystem from "expo-file-system";
 import type { Face } from "react-native-vision-camera-face-detector";
+import { styles } from "../../../../components/verification/faceselfie_comp/selfiecapture/selfiecaptstyles";
+import { BackButton, IdleScreen } from "../../../../components/verification/faceselfie_comp/selfiecapture/selfiecaptui";
+import {
+  LIVE_DETECTOR_OPTIONS,
+  loadNativeModules,
+  retryLoadModules,
+  useSelfieCapture,
+  type FaceDetectorModule,
+  type FaceHint,
+  type VisionCameraModule,
+} from "../../../../components/verification/faceselfie_comp/selfiecapture/selfiecaptfunc";
 
-const REVIEW_SELFIE_ROUTE =
-  "/verification/face_selfie/cameraface_selfie/reviewselfiedetails" as Href;
-
-// react-native-vision-camera is native-only. The modules are loaded lazily on
-// first render so that (a) web never executes them and (b) an outdated dev
-// client (missing the native modules) shows a helpful screen instead of
-// crashing the whole router at startup.
-type VisionCameraModule = typeof import("react-native-vision-camera");
-type FaceDetectorModule = typeof import("react-native-vision-camera-face-detector");
-
-let cachedModules: {
-  visionCamera: VisionCameraModule;
-  faceDetector: FaceDetectorModule;
-} | null = null;
-let moduleLoadError: unknown = null;
-
-function loadNativeModules() {
-  if (cachedModules || moduleLoadError) {
-    return cachedModules;
-  }
-
-  try {
-    cachedModules = {
-      visionCamera: require("react-native-vision-camera") as VisionCameraModule,
-      faceDetector: require("react-native-vision-camera-face-detector") as FaceDetectorModule,
-    };
-  } catch (error) {
-    moduleLoadError = error;
-  }
-  return cachedModules;
-}
+// Hint text for each live face-quality state (classified by evaluateFace in
+// the func file). The "ok" entry matches the capture-enabled message.
+const LIVE_HINT_MESSAGES: Record<FaceHint, string> = {
+  ok: "Face detected — hold steady and capture",
+  none: "No face detected. Center your face inside the frame",
+  multiple: "Multiple faces detected — only you should be in the frame",
+  "too-far": "Move closer so your face fills the frame",
+  "wrong-pose": "Look straight at the camera",
+  "eyes-closed": "Open your eyes and look at the camera",
+};
 
 /**
  * Full-screen face selfie capture.
@@ -53,15 +40,30 @@ function loadNativeModules() {
  * (replaces the deprecated ExpoFaceDetector). The shutter only works while
  * a face is detected in the live preview, and the captured photo is
  * re-checked before navigating to the review screen.
+ *
+ * The behavior/backend logic (native module loading, camera permissions, face
+ * detection, photo capture) lives in
+ * components/verification/faceselfie_comp/selfiecapture/selfiecaptfunc.tsx.
  */
 export default function SelfieCaptureScreen() {
+  // Bumped by the setup screen's Retry button to force a fresh loader run.
+  const [, setModuleAttempt] = useState(0);
+
   if (Platform.OS === "web") {
     return <UnsupportedScreen />;
   }
 
-  const modules = loadNativeModules();
+  const { modules, error } = loadNativeModules();
   if (!modules) {
-    return <SetupRequiredScreen error={moduleLoadError} />;
+    return (
+      <SetupRequiredScreen
+        error={error}
+        onRetry={() => {
+          retryLoadModules();
+          setModuleAttempt((attempt) => attempt + 1);
+        }}
+      />
+    );
   }
 
   return (
@@ -73,54 +75,42 @@ export default function SelfieCaptureScreen() {
 }
 
 function UnsupportedScreen() {
-  const router = useRouter();
-  const handleBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-    }
-  };
-
   return (
-    <View style={[styles.container, styles.containerIdle]}>
-      <TouchableOpacity style={styles.backButton} onPress={handleBack} activeOpacity={0.8}>
-        <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
-      </TouchableOpacity>
-
-      <View style={styles.idleContent}>
-        <Ionicons name="camera-outline" size={90} color="#94A3B8" />
-        <Text style={styles.idleText}>Face scan is only available on mobile devices.</Text>
-      </View>
-    </View>
+    <IdleScreen
+      icon="camera-outline"
+      message="Face scan is only available on mobile devices."
+    />
   );
 }
 
-function SetupRequiredScreen({ error }: { error: unknown }) {
-  const router = useRouter();
-  const handleBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-    }
-  };
-
+function SetupRequiredScreen({
+  error,
+  onRetry,
+}: {
+  error: unknown;
+  onRetry: () => void;
+}) {
   return (
-    <View style={[styles.container, styles.containerIdle]}>
-      <TouchableOpacity style={styles.backButton} onPress={handleBack} activeOpacity={0.8}>
-        <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
-      </TouchableOpacity>
-
-      <View style={styles.idleContent}>
-        <Ionicons name="build-outline" size={90} color="#94A3B8" />
-        <Text style={styles.idleText}>
-          The camera modules are missing from this app build. Rebuild the dev client so the
-          native code is included: npx expo run:android (or npx expo run:ios)
+    <IdleScreen
+      icon="build-outline"
+      message="The camera modules are missing from this app build. Rebuild the dev client so the native code is included: npx expo run:android (or npx expo run:ios)"
+    >
+      {error instanceof Error && (
+        <Text style={styles.idleText} numberOfLines={4}>
+          {error.message}
         </Text>
-        {error instanceof Error && (
-          <Text style={styles.idleText} numberOfLines={4}>
-            {error.message}
-          </Text>
-        )}
-      </View>
-    </View>
+      )}
+
+      <TouchableOpacity
+        style={styles.allowButton}
+        onPress={onRetry}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel="Retry loading the camera modules"
+      >
+        <Text style={styles.allowButtonText}>Retry</Text>
+      </TouchableOpacity>
+    </IdleScreen>
   );
 }
 
@@ -163,6 +153,7 @@ const StableFaceCamera = memo(function StableFaceCamera({
       device={device}
       isActive={isActive}
       outputs={[photoOutput]}
+      {...LIVE_DETECTOR_OPTIONS}
       performanceMode="fast"
       onPreviewStarted={onPreviewStarted}
       onPreviewStopped={onPreviewStopped}
@@ -179,200 +170,56 @@ function NativeSelfieCapture({
   visionCamera: VisionCameraModule;
   faceDetector: FaceDetectorModule;
 }) {
-  const router = useRouter();
-  const isFocused = useIsFocused();
-  const device = visionCamera.useCameraDevice("front");
-  const { hasPermission, canRequestPermission, requestPermission } =
-    visionCamera.useCameraPermission();
-  const photoOutput = visionCamera.usePhotoOutput({ qualityPrioritization: "balanced" });
-  const imageFaceDetector = faceDetector.useImageFaceDetector({
-    performanceMode: "accurate",
-  });
-  const FaceDetectorCamera = faceDetector.Camera;
-
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [isFaceDetected, setIsFaceDetected] = useState(false);
-  const [isCameraReady, setIsCameraReady] = useState(false);
-  // Guards against overlapping captures.
-  const isBusyRef = useRef(false);
-
-  // Unbind the camera while the review screen (or any other screen) is on top,
-  // and re-bind when this screen regains focus.
-  useEffect(() => {
-    if (!isFocused) {
-      setIsFaceDetected(false);
-    }
-  }, [isFocused]);
-
-  // Ask for camera permission once when the screen opens.
-  const hasRequestedRef = useRef(false);
-  useEffect(() => {
-    if (hasRequestedRef.current || hasPermission || !canRequestPermission) {
-      return;
-    }
-
-    hasRequestedRef.current = true;
-    void requestPermission().then((granted) => {
-      if (!granted) {
-        Alert.alert(
-          "Camera Permission",
-          "Camera access is required for face verification. Please enable it in your device settings.",
-        );
-      }
-    });
-  }, [hasPermission, canRequestPermission, requestPermission]);
-
-  const handleBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-    }
-  };
-
-  const handleRetryPermission = () => {
-    hasRequestedRef.current = false;
-    void requestPermission().then((granted) => {
-      if (!granted) {
-        Alert.alert(
-          "Camera Permission",
-          "Camera access is required for face verification. Please enable it in your device settings.",
-        );
-      }
-    });
-  };
-
-  const handleFacesDetected = useCallback((faces: Face[]) => {
-    setIsFaceDetected(faces.length > 0);
-  }, []);
-
-  const handleCameraError = useCallback((error: Error) => {
-    console.warn("Face detection error:", error);
-  }, []);
-
-  const handleCameraReady = useCallback(() => {
-    setIsCameraReady(true);
-  }, []);
-
-  const handleCameraStopped = useCallback(() => {
-    setIsCameraReady(false);
-  }, []);
-
-  // Captures a photo to a file. On Android the native session can transiently
-  // abort a capture with "Camera is closed." while it is being re-bound (the
-  // unbind/rebind cycle in HybridCameraSession.configure). That failure is
-  // recoverable: wait briefly for the re-bind to finish and retry once.
-  const capturePhotoToFileStable = async (): Promise<string> => {
-    const attempt = async (): Promise<string> => {
-      const photoFile = await photoOutput.capturePhotoToFile({ flashMode: "off" }, {});
-      let path = photoFile.filePath;
-      if (!path.startsWith("file://")) {
-        path = `file://${path}`;
-      }
-      return path;
-    };
-
-    try {
-      return await attempt();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/camera is closed/i.test(message)) {
-        throw error;
-      }
-      console.warn("[SelfieCapture] transient 'Camera is closed.' — retrying capture once");
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      return await attempt();
-    }
-  };
-
-  // Captures the selfie and runs an authoritative face check on the real
-  // photo before navigating to the review screen.
-  const handleCapture = async () => {
-    if (isBusyRef.current || !device || !isCameraReady) {
-      return;
-    }
-
-    if (!isFaceDetected) {
-      Alert.alert(
-        "No Face Detected",
-        "Please center your face inside the frame before taking the photo.",
-      );
-      return;
-    }
-
-    isBusyRef.current = true;
-    setIsCapturing(true);
-    // Stage 1 — capture the photo to a file.
-    let uri = "";
-    try {
-      uri = await capturePhotoToFileStable();
-    } catch (captureError) {
-      console.error("[SelfieCapture] capturePhotoToFile failed:", captureError);
-      const reason =
-        captureError instanceof Error ? captureError.message : String(captureError);
-      isBusyRef.current = false;
-      setIsCapturing(false);
-      Alert.alert("Capture Failed", reason || "Failed to capture photo.");
-      return;
-    }
-
-    // Stage 2 — authoritative face gate on the real photo.
-    try {
-      const faces: Face[] = imageFaceDetector.detectFaces(uri);
-      if (!faces || faces.length === 0) {
-        setIsFaceDetected(false);
-        FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
-        Alert.alert(
-          "No Face Detected",
-          "No face was detected in your photo. Center your face inside the frame and try again.",
-        );
-        return;
-      }
-
-      router.push({
-        pathname: REVIEW_SELFIE_ROUTE,
-        params: { photo: uri },
-      } as Href);
-    } catch (detectError) {
-    console.error("[SelfieCapture] face check failed:", detectError);
-    const reason =
-      detectError instanceof Error ? detectError.message : String(detectError);
-    Alert.alert(
-      "Face Check Failed",
-      reason || "Failed to verify the captured photo.",
-    );
-  } finally {
-    isBusyRef.current = false;
-    setIsCapturing(false);
-  }
-};
+  const {
+    isFocused,
+    device,
+    hasPermission,
+    canRequestPermission,
+    photoOutput,
+    FaceDetectorCamera,
+    isCapturing,
+    isFaceDetected,
+    isCameraReady,
+    faceHint,
+    cameraError,
+    handleRetryPermission,
+    handleFacesDetected,
+    handleCameraError,
+    handleCameraReady,
+    handleCameraStopped,
+    handleCapture,
+  } = useSelfieCapture({ visionCamera, faceDetector });
 
   if (!hasPermission) {
     return (
-      <View style={[styles.container, styles.containerIdle]}>
-        <TouchableOpacity style={styles.backButton} onPress={handleBack} activeOpacity={0.8}>
-          <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
-        </TouchableOpacity>
-
-        <View style={styles.idleContent}>
-          <Ionicons name="camera-outline" size={90} color="#94A3B8" />
-          <Text style={styles.idleText}>
-            Camera access is needed to scan your face
-          </Text>
-
-          {canRequestPermission ? (
-            <TouchableOpacity
-              style={styles.allowButton}
-              onPress={handleRetryPermission}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.allowButtonText}>Allow Camera Access</Text>
-            </TouchableOpacity>
-          ) : (
+      <IdleScreen icon="camera-outline" message="Camera access is needed to scan your face">
+        {canRequestPermission ? (
+          <TouchableOpacity
+            style={styles.allowButton}
+            onPress={handleRetryPermission}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Allow camera access"
+          >
+            <Text style={styles.allowButtonText}>Allow Camera Access</Text>
+          </TouchableOpacity>
+        ) : (
+          <>
             <Text style={styles.idleText}>
               Please enable camera access in your device settings.
             </Text>
-          )}
-        </View>
-      </View>
+            <TouchableOpacity
+              style={styles.allowButton}
+              onPress={() => void Linking.openSettings()}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Open device settings"
+            >
+              <Text style={styles.allowButtonText}>Open Settings</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </IdleScreen>
     );
   }
 
@@ -398,9 +245,7 @@ function NativeSelfieCapture({
         </View>
       )}
 
-      <TouchableOpacity style={styles.backButton} onPress={handleBack} activeOpacity={0.8}>
-        <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
-      </TouchableOpacity>
+      <BackButton />
 
       <View style={styles.faceGuide}>
         <View style={[styles.faceGuideCornerTL, isFaceDetected && styles.faceGuideCornerActive]} />
@@ -409,10 +254,13 @@ function NativeSelfieCapture({
         <View style={[styles.faceGuideCornerBR, isFaceDetected && styles.faceGuideCornerActive]} />
       </View>
 
-      <Text style={[styles.hintText, !isFaceDetected && styles.hintTextWarn]}>
-        {isFaceDetected
-          ? "Face detected — hold steady and capture"
-          : "No face detected. Center your face inside the frame"}
+      <Text
+        style={[styles.hintText, (cameraError || !isFaceDetected) && styles.hintTextWarn]}
+      >
+        {cameraError ??
+          (isFaceDetected
+            ? LIVE_HINT_MESSAGES.ok
+            : LIVE_HINT_MESSAGES[faceHint])}
       </Text>
 
       <TouchableOpacity
@@ -420,6 +268,8 @@ function NativeSelfieCapture({
         onPress={handleCapture}
         disabled={!isFaceDetected || isCapturing || !isCameraReady}
         activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel="Capture face scan photo"
         accessibilityState={{ disabled: !isFaceDetected || isCapturing || !isCameraReady }}
       >
         {isCapturing ? (
@@ -437,154 +287,3 @@ function NativeSelfieCapture({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0F172A",
-  },
-  containerIdle: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  backButton: {
-    position: "absolute",
-    top: 48,
-    left: 24,
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: "#0EA5E9",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 10,
-    shadowColor: "#0EA5E9",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  faceGuide: {
-    position: "absolute",
-    top: "18%",
-    alignSelf: "center",
-    width: 280,
-    height: 340,
-  },
-  faceGuideCornerTL: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    width: 48,
-    height: 48,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
-    borderTopColor: "#0EA5E9",
-    borderLeftColor: "#0EA5E9",
-    borderTopLeftRadius: 24,
-  },
-  faceGuideCornerTR: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    width: 48,
-    height: 48,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
-    borderTopColor: "#0EA5E9",
-    borderRightColor: "#0EA5E9",
-    borderTopRightRadius: 24,
-  },
-  faceGuideCornerBL: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    width: 48,
-    height: 48,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
-    borderBottomColor: "#0EA5E9",
-    borderLeftColor: "#0EA5E9",
-    borderBottomLeftRadius: 24,
-  },
-  faceGuideCornerBR: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 48,
-    height: 48,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
-    borderBottomColor: "#0EA5E9",
-    borderRightColor: "#0EA5E9",
-    borderBottomRightRadius: 24,
-  },
-  faceGuideCornerActive: {
-    borderTopColor: "#22C55E",
-    borderLeftColor: "#22C55E",
-    borderRightColor: "#22C55E",
-    borderBottomColor: "#22C55E",
-  },
-  hintText: {
-    position: "absolute",
-    bottom: 130,
-    alignSelf: "center",
-    fontSize: 15,
-    color: "#FFFFFF",
-    backgroundColor: "rgba(15, 23, 42, 0.55)",
-    overflow: "hidden",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  hintTextWarn: {
-    backgroundColor: "rgba(190, 18, 60, 0.75)",
-  },
-  captureButton: {
-    position: "absolute",
-    bottom: 40,
-    alignSelf: "center",
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    borderWidth: 4,
-    borderColor: "#FFFFFF",
-    backgroundColor: "rgba(255, 255, 255, 0.35)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  captureButtonInner: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: "#FFFFFF",
-  },
-  captureButtonDisabled: {
-    borderColor: "#94A3B8",
-    backgroundColor: "rgba(148, 163, 184, 0.35)",
-  },
-  captureButtonInnerDisabled: {
-    backgroundColor: "#94A3B8",
-  },
-  idleContent: {
-    alignItems: "center",
-    paddingHorizontal: 32,
-  },
-  idleText: {
-    fontSize: 15,
-    color: "#94A3B8",
-    marginTop: 16,
-    textAlign: "center",
-  },
-  allowButton: {
-    marginTop: 24,
-    backgroundColor: "#0EA5E9",
-    borderRadius: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 32,
-  },
-  allowButtonText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#FFFFFF",
-  },
-});
