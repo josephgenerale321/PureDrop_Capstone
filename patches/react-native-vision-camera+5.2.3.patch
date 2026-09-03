@@ -1,0 +1,22 @@
+diff --git a/node_modules/react-native-vision-camera/src/hooks/internal/useCameraSession.ts b/node_modules/react-native-vision-camera/src/hooks/internal/useCameraSession.ts
+--- a/node_modules/react-native-vision-camera/src/hooks/internal/useCameraSession.ts
++++ b/node_modules/react-native-vision-camera/src/hooks/internal/useCameraSession.ts
+@@ -37,11 +37,16 @@ export function useCameraSession({
+   }, [enableMultiCamSupport, stableOnError])
+ 
+   // session teardown
+   useEffect(() => {
+     return () => {
+       // remove all connections
+-      session?.stop()
+-      session?.configure([])
++      // `.catch(..)` handlers are required here: these Nitro Promises must not
++      // be left pending-and-unreferenced, otherwise JS GC destroys them while
++      // still pending and their destructor rejects them with
++      // "Timeouted: JPromise was destroyed!", surfacing as an unhandled
++      // promise rejection. The session might already be disposed - ignore.
++      session?.stop().catch(() => {})
++      session?.configure([]).catch(() => {})
+     }
+   }, [session])
+ 

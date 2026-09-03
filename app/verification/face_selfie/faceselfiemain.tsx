@@ -1,7 +1,10 @@
-import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { type Href, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+const SELFIE_CAPTURE_ROUTE =
+  "/verification/face_selfie/cameraface_selfie/selfiecapture" as Href;
 
 const REQUIREMENTS: string[] = [
   "Face is clearly visible",
@@ -18,9 +21,9 @@ export default function FaceSelfieMainScreen() {
     }
   };
 
-  // Mockup handler — the real face scan flow will be wired up later.
+  // "Start Camera" launches the full-screen face recognition capture screen.
   const handleStartCamera = () => {
-    Alert.alert("Mockup", "Face Recognition camera is not implemented yet.");
+    router.push(SELFIE_CAPTURE_ROUTE);
   };
 
   return (
@@ -30,10 +33,10 @@ export default function FaceSelfieMainScreen() {
       </TouchableOpacity>
 
       <View style={styles.content}>
-        {/* Mockup camera preview — the real CameraView will replace this later. */}
+        {/* Static preview placeholder — the live camera opens on the capture screen */}
         <View style={styles.previewFrame}>
           <Ionicons name="person-circle-outline" size={110} color="#94A3B8" />
-          <Text style={styles.previewText}>Camera preview</Text>
+          <Text style={styles.previewText}>Press “Start Camera” to scan your face</Text>
         </View>
       </View>
 
@@ -49,7 +52,6 @@ export default function FaceSelfieMainScreen() {
 
         <TouchableOpacity style={styles.startButton} onPress={handleStartCamera} activeOpacity={0.8}>
           <Text style={styles.startButtonText}>Start Camera</Text>
-          <Ionicons name="checkmark" size={20} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -86,9 +88,9 @@ const styles = StyleSheet.create({
     aspectRatio: 3 / 4,
     borderRadius: 24,
     borderWidth: 2,
-    borderColor: "#94A3B8",
-    borderStyle: "dashed",
+    borderColor: "#0EA5E9",
     backgroundColor: "#F1F5F9",
+    overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -96,6 +98,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#64748B",
     marginTop: 12,
+    marginHorizontal: 16,
+    textAlign: "center",
   },
   footer: {
     alignItems: "stretch",
