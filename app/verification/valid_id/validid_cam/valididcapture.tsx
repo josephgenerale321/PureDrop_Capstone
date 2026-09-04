@@ -22,12 +22,22 @@ import {
   type IdPhotoSide,
 } from "../../../../components/verification/validid/valididcapture/idcapturefunc";
 import ValidIdCropper from "../../../../components/verification/validid/valididcapture/valididcropper";
+import CropperOldPhone from "../../../../components/verification/validid/valididcapture/cropperoldphone";
 
 const SIDE_TITLES: Record<IdPhotoSide, string> = {
   front: "Capture the Front of your ID",
   back: "Capture the Back of your ID",
   passport: "Capture your Passport Data Page",
 };
+
+// Android 12 and below on OEM skins (Vivo Funtouch OS, Oppo ColorOS...) report
+// 0/NaN PanResponder grant coordinates and synthesize spike moves, which
+// teleports the crop frame during resize. Those devices get the hardened
+// legacy gesture variant; everything else uses the standard cropper.
+const LEGACY_ANDROID_GESTURES_MAX_API = 32; // Android 12L (API 32)
+const useLegacyCropper =
+  Platform.OS === "android" && Number(Platform.Version) <= LEGACY_ANDROID_GESTURES_MAX_API;
+const IdCropper = useLegacyCropper ? CropperOldPhone : ValidIdCropper;
 
 const SIDE_HINTS: Record<IdPhotoSide, string> = {
   front: "Place the front of your ID inside the frame",
@@ -195,7 +205,9 @@ function NativeIdCapture({
         </View>
       )}
 
-      <BackButton />
+      {/* Hidden while the cropper is open — its elevation would draw it over
+          the crop overlay on Android, leaving two back buttons (X + this). */}
+      {!pendingPhoto && <BackButton />}
 
       <Text style={styles.sideTitle}>{SIDE_TITLES[side]}</Text>
 
@@ -227,9 +239,10 @@ function NativeIdCapture({
         )}
       </TouchableOpacity>
 
-      {/* Crop step — replaces the preview while a fresh capture is pending */}
+      {/* Crop step — replaces the preview while a fresh capture is pending.
+          CropperOldPhone on legacy Android OEM builds, standard otherwise. */}
       {pendingPhoto && (
-        <ValidIdCropper
+        <IdCropper
           photoUri={pendingPhoto}
           sideLabel={SIDE_TITLES[side]}
           onConfirm={handleCropConfirm}

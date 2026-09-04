@@ -13,6 +13,7 @@ import {
   saveLastGpsFix,
 } from "../../lib/regular_user/creategps";
 import { auth, db } from "../../firebaseConfig";
+import { fireNewReportEmail } from "./CreateReportEmail";
 import type { Coordinate, Region } from "./MapPicker";
 
 export type Attachment = {
@@ -772,6 +773,13 @@ const currentUser = auth.currentUser;
           lastReportAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+
+        // Report is committed with status "Pending" — fire-and-forget the
+        // resident email fan-out (Brevo via the send-new-report-email Edge
+        // Function). Best-effort by contract: it must never block, throw, or
+        // break the submit flow, and failures are only logged inside the
+        // Edge Function caller.
+        void fireNewReportEmail({ userId: currentUser.uid, reportId });
       } catch (error) {
         // Best-effort: delete any files that were uploaded before the failure so
         // we do not leave orphaned objects in storage. Non-blocking and never
