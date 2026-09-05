@@ -21,10 +21,13 @@ export default function ReviewSelfieDetailsScreen() {
     photoUri,
     mockScore,
     isSubmitConfirmOpen,
+    isUploadedModalOpen,
     handleBack,
     handleSubmit,
     handleConfirmSubmit,
     handleCloseConfirm,
+    handleLater,
+    handleVerifyIdNow,
   } = useReviewSelfieDetails();
 
   return (
@@ -103,6 +106,48 @@ export default function ReviewSelfieDetailsScreen() {
                 accessibilityLabel="Confirm and submit your face scan"
               >
                 <Text style={styles.confirmButtonText}>SUBMIT</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* "Face Scan Uploaded" lightbox (mockup) — the face scan counts as
+          saved; the user can verify their Valid ID now or pick Later. */}
+      {isUploadedModalOpen && (
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <View style={styles.uploadedIconWrap}>
+              <Ionicons name="checkmark-circle" size={40} color="#16A34A" />
+            </View>
+
+            <Text style={styles.confirmTitle}>Face Scan Uploaded</Text>
+            <Text style={styles.confirmMessage}>
+              Your face scan has been saved. Verify your Valid ID now to complete your
+              identity verification, or do it later.
+            </Text>
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmCancelButton]}
+                onPress={handleLater}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Skip the Valid ID for now"
+              >
+                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                  LATER
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmSubmitButton]}
+                onPress={handleVerifyIdNow}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Verify your Valid ID now"
+              >
+                <Text style={styles.confirmButtonText}>UPLOAD ID</Text>
               </TouchableOpacity>
             </View>
           </View>

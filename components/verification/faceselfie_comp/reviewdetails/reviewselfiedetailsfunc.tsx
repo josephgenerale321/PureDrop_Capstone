@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Platform } from "react-native";
+import { Platform } from "react-native";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 
@@ -20,6 +20,9 @@ export function useReviewSelfieDetails() {
   const mockScore = "92%";
 
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
+  // "Face Scan Uploaded" lightbox — shown after the (mockup) submit is
+  // confirmed, offering to verify the Valid ID now or later.
+  const [isUploadedModalOpen, setIsUploadedModalOpen] = useState(false);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -39,22 +42,41 @@ export function useReviewSelfieDetails() {
   const handleConfirmSubmit = () => {
     setIsSubmitConfirmOpen(false);
 
-    // Mockup — the real face-scan submission will be wired up later.
-    Alert.alert("Mockup", "Face scan submission is not implemented yet.");
+    // Mockup — the real face-scan submission will be wired up later. For now
+    // the submit counts as an upload and opens the "Valid ID now or later?"
+    // lightbox instead of a backend call.
+    setIsUploadedModalOpen(true);
   };
 
   const handleCloseConfirm = () => {
     setIsSubmitConfirmOpen(false);
   };
 
+  // "Later" — the face scan stays saved (mockup) but the Valid ID step is
+  // skipped for now; return to the verification hub so the user can do it
+  // from there whenever they want.
+  const handleLater = () => {
+    setIsUploadedModalOpen(false);
+    router.navigate("/verification/verificationmain");
+  };
+
+  // "Upload ID" — continue straight into the Valid ID flow.
+  const handleVerifyIdNow = () => {
+    setIsUploadedModalOpen(false);
+    router.push("/verification/valid_id/valid_id_main");
+  };
+
   return {
     photoUri,
     mockScore,
     isSubmitConfirmOpen,
+    isUploadedModalOpen,
     handleBack,
     handleSubmit,
     handleConfirmSubmit,
     handleCloseConfirm,
+    handleLater,
+    handleVerifyIdNow,
   };
 }
 

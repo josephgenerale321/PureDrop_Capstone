@@ -31,6 +31,10 @@ const PERMISSION_ALERT_TITLE = "Camera Permission";
 const PERMISSION_ALERT_MESSAGE =
   "Camera access is required for face verification. Please enable it in your device settings.";
 
+// How long concurrent permission requests are collapsed into one while a
+// native request may still be in-flight (see requestPermissionWithFeedback).
+const PERMISSION_REQUEST_GUARD_TIMEOUT_MS = 15_000;
+
 // react-native-vision-camera is native-only. The modules are loaded lazily on
 // first render so that (a) web never executes them and (b) an outdated dev
 // client (missing the native modules) shows a helpful screen instead of
@@ -273,12 +277,42 @@ export function useSelfieCapture({
 
   // Opens the (optional) permission prompt; a denied request surfaces the
   // same guidance alert whether it was auto-requested or retried by the user.
+  //
+  // Requests are serialized (with a 15s safety valve): firing
+  // requestPermission() while a previous native request is still in-flight
+  // overwrites Android's single PermissionListener slot (RN core limitation —
+  // see margelo/react-native-vision-camera#3834). The abandoned coroutine then
+  // never resolves and its JPromise is rejected on GC with
+  // "java.lang.RuntimeException: Timeouted: JPromise was destroyed!", which
+  // used to surface here as an "Uncaught (in promise)" router error because
+  // the promise chain had no catch. The .catch keeps that destructor
+  // rejection (which can also fire when a request outlives the screen) off
+  // the console; the hook's hasPermission flag remains the source of truth.
+  const isRequestingPermissionRef = useRef(false);
   const requestPermissionWithFeedback = useCallback(() => {
-    void requestPermission().then((granted) => {
-      if (!granted) {
-        Alert.alert(PERMISSION_ALERT_TITLE, PERMISSION_ALERT_MESSAGE);
-      }
-    });
+    if (isRequestingPermissionRef.current) {
+      return;
+    }
+    isRequestingPermissionRef.current = true;
+    // A leaked native request never resolves (that is the bug), so the guard
+    // must also be released by a timer, not only by the promise settling.
+    const releaseGuard = setTimeout(() => {
+      isRequestingPermissionRef.current = false;
+    }, PERMISSION_REQUEST_GUARD_TIMEOUT_MS);
+    requestPermission()
+      .then((granted) => {
+        if (!granted) {
+          Alert.alert(PERMISSION_ALERT_TITLE, PERMISSION_ALERT_MESSAGE);
+        }
+      })
+      .catch(() => {
+        // Abandoned/destroyed native request — permission state is still
+        // readable via hasPermission, so nothing to report.
+      })
+      .finally(() => {
+        clearTimeout(releaseGuard);
+        isRequestingPermissionRef.current = false;
+      });
   }, [requestPermission]);
 
   // Ask for camera permission once when the screen opens.

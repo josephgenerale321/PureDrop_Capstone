@@ -210,7 +210,7 @@ function NativeSelfieCapture({
             </Text>
             <TouchableOpacity
               style={styles.allowButton}
-              onPress={() => void Linking.openSettings()}
+              onPress={() => void Linking.openSettings().catch(() => {})}
               activeOpacity={0.8}
               accessibilityRole="button"
               accessibilityLabel="Open device settings"

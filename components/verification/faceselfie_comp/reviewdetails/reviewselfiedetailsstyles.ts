@@ -166,5 +166,15 @@ export const styles = StyleSheet.create({
   confirmCancelButtonText: {
     color: "#475569",
   },
+  // "Face Scan Uploaded" lightbox icon badge
+  uploadedIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#DCFCE7",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
 });
 

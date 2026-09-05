@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  Alert,
   Platform,
   ScrollView,
   StyleSheet,
@@ -35,6 +34,9 @@ export default function ReviewDetailsVerifMainScreen() {
     : "help-circle-outline";
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
+  // "Uploaded" lightbox — shown after the (mockup) submit is confirmed,
+  // instead of the previous mockup Alert.
+  const [isUploadedModalOpen, setIsUploadedModalOpen] = useState(false);
 
   // Track the live Firebase session so the banner always shows the account
   // that is actually signed in on this device (and updates if it changes).
@@ -64,13 +66,29 @@ export default function ReviewDetailsVerifMainScreen() {
   const handleConfirmSubmit = () => {
     setIsSubmitConfirmOpen(false);
 
-    // Mockup — the real verification submission will be wired up later.
-    Alert.alert(
-      "Mockup",
-      `Verification submission is not implemented yet.${
-        methodLabel ? ` (Method: ${methodLabel})` : ""
-      }`,
-    );
+    // Mockup — the real verification submission will be wired up later. For
+    // now the submit counts as an upload and opens the lightbox instead.
+    setIsUploadedModalOpen(true);
+  };
+
+  // "Later" (face upload) — the face scan stays saved (mockup) but the Valid
+  // ID step is skipped for now; return to the verification hub so the user
+  // can do it from there whenever they want.
+  const handleLater = () => {
+    setIsUploadedModalOpen(false);
+    router.navigate("/verification/verificationmain");
+  };
+
+  // "Upload ID" (face upload) — continue straight into the Valid ID flow.
+  const handleVerifyIdNow = () => {
+    setIsUploadedModalOpen(false);
+    router.push("/verification/valid_id/valid_id_main");
+  };
+
+  // "Done" (Valid ID / other uploads) — back to the verification hub.
+  const handleDone = () => {
+    setIsUploadedModalOpen(false);
+    router.navigate("/verification/verificationmain");
   };
 
   return (
@@ -166,6 +184,75 @@ export default function ReviewDetailsVerifMainScreen() {
                 <Text style={styles.confirmButtonText}>SUBMIT</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      )}
+
+      {/* "Uploaded" lightbox (mockup) — the submission counts as saved.
+          Face uploads offer the Valid ID now-or-later choice; other methods
+          just confirm with a Done button. */}
+      {isUploadedModalOpen && (
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <View style={styles.uploadedIconWrap}>
+              <Ionicons name="checkmark-circle" size={40} color="#16A34A" />
+            </View>
+
+            {method === "face" ? (
+              <>
+                <Text style={styles.confirmTitle}>Face Scan Uploaded</Text>
+                <Text style={styles.confirmMessage}>
+                  Your face scan has been saved. Verify your Valid ID now to complete your
+                  identity verification, or do it later.
+                </Text>
+
+                <View style={styles.confirmActions}>
+                  <TouchableOpacity
+                    style={[styles.confirmButton, styles.confirmCancelButton]}
+                    onPress={handleLater}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Skip the Valid ID for now"
+                  >
+                    <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                      LATER
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.confirmButton, styles.confirmSubmitButton]}
+                    onPress={handleVerifyIdNow}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Verify your Valid ID now"
+                  >
+                    <Text style={styles.confirmButtonText}>UPLOAD ID</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.confirmTitle}>
+                  {methodLabel ? `${methodLabel} Uploaded` : "Verification Uploaded"}
+                </Text>
+                <Text style={styles.confirmMessage}>
+                  Your submission has been saved and will be reviewed to complete your
+                  identity verification.
+                </Text>
+
+                <View style={styles.confirmActions}>
+                  <TouchableOpacity
+                    style={[styles.confirmButton, styles.confirmSubmitButton]}
+                    onPress={handleDone}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Finish and return to verification"
+                  >
+                    <Text style={styles.confirmButtonText}>DONE</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
           </View>
         </View>
       )}
@@ -386,6 +473,16 @@ const styles = StyleSheet.create({
   },
   confirmCancelButtonText: {
     color: "#475569",
+  },
+  // "Uploaded" lightbox icon badge
+  uploadedIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#DCFCE7",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
   },
 });
 

@@ -1,17 +1,28 @@
-import { useEffect, useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import {
+  BackHandler,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { type Href, useRouter } from "expo-router";
+import { type Href, useRouter, useFocusEffect } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../../firebaseConfig";
 
 const FACE_SELFIE_ROUTE = "/verification/face_selfie/faceselfiemain" as Href;
 const VALID_ID_ROUTE = "/verification/valid_id/valid_id_main" as Href;
+const START_ROUTE = "/start" as Href;
 
 export default function VerificationMainScreen() {
   const router = useRouter();
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  // Lightbox confirmation for the back action — opened by both the on-screen
+  // arrow and the Android hardware back button.
+  const [isBackConfirmOpen, setIsBackConfirmOpen] = useState(false);
 
   // Track the live Firebase session so the banner always shows the account
   // that is actually signed in on this device (and updates if it changes).
@@ -23,10 +34,56 @@ export default function VerificationMainScreen() {
     return unsubscribe;
   }, []);
 
+  // A single back press opens the lightbox; the user makes an explicit
+  // choice there. Returns true because the press is always consumed (used
+  // to consume Android hardware back events).
+  const attemptBack = useCallback((): boolean => {
+    setIsBackConfirmOpen(true);
+    return true;
+  }, []);
+
+  // Android hardware back opens the same lightbox; while it is open,
+  // hardware back just dismisses it. Active only while this screen is
+  // focused, so back navigation from nested screens keeps working.
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== "android") {
+        return undefined;
+      }
+
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        () => {
+          if (isBackConfirmOpen) {
+            setIsBackConfirmOpen(false);
+            return true;
+          }
+          return attemptBack();
+        }
+      );
+
+      return () => {
+        subscription.remove();
+      };
+    }, [attemptBack, isBackConfirmOpen])
+  );
+
   const handleBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-    }
+    attemptBack();
+  };
+
+  // [ STAY ] — close the lightbox and stay on this screen.
+  const handleStayBack = () => {
+    setIsBackConfirmOpen(false);
+  };
+
+  // [ GO BACK ] — leave for the start screen.
+  const handleConfirmBack = () => {
+    setIsBackConfirmOpen(false);
+    // navigate() pops back to /start when it is already in the stack (it
+    // always is — start pushes this screen), so no duplicate Start screen
+    // gets stacked.
+    router.navigate(START_ROUTE);
   };
 
   const handleFaceRecognition = () => {
@@ -38,49 +95,99 @@ export default function VerificationMainScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <TouchableOpacity style={styles.backButton} onPress={handleBack} activeOpacity={0.8}>
-        <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
-      </TouchableOpacity>
+    <>
+      <SafeAreaView style={styles.container}>
+        <TouchableOpacity style={styles.backButton} onPress={handleBack} activeOpacity={0.8}>
+          <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
+        </TouchableOpacity>
 
-      <View style={styles.content}>
-        <Text style={styles.title}>Identify Yourself</Text>
+        <View style={styles.content}>
+          <Text style={styles.title}>Identify Yourself</Text>
 
-        {/* Signed-in account banner — shows the email of the live session */}
-        <View style={styles.identityBanner}>
-          <View style={styles.identityIconWrap}>
-            <Ionicons name="mail-outline" size={18} color="#0EA5E9" />
+          {/* Signed-in account banner — shows the email of the live session */}
+          <View style={styles.identityBanner}>
+            <View style={styles.identityIconWrap}>
+              <Ionicons name="mail-outline" size={18} color="#0EA5E9" />
+            </View>
+            <View style={styles.identityTextWrap}>
+              <Text style={styles.identityLabel}>Verifying as</Text>
+              <Text
+                style={[styles.identityEmail, !userEmail && styles.identityEmailMissing]}
+                numberOfLines={1}
+              >
+                {userEmail ?? "Not signed in"}
+              </Text>
+            </View>
           </View>
-          <View style={styles.identityTextWrap}>
-            <Text style={styles.identityLabel}>Verifying as</Text>
-            <Text
-              style={[styles.identityEmail, !userEmail && styles.identityEmailMissing]}
-              numberOfLines={1}
-            >
-              {userEmail ?? "Not signed in"}
+
+          <TouchableOpacity
+            style={styles.optionCard}
+            onPress={handleFaceRecognition}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="camera-outline" size={30} color="#0F172A" />
+            <Text style={styles.optionText}>Face Recognition</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.optionCard}
+            onPress={handleValidId}
+            activeOpacity={0.8}
+          >
+            {/* Mini ID-card icon (CR80-like proportions): a photo block plus
+                text lines, so it reads as an actual valid ID instead of a
+                generic card glyph */}
+            <View style={styles.idCardIcon}>
+              <View style={styles.idCardIconPhoto} />
+              <View style={styles.idCardIconLines}>
+                <View style={styles.idCardIconLine} />
+                <View style={[styles.idCardIconLine, styles.idCardIconLineShort]} />
+              </View>
+            </View>
+            <Text style={styles.optionText}>Verify your id</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+
+      {/* Back confirmation lightbox — verification-aware: leaving is safe,
+          progress is saved and can be continued later (same pattern as the
+          other verification modals). */}
+      {isBackConfirmOpen && (
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>Cancel Verification?</Text>
+            <Text style={styles.confirmMessage}>
+              Your Face Recognition and Valid ID progress will be saved. You can come back
+              and continue your verification anytime. Go back to the start screen?
             </Text>
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmCancelButton]}
+                onPress={handleStayBack}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Stay on this screen"
+              >
+                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                  STAY
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmSubmitButton]}
+                onPress={handleConfirmBack}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Go back to the start screen"
+              >
+                <Text style={styles.confirmButtonText}>LATER</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
-
-        <TouchableOpacity
-          style={styles.optionCard}
-          onPress={handleFaceRecognition}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="camera-outline" size={30} color="#0F172A" />
-          <Text style={styles.optionText}>Face Recognition</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.optionCard}
-          onPress={handleValidId}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="id-card-outline" size={30} color="#0F172A" />
-          <Text style={styles.optionText}>Verify your id</Text>
-        </TouchableOpacity>
-      </View>
-    </SafeAreaView>
+      )}
+    </>
   );
 }
 
@@ -103,6 +210,77 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 4,
+  },
+  // Back confirmation lightbox (same pattern as the other verification modals)
+  confirmOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(15, 23, 42, 0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+  },
+  confirmCard: {
+    width: "100%",
+    maxWidth: 320,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 24,
+    paddingVertical: 32,
+    paddingHorizontal: 24,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    alignItems: "center",
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  confirmTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#0F172A",
+    textAlign: "center",
+    marginBottom: 10,
+  },
+  confirmMessage: {
+    fontSize: 13,
+    color: "#64748B",
+    textAlign: "center",
+    marginBottom: 24,
+  },
+  confirmActions: {
+    width: "100%",
+    flexDirection: "row",
+    justifyContent: "space-around",
+    gap: 16,
+  },
+  confirmButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  confirmCancelButton: {
+    backgroundColor: "#F1F5F9",
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+  },
+  confirmSubmitButton: {
+    backgroundColor: "#0EA5E9",
+    shadowColor: "#0EA5E9",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  confirmButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 15,
+  },
+  confirmCancelButtonText: {
+    color: "#475569",
   },
   content: {
     flex: 1,
@@ -166,6 +344,39 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: "#0F172A",
     marginLeft: 20,
+  },
+  // Mini ID-card icon on the "Verify your id" option card. Fixed at 30px
+  // wide — the same footprint as the 30px Ionicons used on the Face
+  // Recognition card — so both rows' text lines up (height 30/1.586 ≈ 19
+  // keeps the CR80 card ratio).
+  idCardIcon: {
+    width: 30,
+    height: 19,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: "#0F172A",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 3,
+  },
+  idCardIconPhoto: {
+    width: 6,
+    height: 9,
+    borderRadius: 1,
+    backgroundColor: "#0F172A",
+  },
+  idCardIconLines: {
+    flex: 1,
+    gap: 2,
+  },
+  idCardIconLine: {
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: "#0F172A",
+  },
+  idCardIconLineShort: {
+    width: "60%",
   },
 });
 
