@@ -17,6 +17,9 @@ import { auth, db } from "../../firebaseConfig";
 
 type Lightbox = { label: string; uri: string } | null;
 
+// Fallback destination when this screen has no history to pop.
+const VERIFICATION_HUB_ROUTE = "/verification/verificationmain";
+
 /**
  * Review Submission screen — opened from the verification hub's "Review
  * Submission" button. A read-only overview of EVERYTHING the signed-in user
@@ -125,6 +128,14 @@ export default function ReviewSubmissionScreen() {
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
+    } else {
+      // No history to pop (deep link / app-restart entry) — land on the
+      // verification hub instead of leaving a dead back button.
+      try {
+        router.replace(VERIFICATION_HUB_ROUTE);
+      } catch {
+        // Navigation must never crash the app.
+      }
     }
   };
 

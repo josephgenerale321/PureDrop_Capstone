@@ -134,6 +134,14 @@ export default function ValidIdMainScreen() {
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
+    } else {
+      // No history to pop (deep link / app-restart entry) — land on the
+      // verification hub instead of leaving a dead back button.
+      try {
+        router.replace(VERIFICATION_HUB_ROUTE);
+      } catch {
+        // Navigation must never crash the app.
+      }
     }
   };
 
@@ -416,113 +424,126 @@ export default function ValidIdMainScreen() {
       </SafeAreaView>
 
       {isSubmitConfirmOpen && (
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>Submit this Valid ID?</Text>
-            <Text style={styles.confirmMessage}>
-              Please double check your Valid ID before you submit. You won&apos;t be able to edit
-              it after submission.
-            </Text>
+        <Modal
+          transparent
+          animationType="fade"
+          onRequestClose={() => setIsSubmitConfirmOpen(false)}
+        >
+          <View style={styles.confirmOverlay}>
+            <View style={styles.confirmCard}>
+              <Text style={styles.confirmTitle}>Submit this Valid ID?</Text>
+              <Text style={styles.confirmMessage}>
+                Please double check your Valid ID before you submit. You won&apos;t be able to edit
+                it after submission.
+              </Text>
 
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmCancelButton]}
-                onPress={() => setIsSubmitConfirmOpen(false)}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Go back without submitting"
-              >
-                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
-                  GO BACK
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.confirmActions}>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmCancelButton]}
+                  onPress={() => setIsSubmitConfirmOpen(false)}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Go back without submitting"
+                >
+                  <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                    GO BACK
+                  </Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmSubmitButton]}
-                onPress={handleConfirmSubmit}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Confirm and submit your Valid ID"
-              >
-                <Text style={styles.confirmButtonText}>SUBMIT</Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmSubmitButton]}
+                  onPress={handleConfirmSubmit}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Confirm and submit your Valid ID"
+                >
+                  <Text style={styles.confirmButtonText}>SUBMIT</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
+        </Modal>
       )}
 
       {/* "Valid ID Submitted" result lightbox — face scan still missing, so
           the card offers to scan now (fresh flow, nothing to overwrite) or
           defer to the hub. Same card pattern as the face flow's "Face Scan
-          Uploaded" lightbox. */}
+          Uploaded" lightbox. Android hardware back dismisses it the same way
+          "Later" does: hub. */}
       {submissionOutcome === "awaiting-face" && (
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmCard}>
-            <View style={[styles.resultIconWrap, styles.resultIconWrapSuccess]}>
-              <Ionicons name="checkmark-circle" size={40} color="#16A34A" />
-            </View>
+        <Modal transparent animationType="fade" onRequestClose={handleGoToHub}>
+          <View style={styles.confirmOverlay}>
+            <View style={styles.confirmCard}>
+              <View style={[styles.resultIconWrap, styles.resultIconWrapSuccess]}>
+                <Ionicons name="checkmark-circle" size={40} color="#16A34A" />
+              </View>
 
-            <Text style={styles.confirmTitle}>Valid ID Submitted</Text>
-            <Text style={styles.confirmMessage}>
-              Your Valid ID has been saved. Complete your face scan to finish your
-              identity verification, or do it later.
-            </Text>
+              <Text style={styles.confirmTitle}>Valid ID Submitted</Text>
+              <Text style={styles.confirmMessage}>
+                Your Valid ID has been saved. Complete your face scan to finish your
+                identity verification, or do it later.
+              </Text>
 
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmCancelButton]}
-                onPress={handleGoToHub}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Do the face scan later"
-              >
-                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
-                  LATER
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.confirmActions}>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmCancelButton]}
+                  onPress={handleGoToHub}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Do the face scan later"
+                >
+                  <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                    LATER
+                  </Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmSubmitButton]}
-                onPress={handleScanFaceNow}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Scan your face now"
-              >
-                <Text style={styles.confirmButtonText}>SCAN FACE NOW</Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmSubmitButton]}
+                  onPress={handleScanFaceNow}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Scan your face now"
+                >
+                  <Text style={styles.confirmButtonText}>SCAN FACE NOW</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
+        </Modal>
       )}
 
       {/* "Pending Admin Review" result lightbox — both steps are in; the hub
-          shows both check marks and auto-advances to Home on approval. */}
+          shows both check marks and auto-advances to Home on approval.
+          Android hardware back dismisses it the same way the only button
+          does: hub. */}
       {submissionOutcome === "pending-review" && (
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmCard}>
-            <View style={[styles.resultIconWrap, styles.resultIconWrapPending]}>
-              <Ionicons name="hourglass-outline" size={36} color="#854D0E" />
-            </View>
+        <Modal transparent animationType="fade" onRequestClose={handleGoToHub}>
+          <View style={styles.confirmOverlay}>
+            <View style={styles.confirmCard}>
+              <View style={[styles.resultIconWrap, styles.resultIconWrapPending]}>
+                <Ionicons name="hourglass-outline" size={36} color="#854D0E" />
+              </View>
 
-            <Text style={styles.confirmTitle}>Pending Admin Review</Text>
-            <Text style={styles.confirmMessage}>
-              Your face scan and Valid ID are both in. You can start using the app
-              once an admin approves your verification.
-            </Text>
+              <Text style={styles.confirmTitle}>Pending Admin Review</Text>
+              <Text style={styles.confirmMessage}>
+                Your face scan and Valid ID are both in. You can start using the app
+                once an admin approves your verification.
+              </Text>
 
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmSubmitButton]}
-                onPress={handleGoToHub}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Go to the verification hub"
-              >
-                <Text style={styles.confirmButtonText}>GO TO HUB</Text>
-              </TouchableOpacity>
+              <View style={styles.confirmActions}>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmSubmitButton]}
+                  onPress={handleGoToHub}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Go to the verification hub"
+                >
+                  <Text style={styles.confirmButtonText}>GO TO HUB</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
+        </Modal>
       )}
       {/* Attached-photo action card — opened by tapping an attached box. */}
       <Modal

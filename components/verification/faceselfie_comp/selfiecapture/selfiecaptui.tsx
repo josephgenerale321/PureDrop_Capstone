@@ -11,11 +11,23 @@ import { styles } from "./selfiecaptstyles";
  * route file free of duplicated fallback-screen JSX.
  */
 
+// Fallback destination when the host screen has no history to pop — the
+// verification hub, from which every verification flow is reachable.
+const VERIFICATION_HUB_ROUTE = "/verification/verificationmain";
+
 export function BackButton() {
   const router = useRouter();
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
+    } else {
+      // No history to pop (deep link / app-restart entry) — land on the
+      // verification hub instead of leaving a dead back button.
+      try {
+        router.replace(VERIFICATION_HUB_ROUTE);
+      } catch {
+        // Navigation must never crash the app.
+      }
     }
   };
 

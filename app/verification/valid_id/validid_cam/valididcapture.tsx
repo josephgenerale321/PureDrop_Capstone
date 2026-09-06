@@ -1,6 +1,7 @@
-import { memo, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import {
   ActivityIndicator,
+  BackHandler,
   Linking,
   Platform,
   StyleSheet,
@@ -9,9 +10,9 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
-import { styles } from "../../../../components/verification/validid/valididcapture/idcapturestyles";
 import { BackButton, IdleScreen } from "../../../../components/verification/faceselfie_comp/selfiecapture/selfiecaptui";
+import { styles } from "../../../../components/verification/validid/valididcapture/idcapturestyles";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import {
   loadNativeModules,
   retryLoadModules,
@@ -147,6 +148,38 @@ function NativeIdCapture({
     handleCropConfirm,
     handleCropCancel,
   } = useIdCapture({ visionCamera, side });
+
+  // Android hardware back: while the cropper is open the on-screen back
+  // button is hidden (its elevation would draw it over the crop overlay), so
+  // back must CANCEL the crop instead of popping the whole screen — popping
+  // would throw away the just-captured photo and dump the user out of the
+  // flow. Back is also swallowed while the shutter is mid-flight so a
+  // capture can't be aborted half-way. Active only while this screen is
+  // focused, so back navigation from other screens keeps working.
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== "android") {
+        return undefined;
+      }
+
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        () => {
+          if (pendingPhoto) {
+            handleCropCancel();
+            return true;
+          }
+          // Swallow back while a capture is in flight; otherwise let the
+          // default pop happen.
+          return isCapturing;
+        },
+      );
+
+      return () => {
+        subscription.remove();
+      };
+    }, [pendingPhoto, handleCropCancel, isCapturing]),
+  );
 
   if (!hasPermission) {
     return (

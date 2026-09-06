@@ -153,6 +153,14 @@ export function useReviewSelfieDetails() {
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
+    } else {
+      // No history to pop (deep link / app-restart entry) — land on the
+      // verification hub instead of leaving a dead back button.
+      try {
+        router.replace(VERIFICATION_HUB_ROUTE);
+      } catch {
+        // Navigation must never crash the app.
+      }
     }
   };
 

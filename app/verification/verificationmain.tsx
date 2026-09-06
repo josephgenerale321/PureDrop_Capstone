@@ -232,10 +232,16 @@ export default function VerificationMainScreen() {
     // verifies the account (or re-recorded if they back out again).
     // Fire-and-forget — a failed write only costs one extra redirect.
     void markVerificationLater();
-    // navigate() pops back to /start when it is already in the stack (it
-    // always is — start pushes this screen), so no duplicate Start screen
-    // gets stacked.
-    router.navigate(START_ROUTE);
+    // dismissTo() pops back to /start when it is already in the stack at any
+    // depth (even past intermediate screens such as /login) — and when it is
+    // NOT in the stack (deep link / app-restart redirect), it REPLACES this
+    // screen instead of pushing a new /start on top, so the verification hub
+    // can never be left underneath for the hardware back to bounce back into.
+    try {
+      router.dismissTo(START_ROUTE);
+    } catch {
+      // Navigation must never crash the app.
+    }
   };
 
   const handleFaceRecognition = () => {

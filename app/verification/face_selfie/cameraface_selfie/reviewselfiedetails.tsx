@@ -1,5 +1,6 @@
 import {
   Image,
+  Modal,
   ScrollView,
   Text,
   TouchableOpacity,
@@ -112,140 +113,156 @@ export default function ReviewSelfieDetailsScreen() {
       </SafeAreaView>
 
       {isSubmitConfirmOpen && (
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>Submit Face Scan?</Text>
-            <Text style={styles.confirmMessage}>
-              Please double check your face scan before you submit. You can retake or
-              delete it later from the Face Recognition screen.
-            </Text>
+        <Modal
+          transparent
+          animationType="fade"
+          onRequestClose={handleCloseConfirm}
+        >
+          <View style={styles.confirmOverlay}>
+            <View style={styles.confirmCard}>
+              <Text style={styles.confirmTitle}>Submit Face Scan?</Text>
+              <Text style={styles.confirmMessage}>
+                Please double check your face scan before you submit. You can retake or
+                delete it later from the Face Recognition screen.
+              </Text>
 
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmCancelButton]}
-                onPress={handleCloseConfirm}
-                activeOpacity={0.8}
-                disabled={isSubmitting}
-                accessibilityRole="button"
-                accessibilityLabel="Go back without submitting"
-              >
-                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
-                  GO BACK
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.confirmActions}>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmCancelButton]}
+                  onPress={handleCloseConfirm}
+                  activeOpacity={0.8}
+                  disabled={isSubmitting}
+                  accessibilityRole="button"
+                  accessibilityLabel="Go back without submitting"
+                >
+                  <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                    GO BACK
+                  </Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmSubmitButton]}
-                onPress={handleConfirmSubmit}
-                activeOpacity={0.8}
-                disabled={isSubmitting}
-                accessibilityRole="button"
-                accessibilityLabel="Confirm and submit your face scan"
-              >
-                <Text style={styles.confirmButtonText}>
-                  {isSubmitting ? "SUBMITTING..." : "SUBMIT"}
-                </Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmSubmitButton]}
+                  onPress={handleConfirmSubmit}
+                  activeOpacity={0.8}
+                  disabled={isSubmitting}
+                  accessibilityRole="button"
+                  accessibilityLabel="Confirm and submit your face scan"
+                >
+                  <Text style={styles.confirmButtonText}>
+                    {isSubmitting ? "SUBMITTING..." : "SUBMIT"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
+        </Modal>
       )}
 
       {/* "Face Scan Uploaded" lightbox (mockup) — the face scan counts as
-          saved; the user can verify their Valid ID now or pick Later. */}
+          saved; the user can verify their Valid ID now or pick Later. Android
+          hardware back dismisses it the same way "Later" does: hub. */}
       {isUploadedModalOpen && (
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmCard}>
-            <View style={styles.uploadedIconWrap}>
-              <Ionicons name="checkmark-circle" size={40} color="#16A34A" />
-            </View>
+        <Modal transparent animationType="fade" onRequestClose={handleLater}>
+          <View style={styles.confirmOverlay}>
+            <View style={styles.confirmCard}>
+              <View style={styles.uploadedIconWrap}>
+                <Ionicons name="checkmark-circle" size={40} color="#16A34A" />
+              </View>
 
-            <Text style={styles.confirmTitle}>Face Scan Uploaded</Text>
-            <Text style={styles.confirmMessage}>
-              Your face scan has been saved. Verify your Valid ID now to complete your
-              identity verification, or do it later.
-            </Text>
+              <Text style={styles.confirmTitle}>Face Scan Uploaded</Text>
+              <Text style={styles.confirmMessage}>
+                Your face scan has been saved. Verify your Valid ID now to complete your
+                identity verification, or do it later.
+              </Text>
 
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmCancelButton]}
-                onPress={handleLater}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Skip the Valid ID for now"
-              >
-                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
-                  LATER
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.confirmActions}>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmCancelButton]}
+                  onPress={handleLater}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Skip the Valid ID for now"
+                >
+                  <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                    LATER
+                  </Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmSubmitButton]}
-                onPress={handleVerifyIdNow}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Verify your Valid ID now"
-              >
-                <Text style={styles.confirmButtonText}>UPLOAD ID</Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmSubmitButton]}
+                  onPress={handleVerifyIdNow}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Verify your Valid ID now"
+                >
+                  <Text style={styles.confirmButtonText}>UPLOAD ID</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
+        </Modal>
       )}
 
       {/* "Valid ID Already Submitted" lightbox — opened when the user taps
           UPLOAD ID with a Valid ID already on file (e.g. after retaking
           their face scan): the fresh submission flow would silently
-          overwrite it, so the choice is surfaced first. */}
+          overwrite it, so the choice is surfaced first. Android hardware
+          back dismisses it the same way "Maybe later" does. */}
       {isReplaceIdModalOpen && (
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmCard}>
-            <View style={styles.uploadedIconWrap}>
-              <Ionicons name="id-card-outline" size={36} color="#0EA5E9" />
-            </View>
+        <Modal
+          transparent
+          animationType="fade"
+          onRequestClose={handleCloseReplaceModal}
+        >
+          <View style={styles.confirmOverlay}>
+            <View style={styles.confirmCard}>
+              <View style={styles.uploadedIconWrap}>
+                <Ionicons name="id-card-outline" size={36} color="#0EA5E9" />
+              </View>
 
-            <Text style={styles.confirmTitle}>Valid ID Already Submitted</Text>
-            <Text style={styles.confirmMessage}>
-              Your Valid ID is already on file. You can view the submitted ID, or
-              replace it with a new submission — replacing will overwrite the
-              stored photos and it will be reviewed again by an admin.
-            </Text>
+              <Text style={styles.confirmTitle}>Valid ID Already Submitted</Text>
+              <Text style={styles.confirmMessage}>
+                Your Valid ID is already on file. You can view the submitted ID, or
+                replace it with a new submission — replacing will overwrite the
+                stored photos and it will be reviewed again by an admin.
+              </Text>
 
-            <View style={styles.confirmActions}>
+              <View style={styles.confirmActions}>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmCancelButton]}
+                  onPress={handleViewSubmittedId}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="View your submitted Valid ID"
+                >
+                  <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                    VIEW MY ID
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmSubmitButton]}
+                  onPress={handleReplaceValidId}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Replace your submitted Valid ID"
+                >
+                  <Text style={styles.confirmButtonText}>REPLACE ID</Text>
+                </TouchableOpacity>
+              </View>
+
               <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmCancelButton]}
-                onPress={handleViewSubmittedId}
+                style={styles.modalCancelButton}
+                onPress={handleCloseReplaceModal}
                 activeOpacity={0.8}
                 accessibilityRole="button"
-                accessibilityLabel="View your submitted Valid ID"
+                accessibilityLabel="Decide later"
               >
-                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
-                  VIEW MY ID
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmSubmitButton]}
-                onPress={handleReplaceValidId}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Replace your submitted Valid ID"
-              >
-                <Text style={styles.confirmButtonText}>REPLACE ID</Text>
+                <Text style={styles.modalCancelButtonText}>Maybe later</Text>
               </TouchableOpacity>
             </View>
-
-            <TouchableOpacity
-              style={styles.modalCancelButton}
-              onPress={handleCloseReplaceModal}
-              activeOpacity={0.8}
-              accessibilityRole="button"
-              accessibilityLabel="Decide later"
-            >
-              <Text style={styles.modalCancelButtonText}>Maybe later</Text>
-            </TouchableOpacity>
           </View>
-        </View>
+        </Modal>
       )}
     </>
   );

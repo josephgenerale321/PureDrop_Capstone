@@ -44,6 +44,9 @@ const SUBMITTED_VIEW_ROUTE = "/verification/valid_id/valid_id_submittedview" as 
 // hand-off as the original submission screen).
 const FACE_SELFIE_ROUTE = "/verification/face_selfie/faceselfiemain" as Href;
 
+// Fallback destination when this screen has no history to pop.
+const VERIFICATION_HUB_ROUTE = "/verification/verificationmain" as Href;
+
 // Mockup ID types — the real list will come from the backend later.
 const VALID_ID_TYPES: string[] = [
   "Philippine National ID (PhilID)",
@@ -225,6 +228,14 @@ export default function ValidIdEditMainScreen() {
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
+    } else {
+      // No history to pop (deep link / app-restart entry) — land on the
+      // verification hub instead of leaving a dead back button.
+      try {
+        router.replace(VERIFICATION_HUB_ROUTE);
+      } catch {
+        // Navigation must never crash the app.
+      }
     }
   };
 
@@ -491,40 +502,46 @@ export default function ValidIdEditMainScreen() {
       </SafeAreaView>
 
       {isSubmitConfirmOpen && (
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>Update this Valid ID?</Text>
-            <Text style={styles.confirmMessage}>
-              Photos you kept stay as they are — retaken photos replace the stored ones.
-              Please double check everything before saving.
-            </Text>
+        <Modal
+          transparent
+          animationType="fade"
+          onRequestClose={() => setIsSubmitConfirmOpen(false)}
+        >
+          <View style={styles.confirmOverlay}>
+            <View style={styles.confirmCard}>
+              <Text style={styles.confirmTitle}>Update this Valid ID?</Text>
+              <Text style={styles.confirmMessage}>
+                Photos you kept stay as they are — retaken photos replace the stored ones.
+                Please double check everything before saving.
+              </Text>
 
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmCancelButton]}
-                onPress={() => setIsSubmitConfirmOpen(false)}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Go back without saving"
-              >
-                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
-                  GO BACK
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.confirmActions}>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmCancelButton]}
+                  onPress={() => setIsSubmitConfirmOpen(false)}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Go back without saving"
+                >
+                  <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                    GO BACK
+                  </Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.confirmButton, styles.confirmSubmitButton]}
-                onPress={handleConfirmSubmit}
-                activeOpacity={0.8}
-                disabled={isSubmitting}
-                accessibilityRole="button"
-                accessibilityLabel="Confirm and save your Valid ID changes"
-              >
-                <Text style={styles.confirmButtonText}>SAVE</Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmSubmitButton]}
+                  onPress={handleConfirmSubmit}
+                  activeOpacity={0.8}
+                  disabled={isSubmitting}
+                  accessibilityRole="button"
+                  accessibilityLabel="Confirm and save your Valid ID changes"
+                >
+                  <Text style={styles.confirmButtonText}>SAVE</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
+        </Modal>
       )}
       {/* Attached-photo action card — opened by tapping an attached box. */}
       <Modal

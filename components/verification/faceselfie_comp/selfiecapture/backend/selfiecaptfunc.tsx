@@ -21,6 +21,10 @@ import type { Face } from "react-native-vision-camera-face-detector";
 const REVIEW_SELFIE_ROUTE =
   "/verification/face_selfie/cameraface_selfie/reviewselfiedetails" as Href;
 
+// Fallback destination when the capture screen has no history to pop.
+const FACE_SELFIE_MAIN_ROUTE =
+  "/verification/face_selfie/faceselfiemain" as Href;
+
 // Delay before the single retry of a capture aborted by the transient
 // "Camera is closed." re-bind window on Android.
 const CAPTURE_RETRY_DELAY_MS = 350;
@@ -442,6 +446,14 @@ export function useSelfieCapture({
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
+    } else {
+      // No history to pop (deep link / app-restart entry) — land on the
+      // face-scan requirements screen instead of leaving a dead button.
+      try {
+        router.replace(FACE_SELFIE_MAIN_ROUTE);
+      } catch {
+        // Navigation must never crash the app.
+      }
     }
   };
 

@@ -6,6 +6,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 const SELFIE_CAPTURE_ROUTE =
   "/verification/face_selfie/cameraface_selfie/selfiecapture" as Href;
 
+// Fallback destination when this screen has no history to pop.
+const VERIFICATION_HUB_ROUTE = "/verification/verificationmain" as Href;
+
 const REQUIREMENTS: string[] = [
   "Face is clearly visible",
   "Good lighting",
@@ -18,6 +21,14 @@ export default function FaceSelfieMainScreen() {
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
+    } else {
+      // No history to pop (deep link / app-restart entry) — land on the
+      // verification hub instead of leaving a dead back button.
+      try {
+        router.replace(VERIFICATION_HUB_ROUTE);
+      } catch {
+        // Navigation must never crash the app.
+      }
     }
   };
 
