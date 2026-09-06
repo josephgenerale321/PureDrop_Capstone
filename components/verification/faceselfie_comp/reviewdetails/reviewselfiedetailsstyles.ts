@@ -29,6 +29,9 @@ export const styles = StyleSheet.create({
     flexGrow: 1,
     alignItems: "center",
     paddingTop: 24,
+    // Breathing room under the "What was checked" card — without it the
+    // card sits flush against the fixed footer (Submit) when scrolled down.
+    paddingBottom: 32,
   },
   title: {
     fontSize: 24,
@@ -73,6 +76,41 @@ export const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#0EA5E9",
     marginTop: 6,
+  },
+  // Liveness checklist card — the measured checks behind the score.
+  checklistCard: {
+    width: "85%",
+    marginTop: 24,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    gap: 14,
+  },
+  checklistHeading: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#475569",
+  },
+  checkRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  checkTextWrap: {
+    flex: 1,
+  },
+  checkLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0F172A",
+  },
+  checkDetail: {
+    fontSize: 12,
+    color: "#64748B",
+    marginTop: 2,
   },
   footer: {
     alignItems: "center",
@@ -180,6 +218,17 @@ export const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
+  },
+  // "Maybe later" text link at the bottom of the Valid ID Already Submitted
+  // lightbox — plain, low-emphasis, same look as the valid-id action cancel.
+  modalCancelButton: {
+    marginTop: 14,
+    paddingVertical: 8,
+  },
+  modalCancelButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#94A3B8",
   },
 });
 

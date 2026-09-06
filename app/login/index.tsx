@@ -23,6 +23,9 @@ const FORGOT_PASSWORD_ROUTE = "/login/forgot_password" as Href;
 // Rejection notice screen — shown when the admin rejected the user's
 // verification (ID / face photo). Same design as the email success screen.
 const REJECTED_ROUTE = "/login/validation/rejectedverif" as Href;
+// Legacy notice screen — old accounts the admin marked "verified" without
+// real submissions still owe the Valid ID + face scan (success-style screen).
+const LEGACY_ROUTE = "/login/validation/legacyverif" as Href;
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -74,9 +77,11 @@ const handleLogin = async () => {
       router.replace(
         loginTarget === "rejected_notice"
           ? REJECTED_ROUTE
-          : loginTarget === "verification"
-            ? "/verification/verificationmain"
-            : "/regular_user/home",
+          : loginTarget === "legacy_notice"
+            ? LEGACY_ROUTE
+            : loginTarget === "verification"
+              ? "/verification/verificationmain"
+              : "/regular_user/home",
       );
     } catch (err: unknown) {
       Alert.alert("Error", getLoginErrorMessage(err));

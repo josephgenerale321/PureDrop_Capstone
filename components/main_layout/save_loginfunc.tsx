@@ -165,8 +165,8 @@ export default function SaveLoginSync() {
         // login / register) instead of bouncing them into the verification
         // flow. The gate still runs ONCE so an account the admin has since
         // VERIFIED goes straight to Home, and a REJECTED account still gets
-        // its rejection notice — only the "verification" outcome is
-        // suppressed. One-shot for this app run.
+        // its rejection notice — only the "verification" and "legacy_notice"
+        // outcomes are suppressed. One-shot for this app run.
         if (await hasChosenVerificationLater()) {
           handledSessionRef.current = true;
           void (async () => {
@@ -201,6 +201,8 @@ export default function SaveLoginSync() {
             const loginTarget = await resolvePostLoginTarget();
             if (loginTarget === "rejected_notice") {
               target = "/login/validation/rejectedverif" as Href;
+            } else if (loginTarget === "legacy_notice") {
+              target = "/login/validation/legacyverif" as Href;
             } else if (loginTarget === "verification") {
               target = "/verification/verificationmain" as Href;
             }

@@ -13,15 +13,19 @@ import { useReviewSelfieDetails } from "../../../../components/verification/face
 /**
  * Face Scan Details — review the captured selfie before submitting.
  *
- * The photo URI arrives via router params from the capture screen. The score
- * is a mockup until the real face-scan backend provides a confidence score.
+ * The photo URI and liveness score arrive via router params from the capture
+ * screen. The score is computed from the captured photo's real face metrics
+ * (size, pose, eye-open probabilities) — it shows a neutral placeholder when
+ * it is missing.
  */
 export default function ReviewSelfieDetailsScreen() {
   const {
     photoUri,
-    mockScore,
+    livenessScore,
+    livenessChecks,
     isSubmitConfirmOpen,
     isUploadedModalOpen,
+    isReplaceIdModalOpen,
     isSubmitting,
     handleBack,
     handleSubmit,
@@ -29,6 +33,9 @@ export default function ReviewSelfieDetailsScreen() {
     handleCloseConfirm,
     handleLater,
     handleVerifyIdNow,
+    handleViewSubmittedId,
+    handleReplaceValidId,
+    handleCloseReplaceModal,
   } = useReviewSelfieDetails();
 
   return (
@@ -57,11 +64,36 @@ export default function ReviewSelfieDetailsScreen() {
             )}
           </View>
 
-          {/* Face-scan score (mockup until the backend provides the real score) */}
+          {/* Real liveness score — computed from the captured photo's face
+              metrics; neutral placeholder when it is missing. */}
           <View style={styles.scoreCard}>
-            <Text style={styles.scoreLabel}>Score</Text>
-            <Text style={styles.scoreValue}>{mockScore}</Text>
+            <Text style={styles.scoreLabel}>Liveness Score</Text>
+            <Text style={styles.scoreValue}>
+              {livenessScore !== null ? `${livenessScore}%` : "—"}
+            </Text>
           </View>
+
+          {/* Liveness checklist — what the capture gate verified about the
+              photo, each row backed by a real measured value. Hidden when the
+              checklist is missing (older capture flows). */}
+          {livenessChecks.length > 0 && (
+            <View style={styles.checklistCard}>
+              <Text style={styles.checklistHeading}>What was checked</Text>
+              {livenessChecks.map((check) => (
+                <View key={check.key} style={styles.checkRow}>
+                  <Ionicons
+                    name={check.passed ? "checkmark-circle" : "close-circle"}
+                    size={18}
+                    color={check.passed ? "#16A34A" : "#DC2626"}
+                  />
+                  <View style={styles.checkTextWrap}>
+                    <Text style={styles.checkLabel}>{check.label}</Text>
+                    <Text style={styles.checkDetail}>{check.detail}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </ScrollView>
 
         <View style={styles.footer}>
@@ -84,8 +116,8 @@ export default function ReviewSelfieDetailsScreen() {
           <View style={styles.confirmCard}>
             <Text style={styles.confirmTitle}>Submit Face Scan?</Text>
             <Text style={styles.confirmMessage}>
-              Please double check your face scan before you submit. You won&apos;t be able to edit
-              it after submission.
+              Please double check your face scan before you submit. You can retake or
+              delete it later from the Face Recognition screen.
             </Text>
 
             <View style={styles.confirmActions}>
@@ -157,6 +189,61 @@ export default function ReviewSelfieDetailsScreen() {
                 <Text style={styles.confirmButtonText}>UPLOAD ID</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      )}
+
+      {/* "Valid ID Already Submitted" lightbox — opened when the user taps
+          UPLOAD ID with a Valid ID already on file (e.g. after retaking
+          their face scan): the fresh submission flow would silently
+          overwrite it, so the choice is surfaced first. */}
+      {isReplaceIdModalOpen && (
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <View style={styles.uploadedIconWrap}>
+              <Ionicons name="id-card-outline" size={36} color="#0EA5E9" />
+            </View>
+
+            <Text style={styles.confirmTitle}>Valid ID Already Submitted</Text>
+            <Text style={styles.confirmMessage}>
+              Your Valid ID is already on file. You can view the submitted ID, or
+              replace it with a new submission — replacing will overwrite the
+              stored photos and it will be reviewed again by an admin.
+            </Text>
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmCancelButton]}
+                onPress={handleViewSubmittedId}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="View your submitted Valid ID"
+              >
+                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                  VIEW MY ID
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmSubmitButton]}
+                onPress={handleReplaceValidId}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Replace your submitted Valid ID"
+              >
+                <Text style={styles.confirmButtonText}>REPLACE ID</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.modalCancelButton}
+              onPress={handleCloseReplaceModal}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Decide later"
+            >
+              <Text style={styles.modalCancelButtonText}>Maybe later</Text>
+            </TouchableOpacity>
           </View>
         </View>
       )}

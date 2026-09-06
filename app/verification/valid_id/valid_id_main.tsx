@@ -72,6 +72,14 @@ export default function ValidIdMainScreen() {
   // True while the Valid ID photos are uploading/being recorded — disables
   // the submit button so the submission can't be double-fired.
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Post-submission result lightbox — the same in-app card pattern as the
+  // face flow's "Face Scan Uploaded" lightbox (replaces the old OS alerts).
+  //   "awaiting-face"   — ID in, face scan still missing (offers to scan now;
+  //                       the capture flow is fresh, nothing to overwrite)
+  //   "pending-review"  — both steps in, awaiting admin approval (→ hub)
+  const [submissionOutcome, setSubmissionOutcome] = useState<
+    "awaiting-face" | "pending-review" | null
+  >(null);
   // Side whose attached-photo action card (View Image / Retake) is open.
   const [actionSheetSide, setActionSheetSide] = useState<IdPhotoSide | null>(null);
   // Side whose full-screen photo lightbox is open.
@@ -248,26 +256,18 @@ export default function ValidIdMainScreen() {
         });
 
       // Without a face scan the submission is NOT "pending review" yet —
-      // send the user to the face-scan flow instead of Home so the whole
-      // identity verification gets completed before they move on.
+      // surface the "Valid ID Submitted" card offering to scan now. Safe to
+      // enter the face flow directly: no face scan exists to overwrite.
       if (!result.hasFaceScan) {
-        Alert.alert(
-          "Valid ID Submitted",
-          "Your Valid ID has been submitted. Please complete your face scan to finish your verification.",
-          [{ text: "OK", onPress: () => router.replace(FACE_SELFIE_ROUTE) }],
-        );
+        setSubmissionOutcome("awaiting-face");
         return;
       }
 
       // The whole submission (face scan + Valid ID) is in, but the account is
-      // only "pending" — the admin still has to approve it. Land on the
-      // verification hub instead of Home; it shows both check marks and
+      // only "pending" — the admin still has to approve it. The card points
+      // to the verification hub, which shows both check marks and
       // auto-advances to Home the moment the admin approves.
-      Alert.alert(
-        "Pending Admin Review",
-        "Your Valid ID has been submitted. You can start using the app once an admin approves your verification.",
-        [{ text: "OK", onPress: () => router.replace(VERIFICATION_HUB_ROUTE) }],
-      );
+      setSubmissionOutcome("pending-review");
     } catch (error) {
       Alert.alert(
         "Submission Failed",
@@ -277,6 +277,28 @@ export default function ValidIdMainScreen() {
       );
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // "Scan Face Now" — the ID is in but the face scan is still missing; the
+  // capture flow starts fresh (nothing to overwrite).
+  const handleScanFaceNow = () => {
+    setSubmissionOutcome(null);
+    try {
+      router.replace(FACE_SELFIE_ROUTE);
+    } catch {
+      // Navigation must never crash the app.
+    }
+  };
+
+  // "Go to Hub" — both steps are in (or the user picked "Later"); the hub
+  // shows both check marks and auto-advances to Home on admin approval.
+  const handleGoToHub = () => {
+    setSubmissionOutcome(null);
+    try {
+      router.replace(VERIFICATION_HUB_ROUTE);
+    } catch {
+      // Navigation must never crash the app.
     }
   };
 
@@ -423,6 +445,80 @@ export default function ValidIdMainScreen() {
                 accessibilityLabel="Confirm and submit your Valid ID"
               >
                 <Text style={styles.confirmButtonText}>SUBMIT</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* "Valid ID Submitted" result lightbox — face scan still missing, so
+          the card offers to scan now (fresh flow, nothing to overwrite) or
+          defer to the hub. Same card pattern as the face flow's "Face Scan
+          Uploaded" lightbox. */}
+      {submissionOutcome === "awaiting-face" && (
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <View style={[styles.resultIconWrap, styles.resultIconWrapSuccess]}>
+              <Ionicons name="checkmark-circle" size={40} color="#16A34A" />
+            </View>
+
+            <Text style={styles.confirmTitle}>Valid ID Submitted</Text>
+            <Text style={styles.confirmMessage}>
+              Your Valid ID has been saved. Complete your face scan to finish your
+              identity verification, or do it later.
+            </Text>
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmCancelButton]}
+                onPress={handleGoToHub}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Do the face scan later"
+              >
+                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                  LATER
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmSubmitButton]}
+                onPress={handleScanFaceNow}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Scan your face now"
+              >
+                <Text style={styles.confirmButtonText}>SCAN FACE NOW</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* "Pending Admin Review" result lightbox — both steps are in; the hub
+          shows both check marks and auto-advances to Home on approval. */}
+      {submissionOutcome === "pending-review" && (
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <View style={[styles.resultIconWrap, styles.resultIconWrapPending]}>
+              <Ionicons name="hourglass-outline" size={36} color="#854D0E" />
+            </View>
+
+            <Text style={styles.confirmTitle}>Pending Admin Review</Text>
+            <Text style={styles.confirmMessage}>
+              Your face scan and Valid ID are both in. You can start using the app
+              once an admin approves your verification.
+            </Text>
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmSubmitButton]}
+                onPress={handleGoToHub}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Go to the verification hub"
+              >
+                <Text style={styles.confirmButtonText}>GO TO HUB</Text>
               </TouchableOpacity>
             </View>
           </View>

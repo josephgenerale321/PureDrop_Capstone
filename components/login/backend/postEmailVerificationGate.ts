@@ -122,9 +122,13 @@ export async function resolveIdentityVerificationTarget(): Promise<IdentityVerif
  *                       verification is "pending" (both steps in, awaiting
  *                       admin approval), or the verification was rejected and
  *                       the notice has already been seen.
- * - "home"            — the admin has VERIFIED the account, or the state
- *                       could not be read (non-fatal fallback — never trap
- *                       the user on a gate screen).
+ * - "legacy_notice"   — a legacy account the admin marked "verified" without
+ *                       real submissions: show the success-style notice that
+ *                       the face scan and Valid ID are still owed.
+ * - "home"            — the admin has VERIFIED the account AND both steps are
+ *                       genuinely submitted, or the state could not be read
+ *                       (non-fatal fallback — never trap the user on a gate
+ *                       screen).
  *
  * Firestore fields driving the "show the notice only once per rejection"
  * behaviour:
@@ -140,7 +144,11 @@ export async function resolveIdentityVerificationTarget(): Promise<IdentityVerif
  * not been told about yet). At 3+ rejections the same screen shows again but
  * with the final-warning text variant.
  */
-export type PostLoginTarget = "rejected_notice" | "verification" | "home";
+export type PostLoginTarget =
+  | "rejected_notice"
+  | "legacy_notice"
+  | "verification"
+  | "home";
 
 const REJECTED_STATUS = "rejected";
 const VERIFIED_STATUS = "verified";
@@ -244,22 +252,24 @@ export async function resolvePostLoginTarget(): Promise<PostLoginTarget> {
       const validIdDone =
         typeof data.validIdFrontPath === "string" && data.validIdFrontPath.length > 0;
 
-      if (faceScanDone && validIdDone) {
-        if (data.verificationStatus === VERIFIED_STATUS) {
-          // The admin has APPROVED the account — only now may it enter the
-          // app. Any earlier "later" choice is moot; drop it.
+      // Legacy accounts — some old users were marked "verified" in the admin
+      // panel without ever submitting a face scan / Valid ID through the app.
+      // They still owe BOTH steps: logins route them to a success-style
+      // notice screen (app/login/validation/legacyverif.tsx) that explains
+      // this and sends them into the verification flow.
+      if (data.verificationStatus === VERIFIED_STATUS) {
+        if (faceScanDone && validIdDone) {
+          // Genuinely verified — the account may enter the app. Any earlier
+          // "later" choice is moot; drop it.
           await clearVerificationLater();
           return "home";
         }
-
-        // Both steps are in but the admin has NOT approved yet ("pending") —
-        // the user must NOT reach Home. They stay on the verification hub
-        // (both check marks showing, with a live redirect to Home the moment
-        // the admin approves). The "later" flag does not apply here — approval
-        // is mandatory.
-        return "verification";
+        return "legacy_notice";
       }
 
+      // Pending (both steps in, awaiting admin approval) or still incomplete —
+      // the user stays in the verification flow. The hub shows their progress
+      // and auto-advances to Home the moment the admin approves.
       // NOTE: the "continue later" marker is NOT consulted here — it is
       // handled by the callers: SaveLoginSync suppresses the silent auto-
       // redirect for an account that chose "later", while an explicit login

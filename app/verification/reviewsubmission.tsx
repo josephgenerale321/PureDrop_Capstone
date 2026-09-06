@@ -24,6 +24,7 @@ type Lightbox = { label: string; uri: string } | null;
  * Firestore document:
  *
  *   - Account status (pending admin review / verified / incomplete)
+ *   - Account information — full name, email, address and water meter
  *   - Face Recognition — the enrolled selfie (faceScanUrl)
  *   - Valid ID — the chosen ID type (validIdType) plus the front and back
  *     photos (validIdFrontUrl / validIdBackUrl)
@@ -42,6 +43,11 @@ export default function ReviewSubmissionScreen() {
   const [frontUrl, setFrontUrl] = useState<string | null>(null);
   const [backUrl, setBackUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("");
+  // Account information shown alongside the verification submissions.
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [fullName, setFullName] = useState<string | null>(null);
+  const [address, setAddress] = useState<string | null>(null);
+  const [waterMeter, setWaterMeter] = useState<string | null>(null);
   // Photo shown in the full-screen lightbox (null = closed).
   const [lightbox, setLightbox] = useState<Lightbox>(null);
 
@@ -50,6 +56,7 @@ export default function ReviewSubmissionScreen() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUserId(currentUser?.uid ?? null);
+      setUserEmail(currentUser?.email ?? null);
     });
 
     return unsubscribe;
@@ -64,6 +71,9 @@ export default function ReviewSubmissionScreen() {
       setFrontUrl(null);
       setBackUrl(null);
       setStatus("");
+      setFullName(null);
+      setAddress(null);
+      setWaterMeter(null);
       setIsLoading(false);
       return undefined;
     }
@@ -85,6 +95,22 @@ export default function ReviewSubmissionScreen() {
           typeof data?.validIdBackUrl === "string" ? data.validIdBackUrl : null,
         );
         setStatus(String(data?.verificationStatus ?? ""));
+        setFullName(
+          typeof data?.fullName === "string" && data.fullName.trim().length > 0
+            ? data.fullName
+            : null,
+        );
+        setAddress(
+          typeof data?.address === "string" && data.address.trim().length > 0
+            ? data.address
+            : null,
+        );
+        if (data?.waterMeter !== undefined && data?.waterMeter !== null) {
+          const meter = Number(data.waterMeter);
+          setWaterMeter(Number.isFinite(meter) ? String(meter) : null);
+        } else {
+          setWaterMeter(null);
+        }
         setIsLoading(false);
       },
       () => {
@@ -130,6 +156,28 @@ export default function ReviewSubmissionScreen() {
             <Text style={[styles.statusBadgeText, { color: statusBadge.color }]}>
               {statusBadge.label}
             </Text>
+          </View>
+
+          {/* Account information — the identity details this verification is
+              tied to (name, email, address, water meter). */}
+          <Text style={styles.sectionLabel}>Account Information</Text>
+          <View style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Full name</Text>
+              <Text style={styles.infoValue}>{fullName ?? "—"}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Email</Text>
+              <Text style={styles.infoValue}>{userEmail ?? "—"}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Address</Text>
+              <Text style={styles.infoValue}>{address ?? "—"}</Text>
+            </View>
+            <View style={[styles.infoRow, styles.infoRowLast]}>
+              <Text style={styles.infoLabel}>Water meter</Text>
+              <Text style={styles.infoValue}>{waterMeter ?? "—"}</Text>
+            </View>
           </View>
 
           {/* Face Recognition section */}
@@ -289,6 +337,39 @@ const styles = StyleSheet.create({
   statusBadgeText: {
     fontSize: 13,
     fontWeight: "700",
+  },
+  // Account information card (full name / email / address / water meter).
+  infoCard: {
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    marginBottom: 24,
+  },
+  infoRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 16,
+    paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#E2E8F0",
+  },
+  // The last row of the info card — no separator line underneath.
+  infoRowLast: {
+    borderBottomWidth: 0,
+  },
+  infoLabel: {
+    fontSize: 13,
+    color: "#64748B",
+  },
+  infoValue: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#0F172A",
+    textAlign: "right",
   },
   sectionLabel: {
     fontSize: 14,

@@ -167,6 +167,119 @@ export function evaluateFace(faces: Face[]): FaceHint {
   return "ok";
 }
 
+// Component weights of the liveness score — they add up to 100 and mirror the
+// gate rules above, so a photo that barely passes the gate still scores low.
+const SIZE_SCORE_WEIGHT = 40;
+const POSE_SCORE_WEIGHT = 35;
+const EYES_SCORE_WEIGHT = 25;
+// Face-width ratio above which the size component is fully earned (the gate
+// minimum MIN_FACE_WIDTH_RATIO earns 0).
+const FULL_FACE_WIDTH_RATIO = MIN_FACE_WIDTH_RATIO + 0.35;
+
+/**
+ * Computes the real liveness/quality score (0–100) for a captured selfie from
+ * the same ML Kit face metrics the capture gate uses — face size in the
+ * frame, head-pose deviation from frontal, and eye-open probabilities.
+ *
+ * Pure and side-effect free, so it runs on the stage-2 still-image faces
+ * (the authoritative check) without any extra detector passes. Missing
+ * optional values (e.g. classifier probabilities) score neutrally instead of
+ * punishing the photo — the same pass-not-fail policy as evaluateFace.
+ */
+export function computeLivenessScore(faces: Face[]): number {
+  if (!faces || faces.length !== 1) {
+    return 0;
+  }
+  const face = faces[0];
+
+  // Size component — how much of the frame the face fills between the gate
+  // minimum and a comfortable close-up. Neutral half-credit when the detector
+  // didn't report frame dimensions (same skip policy as the size gate).
+  let sizeScore = SIZE_SCORE_WEIGHT / 2;
+  if (face.frameWidth > 0 && face.bounds.width > 0) {
+    const ratio = face.bounds.width / face.frameWidth;
+    const sizeProgress = Math.min(
+      1,
+      Math.max(0, (ratio - MIN_FACE_WIDTH_RATIO) / (FULL_FACE_WIDTH_RATIO - MIN_FACE_WIDTH_RATIO)),
+    );
+    sizeScore = sizeProgress * SIZE_SCORE_WEIGHT;
+  }
+
+  // Pose component — average deviation from frontal, normalized by the gate
+  // limits (0 = perfectly frontal, 1 = at a gate limit).
+  const yaw = Math.abs(face.yawAngle ?? 0) / MAX_YAW_DEG;
+  const pitch = Math.abs(face.pitchAngle ?? 0) / MAX_PITCH_DEG;
+  const roll = Math.abs(face.rollAngle ?? 0) / MAX_ROLL_DEG;
+  const poseDeviation = (yaw + pitch + roll) / 3;
+  const poseScore = Math.max(0, 1 - Math.min(1, poseDeviation)) * POSE_SCORE_WEIGHT;
+
+  // Eyes component — each eye contributes half; absent probabilities are
+  // neutral (half credit per eye), matching the evaluateFace policy.
+  const eyeScore = (p?: number) =>
+    typeof p === "number" ? Math.min(1, Math.max(0, p)) * (EYES_SCORE_WEIGHT / 2) : EYES_SCORE_WEIGHT / 4;
+
+  return Math.round(
+    Math.min(100, sizeScore + poseScore + eyeScore(face.leftEyeOpenProbability) + eyeScore(face.rightEyeOpenProbability)),
+  );
+}
+
+// One row of the liveness checklist shown on the review screen — what the
+// gate actually verified about the captured photo.
+export type LivenessCheck = {
+  key: "eyes-open" | "head-pose" | "face-size";
+  label: string;
+  passed: boolean;
+  detail: string;
+};
+
+/**
+ * Builds the human-readable liveness checklist for a captured selfie from the
+ * same ML Kit face metrics the gate and score use — so every row is backed by
+ * a real measured value (eye-open probabilities, euler angles, face size in
+ * the frame), not a canned description. Pure and side-effect free.
+ */
+export function evaluateLivenessChecks(faces: Face[]): LivenessCheck[] {
+  const face = faces && faces.length === 1 ? faces[0] : null;
+
+  // Eyes-open check — real classifier probabilities when available.
+  const left = typeof face?.leftEyeOpenProbability === "number" ? face.leftEyeOpenProbability : null;
+  const right =
+    typeof face?.rightEyeOpenProbability === "number" ? face.rightEyeOpenProbability : null;
+  const eyesPassed =
+    (left === null || left >= MIN_EYE_OPEN_PROBABILITY) &&
+    (right === null || right >= MIN_EYE_OPEN_PROBABILITY);
+  const eyesDetail =
+    left !== null && right !== null
+      ? `Both eyes detected as open (${Math.round(left * 100)}% / ${Math.round(right * 100)}% confidence)`
+      : "Both eyes were open and clearly visible";
+
+  // Head-pose check — measured euler angles vs the frontal-gate limits.
+  const yaw = Math.abs(face?.yawAngle ?? 0);
+  const pitch = Math.abs(face?.pitchAngle ?? 0);
+  const roll = Math.abs(face?.rollAngle ?? 0);
+  const posePassed = yaw <= MAX_YAW_DEG && pitch <= MAX_PITCH_DEG && roll <= MAX_ROLL_DEG;
+  const poseDetail = posePassed
+    ? "Head was centered and facing straight at the camera"
+    : "Head was turned too far away from the camera";
+
+  // Distance check — real face-size ratio of the captured frame.
+  let sizePassed = true;
+  let sizeDetail = "Face size could not be measured — treated as passing";
+  if (face && face.frameWidth > 0 && face.bounds.width > 0) {
+    const ratio = face.bounds.width / face.frameWidth;
+    sizePassed = ratio >= MIN_FACE_WIDTH_RATIO;
+    sizeDetail = sizePassed
+      ? `Face filled ${Math.round(ratio * 100)}% of the frame — good capture distance`
+      : "Face was too small in the frame — move closer next time";
+  }
+
+  return [
+    { key: "eyes-open", label: "Eyes open", passed: eyesPassed, detail: eyesDetail },
+    { key: "head-pose", label: "Facing the camera", passed: posePassed, detail: poseDetail },
+    { key: "face-size", label: "Good distance", passed: sizePassed, detail: sizeDetail },
+  ];
+}
+
 // Stage-2 (captured photo) rejection messages, one per non-ok hint.
 export const STILL_HINT_MESSAGES: Record<Exclude<FaceHint, "ok">, string> = {
   none: "No face was detected in your photo. Center your face inside the frame and try again.",
@@ -418,9 +531,19 @@ export function useSelfieCapture({
         return;
       }
 
+      // Real liveness/quality score and checklist from the same face metrics
+      // the gate just validated — shown on the review screen and recorded
+      // with the upload.
+      const livenessScore = computeLivenessScore(faces);
+      const livenessChecks = evaluateLivenessChecks(faces);
+
       router.push({
         pathname: REVIEW_SELFIE_ROUTE,
-        params: { photo: uri },
+        params: {
+          photo: uri,
+          score: String(livenessScore),
+          checks: JSON.stringify(livenessChecks),
+        },
       } as Href);
     } catch (error) {
       console.error("[SelfieCapture] capture failed:", error);

@@ -17,6 +17,11 @@ import { markVerificationLater } from "../../components/login/backend/postEmailV
 import { auth, db } from "../../firebaseConfig";
 
 const FACE_SELFIE_ROUTE = "/verification/face_selfie/faceselfiemain" as Href;
+// Read-only review of the already-submitted face scan — the "Face Recognition"
+// card lands here once an enrollment exists (the check mark is showing),
+// mirroring how the Valid ID card opens the submitted-ID review.
+const FACE_SELFIE_SUBMITTED_ROUTE =
+  "/verification/face_selfie/facescan_submittedview" as Href;
 const VALID_ID_ROUTE = "/verification/valid_id/valid_id_main" as Href;
 // Read-only review of the already-submitted Valid ID — the "Verify your id"
 // card lands here once a submission exists (the check mark is showing).
@@ -234,6 +239,17 @@ export default function VerificationMainScreen() {
   };
 
   const handleFaceRecognition = () => {
+    // A submitted face scan (check mark showing) opens the read-only review of
+    // the enrolled selfie with its Retake / Delete actions; nothing submitted
+    // yet opens the face-scan flow.
+    if (hasFaceScan) {
+      try {
+        router.push(FACE_SELFIE_SUBMITTED_ROUTE);
+        return;
+      } catch {
+        // Navigation must never crash the app — fall through to the flow.
+      }
+    }
     router.push(FACE_SELFIE_ROUTE);
   };
 

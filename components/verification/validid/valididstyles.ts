@@ -408,5 +408,22 @@ export const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+
+  // Post-submission result lightbox icon badges (valid_id_main) — green for
+  // a successful submission, amber for pending admin review.
+  resultIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  resultIconWrapSuccess: {
+    backgroundColor: "#DCFCE7",
+  },
+  resultIconWrapPending: {
+    backgroundColor: "#FEF9C3",
+  },
 });
 

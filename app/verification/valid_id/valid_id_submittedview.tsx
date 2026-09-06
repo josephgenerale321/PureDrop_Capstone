@@ -20,14 +20,12 @@ import { auth, db } from "../../../firebaseConfig";
 // Where the user lands when backing out of the submitted-ID review.
 const BACK_ROUTE = "/verification/verificationmain" as Href;
 
-// "Replace Valid ID" reopens the submission flow pre-filled with what was
-// submitted last time (valid_id_editmain) — re-submitting overwrites the
-// stored photos and record (the backend uploads with upsert: true).
-const VALID_ID_EDIT_ROUTE = "/verification/valid_id/valid_id_editmain" as Href;
-
-// After a delete the submission is gone — the user lands on the fresh
-// submission flow (valid_id_main) to submit a new one. replace() so back
-// navigation never returns to the now-empty review screen.
+// After a delete — OR via "Replace Valid ID" — the user lands on the fresh
+// submission flow (valid_id_main). Replace deliberately does NOT open the
+// pre-filled edit screen (valid_id_editmain): that screen blocks accounts
+// whose submission is pending/verified with its "Valid ID locked" alert.
+// Re-submitting from valid_id_main overwrites the stored photos and record
+// (the backend uploads with upsert: true), so no delete is needed first.
 const VALID_ID_MAIN_ROUTE = "/verification/valid_id/valid_id_main" as Href;
 
 // Passport is a booklet — its data page is stored in the "front" slot, so a
@@ -119,12 +117,24 @@ export default function ValidIdSubmittedViewScreen() {
   // Edit / Delete actions only make sense when a submission actually exists.
   const showActions = !isLoading && Boolean(submitted.idType);
 
-  // "Replace Valid ID" — reopens the submission flow with the previously
-  // submitted ID type + photos pre-filled (valid_id_editmain). Re-submitting
-  // overwrites the stored photos and Firestore record, so no delete is
-  // needed first.
+  // "Replace Valid ID" — the user already has a submission on file, so show
+  // an alert explaining that instead of redirecting anywhere right away (and
+  // never into the pre-filled edit screen, which is locked for submitted
+  // accounts). Only if they confirm do we continue into the fresh submission
+  // flow (valid_id_main), where re-submitting overwrites the stored photos
+  // and record.
   const handleReplace = () => {
-    router.push(VALID_ID_EDIT_ROUTE);
+    Alert.alert(
+      "Valid ID Already Submitted",
+      "You have already submitted your Valid ID. Submitting a new one will replace the stored photos and ID type, and it will be reviewed again by an admin.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Replace Now",
+          onPress: () => router.push(VALID_ID_MAIN_ROUTE),
+        },
+      ],
+    );
   };
 
   const handleDeletePress = () => {
