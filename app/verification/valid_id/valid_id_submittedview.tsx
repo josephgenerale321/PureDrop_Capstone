@@ -1,15 +1,28 @@
 import { useEffect, useState } from "react";
-import { Image, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
+import {
+  Alert,
+  Image,
+  Modal,
+  ScrollView,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { type Href, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { styles } from "../../../components/verification/validid/valididstyles";
+import { deleteSubmittedValidId } from "../../../components/verification/validid/backend/validIdBackend";
 import { auth, db } from "../../../firebaseConfig";
 
 // Where the user lands when backing out of the submitted-ID review.
 const BACK_ROUTE = "/verification/verificationmain" as Href;
+
+// "Replace Valid ID" reopens the submission flow — re-submitting overwrites
+// the stored photos and record (the backend uploads with upsert: true).
+const VALID_ID_ROUTE = "/verification/valid_id/valid_id_main" as Href;
 
 // Passport is a booklet — its data page is stored in the "front" slot, so a
 // single box is shown for it instead of the front/back pair.
@@ -41,6 +54,10 @@ export default function ValidIdSubmittedViewScreen() {
   });
   // Photo shown in the full-screen lightbox (null = closed).
   const [lightbox, setLightbox] = useState<{ label: string; uri: string } | null>(null);
+  // Delete confirmation lightbox + in-flight flag (disables the buttons so
+  // the delete can't be double-fired).
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Track the live Firebase session so the review always reflects the account
   // that is actually signed in on this device.
@@ -92,6 +109,54 @@ export default function ValidIdSubmittedViewScreen() {
   };
 
   const isPassport = submitted.idType === PASSPORT_ID_TYPE;
+
+  // Edit / Delete actions only make sense when a submission actually exists.
+  const showActions = !isLoading && Boolean(submitted.idType);
+
+  // "Replace Valid ID" — reopens the submission flow. Re-submitting overwrites
+  // the stored photos and Firestore record, so no delete is needed first.
+  const handleReplace = () => {
+    router.push(VALID_ID_ROUTE);
+  };
+
+  const handleDeletePress = () => {
+    setIsDeleteConfirmOpen(true);
+  };
+
+  // Confirmed delete — runs the backend (storage cleanup + Firestore field
+  // clearing + status revert). The live snapshot re-renders the screen into
+  // the empty state automatically once the fields are cleared.
+  const handleConfirmDelete = async () => {
+    if (isDeleting) {
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      await deleteSubmittedValidId();
+      setIsDeleteConfirmOpen(false);
+      Alert.alert(
+        "Valid ID Deleted",
+        "Your submitted Valid ID has been removed. You can submit a new one anytime.",
+      );
+    } catch (error) {
+      setIsDeleteConfirmOpen(false);
+      Alert.alert(
+        "Delete Failed",
+        error instanceof Error
+          ? error.message
+          : "Something went wrong while deleting your Valid ID. Please try again.",
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleCloseDeleteConfirm = () => {
+    if (isDeleting) {
+      return;
+    }
+    setIsDeleteConfirmOpen(false);
+  };
 
   return (
     <>
@@ -159,8 +224,81 @@ export default function ValidIdSubmittedViewScreen() {
               />
             </>
           )}
+
+          {/* Edit / Delete actions — only when a submission exists. */}
+          {showActions && (
+            <View style={styles.submittedActionsWrap}>
+              <TouchableOpacity
+                style={[styles.actionButton, styles.replaceButton]}
+                onPress={handleReplace}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Replace your submitted Valid ID"
+              >
+                <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                <Text style={styles.confirmButtonText}>Replace Valid ID</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionButton, styles.deleteButton]}
+                onPress={handleDeletePress}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Delete your submitted Valid ID"
+              >
+                <Ionicons name="trash-outline" size={18} color="#DC2626" />
+                <Text style={[styles.confirmButtonText, styles.deleteButtonText]}>
+                  Delete Submission
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </ScrollView>
       </SafeAreaView>
+
+      {/* Delete confirmation lightbox — same pattern as the back-confirm
+          lightbox on the verification hub. */}
+      <Modal
+        visible={isDeleteConfirmOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseDeleteConfirm}
+      >
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>Delete Valid ID?</Text>
+            <Text style={styles.confirmMessage}>
+              Your submitted Valid ID photos will be permanently removed. You can submit
+              a new one anytime.
+            </Text>
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmCancelButton]}
+                onPress={handleCloseDeleteConfirm}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Keep your submitted Valid ID"
+              >
+                <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
+                  CANCEL
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.confirmButton, styles.confirmDeleteButton]}
+                onPress={handleConfirmDelete}
+                activeOpacity={0.8}
+                disabled={isDeleting}
+                accessibilityRole="button"
+                accessibilityLabel="Confirm deleting your submitted Valid ID"
+              >
+                <Text style={styles.confirmButtonText}>DELETE</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Full-screen photo lightbox for the submitted Valid ID photo. */}
       <Modal

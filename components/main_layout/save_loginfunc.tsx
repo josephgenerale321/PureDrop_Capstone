@@ -135,6 +135,20 @@ export default function SaveLoginSync() {
         restoreIntentRef.current &&
         isPreLoginRoute(pathname)
       ) {
+        // A saved-login marker alone is NOT a session. Right after a
+        // force-close + reopen, Firebase can take several seconds to refresh
+        // the persisted session token, and during that window
+        // `auth.currentUser` is still null. Running the identity-verification
+        // gate now would read "no user" and wrongly send an UNVERIFIED user
+        // straight to Home (the one-shot flag would then swallow the corrected
+        // redirect once the session actually restores). So wait: the auth
+        // listener below calls this same function the moment the restored
+        // session (or its profile sync) completes, and only then does the
+        // gate decide between Home and the verification flow.
+        if (!auth.currentUser) {
+          return;
+        }
+
         // Claim the one-shot redirect immediately so overlapping auth events
         // cannot trigger a second navigation while the gate check is awaited.
         handledSessionRef.current = true;

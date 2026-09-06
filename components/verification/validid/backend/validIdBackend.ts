@@ -1,6 +1,15 @@
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import {
+  deleteField,
+  doc,
+  getDoc,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
 import { auth, db } from "../../../../firebaseConfig";
-import { uploadVerificationPhoto } from "../../faceselfie_comp/backend/verificationUpload";
+import {
+  removeVerificationPhoto,
+  uploadVerificationPhoto,
+} from "../../faceselfie_comp/backend/verificationUpload";
 
 /**
  * Valid ID submission backend for the Valid ID screen
@@ -160,6 +169,93 @@ export async function submitValidId(
       error instanceof Error
         ? `Valid ID saved, but recording it failed: ${error.message}`
         : "Valid ID saved, but recording it failed. Please try again.",
+    );
+  }
+}
+
+/**
+ * Deletes the submitted Valid ID for the signed-in user — removes the stored
+ * photos from Supabase Storage (best-effort) and clears the submission fields
+ * on the user's `regular_user` document, reverting the verification status to
+ * "awaiting_id". The face scan, if any, stays untouched.
+ *
+ * Blocked while the account is "pending" (under admin review) or "verified"
+ * (admin-approved) — deleting in those states would silently erase a record
+ * the admin panel is reviewing or has already approved. Rejected and
+ * awaiting_id submissions can be deleted freely so the user can start over.
+ */
+export async function deleteSubmittedValidId(): Promise<void> {
+  const user = auth.currentUser;
+  if (!user?.uid) {
+    throw new Error("You need to be signed in to delete your Valid ID.");
+  }
+
+  const userDocRef = doc(db, "regular_user", user.uid);
+
+  let data: Record<string, unknown> | undefined;
+  try {
+    const snapshot = await getDoc(userDocRef);
+    data = snapshot.exists() ? (snapshot.data() as Record<string, unknown>) : undefined;
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? `Checking your submission failed: ${error.message}`
+        : "Checking your submission failed. Please check your connection and try again.",
+    );
+  }
+
+  if (!data || (!data.validIdSubmittedAt && !data.validIdFrontUrl)) {
+    throw new Error("You have no submitted Valid ID to delete.");
+  }
+
+  const status = String(data.verificationStatus ?? "");
+  if (status === "verified") {
+    throw new Error(
+      "Your Valid ID has already been verified and can no longer be deleted.",
+    );
+  }
+  if (status === "pending") {
+    throw new Error(
+      "Your Valid ID is currently under review and cannot be deleted right now.",
+    );
+  }
+
+  // Best-effort storage cleanup — a leftover object is harmless (the same
+  // paths are overwritten by any future re-submission), so a failed storage
+  // delete must not block clearing the document.
+  const storagePaths = [data.validIdFrontPath, data.validIdBackPath].filter(
+    (path): path is string => typeof path === "string" && path.length > 0,
+  );
+  for (const path of storagePaths) {
+    await removeVerificationPhoto(path).catch(() => {});
+  }
+
+  try {
+    await setDoc(
+      userDocRef,
+      {
+        validIdType: deleteField(),
+        validIdFrontUrl: deleteField(),
+        validIdFrontPath: deleteField(),
+        validIdBackUrl: deleteField(),
+        validIdBackPath: deleteField(),
+        validIdSubmittedAt: deleteField(),
+        // The old rejection reason no longer applies once the submission is
+        // gone; the admin panel only shows it for "rejected" anyway.
+        rejectionReason: deleteField(),
+        verificationStatus: "awaiting_id",
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+  } catch (error) {
+    // The storage objects are already gone; surface the Firestore failure so
+    // the caller can let the user retry (retrying is safe — the storage
+    // deletes are best-effort and the field clearing is idempotent).
+    throw new Error(
+      error instanceof Error
+        ? `Valid ID removed, but clearing the record failed: ${error.message}`
+        : "Valid ID removed, but clearing the record failed. Please try again.",
     );
   }
 }

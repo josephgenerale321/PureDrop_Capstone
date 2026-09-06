@@ -373,5 +373,40 @@ export const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
   },
+
+  // Edit / Delete actions on the submitted-ID review screen
+  // (app/verification/valid_id/valid_id_submittedview.tsx) — the buttons
+  // reuse the shared actionButton shape (height 46, rounded, row-centered).
+  submittedActionsWrap: {
+    width: "85%",
+    gap: 10,
+    marginTop: 24,
+  },
+  replaceButton: {
+    backgroundColor: "#0EA5E9",
+    shadowColor: "#0EA5E9",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  deleteButton: {
+    backgroundColor: "#FEE2E2",
+    borderWidth: 1,
+    borderColor: "#FCA5A5",
+  },
+  deleteButtonText: {
+    color: "#DC2626",
+  },
+  // Red confirm button variant for destructive actions (delete lightbox) —
+  // same geometry as the shared confirmSubmitButton.
+  confirmDeleteButton: {
+    backgroundColor: "#DC2626",
+    shadowColor: "#DC2626",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
 });
 

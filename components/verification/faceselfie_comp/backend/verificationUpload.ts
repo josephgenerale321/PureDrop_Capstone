@@ -5,15 +5,17 @@ import { getPublicFileUrl, removeFile, uploadFile } from "../../../../api/storag
  * Valid ID captures). Both feature backends (faceScanBackend, validIdBackend)
  * upload through this module so the bucket and path layout stay consistent.
  *
- * Photos land in the public `regular_user` bucket (same bucket as avatars —
- * the anon-key storage policies already allow insert/read there):
+ * Photos land in the public `verification_id` bucket — the same bucket the
+ * admin verification review screens read from (must match the admin panel's
+ * VITE_SUPABASE_VERIFICATION_BUCKET value):
  *
  *   verification/{userId}/selfie.jpg
  *   verification/{userId}/valid-id-front.jpg
  *   verification/{userId}/valid-id-back.jpg
  *   verification/{userId}/valid-id-passport.jpg
  */
-export const VERIFICATION_BUCKET = "regular_user";
+export const VERIFICATION_BUCKET =
+  process.env.EXPO_PUBLIC_SUPABASE_VERIFICATION_BUCKET?.trim() || "verification_id";
 
 /**
  * Uploads a captured verification photo (local file URI from the camera or
