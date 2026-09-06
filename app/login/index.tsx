@@ -17,6 +17,7 @@ import { finishLogout } from "../../lib/auth/logoutState";
 import { getLoginErrorMessage } from "../../lib/login/logerror";
 import { loginUser } from "../../lib/login/loginfunctions";
 import SavedLoginWait from "../../components/loading/restore_session/loading_session";
+import { resolveIdentityVerificationTarget } from "../../components/login/backend/postEmailVerificationGate";
 
 const FORGOT_PASSWORD_ROUTE = "/login/forgot_password" as Href;
 
@@ -26,7 +27,13 @@ export default function LoginScreen() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+  // Two-stage login loading so the button label reflects what is happening:
+  // - "auth"          — Firebase sign-in in progress ("Logging in...")
+  // - "verification"  — the identity-verification gate is checking whether
+  //                     the user still owes a face scan / Valid ID
+  //                     ("Checking verification...")
+  // - "idle"          — not loading (button shows "Login")
+  const [stage, setStage] = useState<"idle" | "auth" | "verification">("idle");
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
@@ -43,19 +50,41 @@ export default function LoginScreen() {
 
 const handleLogin = async () => {
     try {
-      setLoading(true);
+      setStage("auth");
 
       // `loginUser` now resolves as soon as Firebase Auth succeeds (profile
-      // fetch + presence write happen in the background). Navigate straight to
-      // Home instead of blocking on an extra success alert.
+      // fetch + presence write happen in the background). Before navigating,
+      // the identity verification gate checks whether the user has submitted
+      // both their face scan and Valid ID — an unverified user is routed to
+      // the verification flow instead of Home.
       await loginUser({ email, password });
 
-      router.replace("/regular_user/home");
+      setStage("verification");
+      const verificationTarget = await resolveIdentityVerificationTarget();
+
+      router.replace(
+        verificationTarget === "verification"
+          ? "/verification/verificationmain"
+          : "/regular_user/home",
+      );
     } catch (err: unknown) {
       Alert.alert("Error", getLoginErrorMessage(err));
     } finally {
-      setLoading(false);
+      setStage("idle");
     }
+  };
+
+  // Button label per loading stage — the second stage tells the user why
+  // login is taking an extra beat: their identity verification is being
+  // checked (unverified users are sent to "Verify Identity" next).
+  const getLoginButtonLabel = () => {
+    if (stage === "auth") {
+      return "Logging in...";
+    }
+    if (stage === "verification") {
+      return "Checking verification...";
+    }
+    return "Login";
   };
 
   return (
@@ -127,11 +156,9 @@ const handleLogin = async () => {
         <TouchableOpacity
           style={styles.button}
           onPress={handleLogin}
-          disabled={loading}
+          disabled={stage !== "idle"}
         >
-          <Text style={styles.buttonText}>
-            {loading ? "Logging in..." : "Login"}
-          </Text>
+          <Text style={styles.buttonText}>{getLoginButtonLabel()}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity

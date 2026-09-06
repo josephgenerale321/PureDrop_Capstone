@@ -9,7 +9,7 @@ import {
   capturePhotoToFileStable,
   toErrorMessage,
   type VisionCameraModule,
-} from "../../faceselfie_comp/selfiecapture/selfiecaptfunc";
+} from "../../../faceselfie_comp/selfiecapture/backend/selfiecaptfunc";
 
 /**
  * Backend/behavior layer for the Valid ID capture screen

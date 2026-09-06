@@ -1,9 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { usePathname, useRouter } from "expo-router";
+import { usePathname, useRouter, type Href } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { useEffect, useRef } from "react";
 import { auth, db } from "../../firebaseConfig";
+import { resolveIdentityVerificationTarget } from "../login/backend/postEmailVerificationGate";
 
 const SAVED_LOGIN_KEY = "@puredrop/saved_login";
 const SAVED_LOGIN_EMAIL_KEY = "@puredrop/saved_login_email";
@@ -16,12 +17,31 @@ type SavedLoginState = {
 };
 
 /**
+ * Route prefixes that must NEVER be auto-redirected away from, even when a
+ * session is (or becomes) authenticated. These screens are part of the
+ * registration / identity-verification flow and drive their own navigation:
+ *
+ * - `/login/email_verification` — the 6-digit OTP screen and the success
+ *   screen. `registerUser()` signs the user in the moment the OTP is
+ *   confirmed, so an auth event fires while the user is still here; without
+ *   this exclusion the auto-redirect would hijack them to Home and they
+ *   would never see the success screen / "Verify Identity" step.
+ * - `/verification` — the identity verification flow itself (face selfie +
+ *   Valid ID). An unverified user belongs here, not on Home.
+ */
+const AUTO_REDIRECT_EXCLUDED_PREFIXES = ["/login/email_verification", "/verification"];
+
+/**
  * True when the current route is a pre-login screen (welcome, start, login,
  * register, forgot password, email verification). Auto-login only redirects
  * away from these screens so deep links into the regular-user area are never
  * hijacked.
  */
 const isPreLoginRoute = (pathname: string): boolean => {
+  if (AUTO_REDIRECT_EXCLUDED_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+    return false;
+  }
+
   return (
     pathname === "/" ||
     pathname === "/start" ||
@@ -115,12 +135,30 @@ export default function SaveLoginSync() {
         restoreIntentRef.current &&
         isPreLoginRoute(pathname)
       ) {
+        // Claim the one-shot redirect immediately so overlapping auth events
+        // cannot trigger a second navigation while the gate check is awaited.
         handledSessionRef.current = true;
-        try {
-          router.replace("/regular_user/home");
-        } catch {
-          // Navigation must never crash the app.
-        }
+
+        void (async () => {
+          // Identity verification gate — a user who has not submitted both
+          // their face scan and Valid ID is routed to the verification flow
+          // ("Let's verify your identity first") instead of Home.
+          let target: Href = "/regular_user/home";
+          try {
+            const verificationTarget = await resolveIdentityVerificationTarget();
+            if (verificationTarget === "verification") {
+              target = "/verification/verificationmain" as Href;
+            }
+          } catch {
+            // Gate check failure is non-fatal — fall through to Home.
+          }
+
+          try {
+            router.replace(target);
+          } catch {
+            // Navigation must never crash the app.
+          }
+        })();
       }
     };
 

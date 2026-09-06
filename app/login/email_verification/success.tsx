@@ -1,12 +1,47 @@
 import { Ionicons } from "@expo/vector-icons";
 import { type Href, useRouter } from "expo-router";
+import { useEffect, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { resolvePostEmailVerificationTarget } from "../../../components/login/backend/postEmailVerificationGate";
 
 const LOGIN_ROUTE = "/login" as Href;
+// The user record ("residents/user" in the regular_user collection) confirmed
+// the email as verified — continue into the identity verification flow
+// (face selfie + Valid ID) instead of sending the user back to Login.
+const VERIFICATION_ROUTE = "/verification/verificationmain" as Href;
 
 export default function EmailVerificationSuccessScreen() {
   const router = useRouter();
+
+  // Resolved on mount from the signed-in user's regular_user record. While it
+  // is still resolving the button falls back to the Login label/route, and a
+  // resolution failure can never trap the user on this screen.
+  const [target, setTarget] = useState<"verification" | "login">("login");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    resolvePostEmailVerificationTarget()
+      .then((resolved) => {
+        if (!cancelled) {
+          setTarget(resolved);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTarget("login");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleContinue = () => {
+    router.replace(target === "verification" ? VERIFICATION_ROUTE : LOGIN_ROUTE);
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -20,10 +55,18 @@ export default function EmailVerificationSuccessScreen() {
 
         <TouchableOpacity
           style={styles.button}
-          onPress={() => router.replace(LOGIN_ROUTE)}
+          onPress={handleContinue}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={
+            target === "verification"
+              ? "Continue to identity verification"
+              : "Go to login"
+          }
         >
-          <Text style={styles.buttonText}>Login</Text>
+          <Text style={styles.buttonText}>
+            {target === "verification" ? "Verify Identity" : "Login"}
+          </Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>

@@ -24,6 +24,13 @@ type ReportRowProps = {
   onDelete: (item: ReportItem) => void;
 };
 
+// Height of the floating tab bar rendered by app/regular_user/_layout.jsx
+// (position:"absolute", so it overlays the bottom of this screen's list).
+// Must stay in sync with the `tabBar.height` style in that layout.
+const TAB_BAR_HEIGHT = 70;
+// Extra breathing room between the last card and the tab bar.
+const LIST_BOTTOM_GAP = 16;
+
 function ReportRow({ item, onOpen, onEdit, onDelete }: ReportRowProps) {
   return (
     <View style={styles.card}>
@@ -139,7 +146,14 @@ export default function MyReportScreen() {
       <FlashList
         data={reports}
         keyExtractor={(item) => item.reportId}
-contentContainerStyle={styles.listContent}
+        contentContainerStyle={[
+          styles.listContent,
+          // The floating tab bar (position:absolute in the regular_user tab
+          // layout) overlays the bottom of this screen — reserve its height
+          // plus the device bottom inset so the last card's action row is
+          // never hidden behind it.
+          { paddingBottom: TAB_BAR_HEIGHT + insets.bottom + LIST_BOTTOM_GAP },
+        ]}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <View style={styles.emptyIconWrap}>

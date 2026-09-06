@@ -86,6 +86,11 @@ export async function registerUser(params: RegisterParams) {
     emailVerified: true,
     role: "regular_user",
     status: "Inactive",
+    // Identity verification (face selfie + Valid ID) starts as "awaiting_id":
+    // the account exists and its email is verified, but no face scan or ID
+    // has been submitted yet. Statuses: awaiting_id → pending → verified/rejected.
+    verificationStatus: "awaiting_id",
+    verifiedAt: null,
     presenceStatus: "Inactive",
     presenceSource: "register",
     presenceUpdatedAt: serverTimestamp(),

@@ -11,15 +11,28 @@ import { Ionicons } from "@expo/vector-icons";
 import { type Href, useRouter, useFocusEffect } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { onAuthStateChanged } from "firebase/auth";
-import { auth } from "../../firebaseConfig";
+import { doc, onSnapshot } from "firebase/firestore";
+import { auth, db } from "../../firebaseConfig";
 
 const FACE_SELFIE_ROUTE = "/verification/face_selfie/faceselfiemain" as Href;
 const VALID_ID_ROUTE = "/verification/valid_id/valid_id_main" as Href;
+// Read-only review of the already-submitted Valid ID — the "Verify your id"
+// card lands here once a submission exists (the check mark is showing).
+const VALID_ID_SUBMITTED_ROUTE =
+  "/verification/valid_id/valid_id_submittedview" as Href;
 const START_ROUTE = "/start" as Href;
 
 export default function VerificationMainScreen() {
   const router = useRouter();
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  // Signed-in user id — drives the verification-progress subscription below
+  // (the check marks on the Face Recognition / Verify your id cards).
+  const [userId, setUserId] = useState<string | null>(null);
+  // Verification progress read from the user's `regular_user` document:
+  //   hasFaceScan — a face scan (selfie) is on file
+  //   hasValidId  — a Valid ID has been submitted
+  const [hasFaceScan, setHasFaceScan] = useState(false);
+  const [hasValidId, setHasValidId] = useState(false);
   // Lightbox confirmation for the back action — opened by both the on-screen
   // arrow and the Android hardware back button.
   const [isBackConfirmOpen, setIsBackConfirmOpen] = useState(false);
@@ -29,10 +42,41 @@ export default function VerificationMainScreen() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUserEmail(currentUser?.email ?? null);
+      setUserId(currentUser?.uid ?? null);
     });
 
     return unsubscribe;
   }, []);
+
+  // Live verification progress — subscribes to the signed-in user's document
+  // so the check marks reflect submissions made from the face / Valid ID
+  // flows instantly (including when this screen regains focus afterwards).
+  useEffect(() => {
+    if (!userId) {
+      setHasFaceScan(false);
+      setHasValidId(false);
+      return undefined;
+    }
+
+    const unsubscribe = onSnapshot(
+      doc(db, "regular_user", userId),
+      (snapshot) => {
+        const data = snapshot.exists() ? snapshot.data() : undefined;
+        setHasFaceScan(
+          Boolean(data?.faceScanUrl ?? data?.faceScanPath ?? data?.faceScanSubmittedAt),
+        );
+        setHasValidId(Boolean(data?.validIdFrontUrl ?? data?.validIdSubmittedAt));
+      },
+      () => {
+        // Read failed (offline / permissions) — hide the checks; the cards
+        // stay tappable either way.
+        setHasFaceScan(false);
+        setHasValidId(false);
+      },
+    );
+
+    return unsubscribe;
+  }, [userId]);
 
   // A single back press opens the lightbox; the user makes an explicit
   // choice there. Returns true because the press is always consumed (used
@@ -91,6 +135,12 @@ export default function VerificationMainScreen() {
   };
 
   const handleValidId = () => {
+    // A submitted ID (check mark showing) opens the read-only review of what
+    // was submitted; nothing submitted yet opens the submission flow.
+    if (hasValidId) {
+      router.push(VALID_ID_SUBMITTED_ROUTE);
+      return;
+    }
     router.push(VALID_ID_ROUTE);
   };
 
@@ -127,6 +177,14 @@ export default function VerificationMainScreen() {
           >
             <Ionicons name="camera-outline" size={30} color="#0F172A" />
             <Text style={styles.optionText}>Face Recognition</Text>
+            {hasFaceScan && (
+              <Ionicons
+                name="checkmark-circle"
+                size={24}
+                color="#16A34A"
+                style={styles.optionCheck}
+              />
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -145,6 +203,14 @@ export default function VerificationMainScreen() {
               </View>
             </View>
             <Text style={styles.optionText}>Verify your id</Text>
+            {hasValidId && (
+              <Ionicons
+                name="checkmark-circle"
+                size={24}
+                color="#16A34A"
+                style={styles.optionCheck}
+              />
+            )}
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -344,6 +410,11 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: "#0F172A",
     marginLeft: 20,
+  },
+  // Completion check pinned to the right edge of an option card —
+  // marginLeft: "auto" pushes it to the end of the row layout.
+  optionCheck: {
+    marginLeft: "auto",
   },
   // Mini ID-card icon on the "Verify your id" option card. Fixed at 30px
   // wide — the same footprint as the 30px Ionicons used on the Face

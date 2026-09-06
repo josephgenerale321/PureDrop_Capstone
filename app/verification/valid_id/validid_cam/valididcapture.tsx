@@ -16,11 +16,11 @@ import {
   loadNativeModules,
   retryLoadModules,
   type VisionCameraModule,
-} from "../../../../components/verification/faceselfie_comp/selfiecapture/selfiecaptfunc";
+} from "../../../../components/verification/faceselfie_comp/selfiecapture/backend/selfiecaptfunc";
 import {
   useIdCapture,
   type IdPhotoSide,
-} from "../../../../components/verification/validid/valididcapture/idcapturefunc";
+} from "../../../../components/verification/validid/valididcapture/backend/idcapturefunc";
 import ValidIdCropper from "../../../../components/verification/validid/valididcapture/valididcropper";
 import CropperOldPhone from "../../../../components/verification/validid/valididcapture/cropperoldphone";
 

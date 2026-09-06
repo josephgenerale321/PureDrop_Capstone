@@ -7,7 +7,12 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+
+// Height of the floating tab bar rendered by app/regular_user/_layout.jsx
+// (position:"absolute", so it overlays the bottom of this screen). Must stay
+// in sync with the `tabBar.height` style in that layout.
+const TAB_BAR_HEIGHT = 30;
 
 export interface ProfileViewModel {
   fullName: string;
@@ -35,13 +40,24 @@ export default function ProfileComponent({
   onEditProfile,
   onBack,
 }: ProfileComponentProps) {
+  const insets = useSafeAreaInsets();
   const avatarSource = profile?.profileImageUrl
     ? { uri: profile.profileImageUrl }
     : require("../../assets/images/default_account.png");
 
   return (
-    <SafeAreaView style={styles.container}>
-      <TouchableOpacity style={styles.backButton} onPress={onBack}>
+    <SafeAreaView
+      style={[
+        styles.container,
+        // Reserve the floating tab bar's height plus the device bottom inset,
+        // so the vertically centered card never slides behind the tab bar.
+        { paddingBottom: TAB_BAR_HEIGHT + insets.bottom },
+      ]}
+    >
+      <TouchableOpacity
+        style={[styles.backButton, { top: insets.top + 12 }]}
+        onPress={onBack}
+      >
         <Ionicons name="arrow-back" size={24} color="#ffffff" />
       </TouchableOpacity>
 
@@ -123,10 +139,15 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#f0f9ff",
     alignItems: "center",
+    // Vertically center the card in the space above the floating tab bar
+    // (bottom padding for the tab bar is applied dynamically in the component).
+    justifyContent: "center",
   },
   backButton: {
     position: "absolute",
-    top: 52,
+    // `top` is applied dynamically from the safe-area inset in the component
+    // (hardcoded values sit at the wrong distance on devices with different
+    // status-bar heights).
     left: 20,
     zIndex: 10,
     width: 36,
@@ -137,7 +158,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   card: {
-    marginTop: 110,
     width: "90%",
     maxWidth: 360,
     minHeight: 460,
@@ -148,6 +168,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 20,
     paddingTop: 24,
+    paddingBottom: 24,
     shadowColor: "#000000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.05,

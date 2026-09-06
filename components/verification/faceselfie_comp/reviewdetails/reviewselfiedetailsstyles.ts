@@ -91,6 +91,11 @@ export const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  submitButtonDisabled: {
+    opacity: 0.5,
+    elevation: 0,
+    shadowOpacity: 0,
+  },
   submitButtonText: {
     fontSize: 16,
     fontWeight: "600",

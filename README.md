@@ -299,6 +299,7 @@ npm install
 | `EXPO_PUBLIC_SUPABASE_STORAGE_BUCKET` | Storage bucket for report photos (`reports`) |
 | `EXPO_PUBLIC_SUPABASE_AVATAR_BUCKET` | Storage bucket for avatars (`regular_user`) |
 | `EXPO_PUBLIC_SUPABASE_AVATAR_FOLDER` | Avatar folder path (`users`) |
+| `EXPO_PUBLIC_SUPABASE_VERIFICATION_BUCKET` | Storage bucket for face-scan and valid-ID verification files (`verification_id`) |
 | `EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY` | Google Maps Android API key |
 | `EXPO_PUBLIC_MAPTILER_API_KEY` | MapTiler API key |
 | `GOOGLE_SERVICES_JSON` | Path to `google-services.json` (`@./google-services.json` for EAS cloud builds) |

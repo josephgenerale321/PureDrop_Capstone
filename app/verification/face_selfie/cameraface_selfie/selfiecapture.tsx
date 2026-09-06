@@ -20,7 +20,7 @@ import {
   type FaceDetectorModule,
   type FaceHint,
   type VisionCameraModule,
-} from "../../../../components/verification/faceselfie_comp/selfiecapture/selfiecaptfunc";
+} from "../../../../components/verification/faceselfie_comp/selfiecapture/backend/selfiecaptfunc";
 
 // Hint text for each live face-quality state (classified by evaluateFace in
 // the func file). The "ok" entry matches the capture-enabled message.

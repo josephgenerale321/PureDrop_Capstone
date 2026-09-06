@@ -8,7 +8,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { styles } from "../../../../components/verification/faceselfie_comp/reviewdetails/reviewselfiedetailsstyles";
-import { useReviewSelfieDetails } from "../../../../components/verification/faceselfie_comp/reviewdetails/reviewselfiedetailsfunc";
+import { useReviewSelfieDetails } from "../../../../components/verification/faceselfie_comp/reviewdetails/backend/reviewselfiedetailsfunc";
 
 /**
  * Face Scan Details — review the captured selfie before submitting.
@@ -22,6 +22,7 @@ export default function ReviewSelfieDetailsScreen() {
     mockScore,
     isSubmitConfirmOpen,
     isUploadedModalOpen,
+    isSubmitting,
     handleBack,
     handleSubmit,
     handleConfirmSubmit,
@@ -65,13 +66,15 @@ export default function ReviewSelfieDetailsScreen() {
 
         <View style={styles.footer}>
           <TouchableOpacity
-            style={styles.submitButton}
+            style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
             onPress={handleSubmit}
             activeOpacity={0.8}
+            disabled={isSubmitting}
             accessibilityRole="button"
             accessibilityLabel="Submit your face scan"
+            accessibilityState={{ disabled: isSubmitting }}
           >
-            <Text style={styles.submitButtonText}>Submit</Text>
+            <Text style={styles.submitButtonText}>{isSubmitting ? "Submitting..." : "Submit"}</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -90,6 +93,7 @@ export default function ReviewSelfieDetailsScreen() {
                 style={[styles.confirmButton, styles.confirmCancelButton]}
                 onPress={handleCloseConfirm}
                 activeOpacity={0.8}
+                disabled={isSubmitting}
                 accessibilityRole="button"
                 accessibilityLabel="Go back without submitting"
               >
@@ -102,10 +106,13 @@ export default function ReviewSelfieDetailsScreen() {
                 style={[styles.confirmButton, styles.confirmSubmitButton]}
                 onPress={handleConfirmSubmit}
                 activeOpacity={0.8}
+                disabled={isSubmitting}
                 accessibilityRole="button"
                 accessibilityLabel="Confirm and submit your face scan"
               >
-                <Text style={styles.confirmButtonText}>SUBMIT</Text>
+                <Text style={styles.confirmButtonText}>
+                  {isSubmitting ? "SUBMITTING..." : "SUBMIT"}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>

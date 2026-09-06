@@ -22,10 +22,24 @@ import IdPhotoBox from "../../../components/verification/validid/idphotobox";
 import {
   consumeCapturedIdPhoto,
   type IdPhotoSide,
-} from "../../../components/verification/validid/valididcapture/idcapturefunc";
+} from "../../../components/verification/validid/valididcapture/backend/idcapturefunc";
+import {
+  submitValidId,
+  type ValidIdSubmissionInput,
+} from "../../../components/verification/validid/backend/validIdBackend";
 
 // Route of the Valid ID camera capture screen.
 const ID_CAPTURE_ROUTE = "/verification/valid_id/validid_cam/valididcapture";
+
+// Where the app lands after the whole identity verification is complete.
+// The user is already signed in at this point (registration signs them in
+// right after the email OTP), so they go straight to Home.
+const HOME_ROUTE = "/regular_user/home" as Href;
+
+// Where the app lands when the Valid ID is in but the face scan is still
+// missing — the submission is not "pending review" until BOTH are in, so the
+// user is sent to the face-scan flow instead of Home.
+const FACE_SELFIE_ROUTE = "/verification/face_selfie/faceselfiemain" as Href;
 
 // Mockup ID types — the real list will come from the backend later.
 const VALID_ID_TYPES: string[] = [
@@ -54,6 +68,9 @@ export default function ValidIdMainScreen() {
   const [backPhoto, setBackPhoto] = useState<string | null>(null);
   const [passportPhoto, setPassportPhoto] = useState<string | null>(null);
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
+  // True while the Valid ID photos are uploading/being recorded — disables
+  // the submit button so the submission can't be double-fired.
+  const [isSubmitting, setIsSubmitting] = useState(false);
   // Side whose attached-photo action card (View Image / Retake) is open.
   const [actionSheetSide, setActionSheetSide] = useState<IdPhotoSide | null>(null);
   // Side whose full-screen photo lightbox is open.
@@ -199,14 +216,63 @@ export default function ValidIdMainScreen() {
     setIsSubmitConfirmOpen(true);
   };
 
-  const handleConfirmSubmit = () => {
+  const handleConfirmSubmit = async () => {
     setIsSubmitConfirmOpen(false);
 
-    // Mockup — the real backend submission will be wired up later.
-    Alert.alert(
-      "Mockup",
-      `Valid ID submission is not implemented yet. (Selected: ${selectedIdType})`,
-    );
+    // Real submission — uploads the captured ID photos to Supabase Storage
+    // and records them on the user's `regular_user` Firestore document via
+    // the Valid ID submission backend (components/verification/validid/backend).
+    if (!selectedIdType) {
+      Alert.alert("Select your Valid ID", "Please choose your Valid ID type first.");
+      return;
+    }
+
+    const submission: ValidIdSubmissionInput = {
+      idType: selectedIdType,
+      frontPhoto: isPassport ? null : frontPhoto,
+      backPhoto: isPassport ? null : backPhoto,
+      passportPhoto: isPassport ? passportPhoto : null,
+    };
+
+    try {
+      setIsSubmitting(true);
+      const result = await submitValidId(submission);
+
+      // The photos are safely stored now — clean up the local temp captures
+      // so they don't leak in the app cache.
+      [frontPhoto, backPhoto, passportPhoto]
+        .filter((uri): uri is string => uri !== null)
+        .forEach((uri) => {
+          FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+        });
+
+      // Without a face scan the submission is NOT "pending review" yet —
+      // send the user to the face-scan flow instead of Home so the whole
+      // identity verification gets completed before they move on.
+      if (!result.hasFaceScan) {
+        Alert.alert(
+          "Valid ID Submitted",
+          "Your Valid ID has been submitted. Please complete your face scan to finish your verification.",
+          [{ text: "OK", onPress: () => router.replace(FACE_SELFIE_ROUTE) }],
+        );
+        return;
+      }
+
+      Alert.alert(
+        "Verification Complete",
+        "Your Valid ID has been submitted and is now pending review.",
+        [{ text: "OK", onPress: () => router.replace(HOME_ROUTE) }],
+      );
+    } catch (error) {
+      Alert.alert(
+        "Submission Failed",
+        error instanceof Error
+          ? error.message
+          : "Something went wrong while submitting your Valid ID. Please try again.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Photo + label backing the action card / lightbox for the active side.
@@ -307,13 +373,17 @@ export default function ValidIdMainScreen() {
         )}
 
         <TouchableOpacity
-          style={styles.submitButton}
+          style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
           onPress={handleSubmit}
           activeOpacity={0.8}
+          disabled={isSubmitting}
           accessibilityRole="button"
           accessibilityLabel="Submit your Valid ID"
+          accessibilityState={{ disabled: isSubmitting }}
         >
-          <Text style={styles.submitButtonText}>Submit Valid ID</Text>
+          <Text style={styles.submitButtonText}>
+            {isSubmitting ? "Submitting..." : "Submit Valid ID"}
+          </Text>
         </TouchableOpacity>
       </ScrollView>
       </SafeAreaView>
