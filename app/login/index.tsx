@@ -17,9 +17,12 @@ import { finishLogout } from "../../lib/auth/logoutState";
 import { getLoginErrorMessage } from "../../lib/login/logerror";
 import { loginUser } from "../../lib/login/loginfunctions";
 import SavedLoginWait from "../../components/loading/restore_session/loading_session";
-import { resolveIdentityVerificationTarget } from "../../components/login/backend/postEmailVerificationGate";
+import { resolvePostLoginTarget } from "../../components/login/backend/postEmailVerificationGate";
 
 const FORGOT_PASSWORD_ROUTE = "/login/forgot_password" as Href;
+// Rejection notice screen — shown when the admin rejected the user's
+// verification (ID / face photo). Same design as the email success screen.
+const REJECTED_ROUTE = "/login/validation/rejectedverif" as Href;
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -60,12 +63,20 @@ const handleLogin = async () => {
       await loginUser({ email, password });
 
       setStage("verification");
-      const verificationTarget = await resolveIdentityVerificationTarget();
+      // An explicit login is the enforcement point for identity verification:
+      // an unverified / pending user is routed into the flow even if they
+      // previously chose "later" — the persisted later marker only suppresses
+      // the SILENT session auto-redirect on the pre-login screens.
+      const loginTarget = await resolvePostLoginTarget();
 
+      // Rejected verifications land on the rejection notice screen first
+      // (shown once per rejection), then the user must re-verify their ID.
       router.replace(
-        verificationTarget === "verification"
-          ? "/verification/verificationmain"
-          : "/regular_user/home",
+        loginTarget === "rejected_notice"
+          ? REJECTED_ROUTE
+          : loginTarget === "verification"
+            ? "/verification/verificationmain"
+            : "/regular_user/home",
       );
     } catch (err: unknown) {
       Alert.alert("Error", getLoginErrorMessage(err));

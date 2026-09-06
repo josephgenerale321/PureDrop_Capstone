@@ -4,7 +4,10 @@ import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { useEffect, useRef } from "react";
 import { auth, db } from "../../firebaseConfig";
-import { resolveIdentityVerificationTarget } from "../login/backend/postEmailVerificationGate";
+import {
+  hasChosenVerificationLater,
+  resolvePostLoginTarget,
+} from "../login/backend/postEmailVerificationGate";
 
 const SAVED_LOGIN_KEY = "@puredrop/saved_login";
 const SAVED_LOGIN_EMAIL_KEY = "@puredrop/saved_login_email";
@@ -26,10 +29,17 @@ type SavedLoginState = {
  *   confirmed, so an auth event fires while the user is still here; without
  *   this exclusion the auto-redirect would hijack them to Home and they
  *   would never see the success screen / "Verify Identity" step.
+ * - `/login/validation` — the rejection notice screen (rejectedverif). The
+ *   user must acknowledge it and tap "Re-verify ID" themselves; an
+ *   auto-redirect firing while it is open would bypass the notice.
  * - `/verification` — the identity verification flow itself (face selfie +
  *   Valid ID). An unverified user belongs here, not on Home.
  */
-const AUTO_REDIRECT_EXCLUDED_PREFIXES = ["/login/email_verification", "/verification"];
+const AUTO_REDIRECT_EXCLUDED_PREFIXES = [
+  "/login/email_verification",
+  "/login/validation",
+  "/verification",
+];
 
 /**
  * True when the current route is a pre-login screen (welcome, start, login,
@@ -129,7 +139,7 @@ export default function SaveLoginSync() {
     let isMounted = true;
     let unsubscribe: (() => void) | null = null;
 
-    const maybeRedirect = () => {
+    const maybeRedirect = async () => {
       if (
         !handledSessionRef.current &&
         restoreIntentRef.current &&
@@ -149,18 +159,49 @@ export default function SaveLoginSync() {
           return;
         }
 
+        // A persisted "later" choice (verificationmain → Cancel Verification
+        // → LATER) suppresses the auto-redirect for this account: leave the
+        // user on whatever pre-login screen they are on (index / start /
+        // login / register) instead of bouncing them into the verification
+        // flow. The gate still runs ONCE so an account the admin has since
+        // VERIFIED goes straight to Home, and a REJECTED account still gets
+        // its rejection notice — only the "verification" outcome is
+        // suppressed. One-shot for this app run.
+        if (await hasChosenVerificationLater()) {
+          handledSessionRef.current = true;
+          void (async () => {
+            try {
+              const target = await resolvePostLoginTarget();
+              if (target === "rejected_notice") {
+                router.replace("/login/validation/rejectedverif" as Href);
+              } else if (target === "home") {
+                router.replace("/regular_user/home");
+              }
+              // "verification" → stay put: the user chose "later".
+            } catch {
+              // Stay put — navigation must never crash the app.
+            }
+          })();
+          return;
+        }
+
         // Claim the one-shot redirect immediately so overlapping auth events
         // cannot trigger a second navigation while the gate check is awaited.
         handledSessionRef.current = true;
 
         void (async () => {
-          // Identity verification gate — a user who has not submitted both
-          // their face scan and Valid ID is routed to the verification flow
-          // ("Let's verify your identity first") instead of Home.
+          // Post-login gate — routes a rejected verification to the rejection
+          // notice screen (shown once per rejection), an unverified user to
+          // the verification flow, and everyone else to Home.
           let target: Href = "/regular_user/home";
           try {
-            const verificationTarget = await resolveIdentityVerificationTarget();
-            if (verificationTarget === "verification") {
+            // Post-login gate — routes a rejected verification to the
+            // rejection notice, a pending/unverified user to the verification
+            // flow, and a verified account to Home.
+            const loginTarget = await resolvePostLoginTarget();
+            if (loginTarget === "rejected_notice") {
+              target = "/login/validation/rejectedverif" as Href;
+            } else if (loginTarget === "verification") {
               target = "/verification/verificationmain" as Href;
             }
           } catch {

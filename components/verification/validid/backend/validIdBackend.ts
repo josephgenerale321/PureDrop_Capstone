@@ -68,8 +68,12 @@ export type ValidIdSubmissionResult = {
 };
 
 /**
- * Submits the captured Valid ID photos for the signed-in user. Throws with a
- * user-presentable message on failure (no upload, no Firestore write).
+ * Submits the captured Valid ID photos for the signed-in user. Each photo
+ * value is either a fresh local capture URI (uploaded to Supabase Storage)
+ * or the stored https URL of a previously submitted photo (reused without
+ * re-uploading — the Valid ID edit screen carries unchanged photos over).
+ * Throws with a user-presentable message on failure (no upload, no Firestore
+ * write).
  */
 export async function submitValidId(
   input: ValidIdSubmissionInput,
@@ -99,21 +103,33 @@ export async function submitValidId(
     throw new Error("Attach the photo of your Valid ID before submitting.");
   }
 
-  // Upload each captured side; remember the storage path per side so the
-  // Firestore update can reference exactly what was uploaded.
+  // A remote URI (http/https) is a photo carried over from the previous
+  // submission (the Valid ID edit screen pre-fills the boxes with the stored
+  // URLs) — it is already stored under this user's verification folder, so
+  // the upload is skipped and the existing object is reused. Local file URIs
+  // are fresh captures and are uploaded as before.
+  const isStoredPhoto = (uri: string) => /^https?:\/\//i.test(uri);
+
+  // Upload each side (or reuse the stored object for unchanged sides);
+  // remember the storage path per side so the Firestore update can reference
+  // exactly what was uploaded/reused.
   const paths: Partial<Record<ValidIdSubmissionSide, string>> = {};
   const urls: Partial<Record<ValidIdSubmissionSide, string>> = {};
   try {
     for (const side of sides) {
       const path = `verification/${user.uid}/${ID_PHOTO_PATHS[side]}`;
-      urls[side] = await uploadVerificationPhoto(
-        (side === "front"
-          ? input.frontPhoto
-          : side === "back"
-            ? input.backPhoto
-            : input.passportPhoto) as string,
-        path,
-      );
+      const photoUri = (side === "front"
+        ? input.frontPhoto
+        : side === "back"
+          ? input.backPhoto
+          : input.passportPhoto) as string;
+
+      if (isStoredPhoto(photoUri)) {
+        // Unchanged side — keep the stored object, no re-upload needed.
+        urls[side] = photoUri;
+      } else {
+        urls[side] = await uploadVerificationPhoto(photoUri, path);
+      }
       paths[side] = path;
     }
   } catch (error) {

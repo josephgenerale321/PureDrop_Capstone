@@ -10,12 +10,14 @@ import {
   View,
 } from "react-native";
 // Legacy subpath — the root "expo-file-system" import deprecates these
-// methods in SDK 54 (same convention as useCreateReportForm, offline cache).
+// methods in SDK 54 (same convention as valid_id_main.tsx).
 import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { type Href, useRouter } from "expo-router";
 import { useIsFocused } from "@react-navigation/native";
+import { onAuthStateChanged } from "firebase/auth";
+import { doc, onSnapshot } from "firebase/firestore";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { styles } from "../../../components/verification/validid/valididstyles";
 import IdPhotoBox from "../../../components/verification/validid/idphotobox";
@@ -27,19 +29,19 @@ import {
   submitValidId,
   type ValidIdSubmissionInput,
 } from "../../../components/verification/validid/backend/validIdBackend";
+import { auth, db } from "../../../firebaseConfig";
 
 // Route of the Valid ID camera capture screen.
 const ID_CAPTURE_ROUTE = "/verification/valid_id/validid_cam/valididcapture";
 
-// Where the app lands after the Valid ID is submitted with the face scan
-// already on file — the verification hub. The submission is only "pending"
-// at this point: an admin still has to approve the account before it can
-// enter the app (the hub auto-advances to Home on approval).
-const VERIFICATION_HUB_ROUTE = "/verification/verificationmain" as Href;
+// Where the app lands after the edited submission is saved — back to the
+// read-only review so the user immediately sees the updated ID in place.
+const SUBMITTED_VIEW_ROUTE = "/verification/valid_id/valid_id_submittedview" as Href;
 
 // Where the app lands when the Valid ID is in but the face scan is still
 // missing — the submission is not "pending review" until BOTH are in, so the
-// user is sent to the face-scan flow instead of Home.
+// user is sent to the face-scan flow instead of the review screen (same
+// hand-off as the original submission screen).
 const FACE_SELFIE_ROUTE = "/verification/face_selfie/faceselfiemain" as Href;
 
 // Mockup ID types — the real list will come from the backend later.
@@ -60,27 +62,122 @@ const VALID_ID_TYPES: string[] = [
 // so it uses one attachment instead of the front/back pair.
 const PASSPORT_ID_TYPE = "Passport";
 
-export default function ValidIdMainScreen() {
+/**
+ * Edit Valid ID screen — the editable counterpart of the submission screen
+ * (valid_id_main.tsx), for signed-in users who still need to verify their
+ * identity. On load it pre-fills the form with what the user submitted last
+ * time (stored on the user's `regular_user` document by the Valid ID
+ * backend): the ID type dropdown shows the submitted category and the photo
+ * boxes show the submitted photos (their stored Supabase URLs).
+ *
+ *   - Photos that are NOT retaken keep their stored URL — the backend
+ *     recognizes the remote URI, skips the re-upload and reuses the stored
+ *     object.
+ *   - Retaken photos are fresh local captures and upload as usual.
+ *   - Changing the ID type clears the carried-over photos (they belong to
+ *     the previous ID), same reset behavior as valid_id_main.
+ *
+ * Editing is locked while the submission is "pending" (under admin review)
+ * or "verified" (already approved) — same policy as deleteSubmittedValidId.
+ */
+export default function ValidIdEditMainScreen() {
   const router = useRouter();
   const [selectedIdType, setSelectedIdType] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  // Captured photo URIs per side (null = not captured yet).
+  // Photo per side — either a fresh local capture URI or the stored Supabase
+  // URL of the previously submitted photo (null = not attached yet).
   const [frontPhoto, setFrontPhoto] = useState<string | null>(null);
   const [backPhoto, setBackPhoto] = useState<string | null>(null);
   const [passportPhoto, setPassportPhoto] = useState<string | null>(null);
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
   // True while the Valid ID photos are uploading/being recorded — disables
-  // the submit button so the submission can't be double-fired.
+  // the save button so the submission can't be double-fired.
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Side whose attached-photo action card (View Image / Retake) is open.
   const [actionSheetSide, setActionSheetSide] = useState<IdPhotoSide | null>(null);
   // Side whose full-screen photo lightbox is open.
   const [lightboxSide, setLightboxSide] = useState<IdPhotoSide | null>(null);
+  // True until the first Firestore snapshot arrives — keeps the boxes neutral
+  // instead of flashing "empty" before the previous submission loads.
+  const [isLoading, setIsLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
+  // Ensures the prefill only ever runs once — a later snapshot (or a stale
+  // one arriving after the user started editing) must not clobber changes.
+  const hasPrefilledRef = useRef(false);
 
   const isPassport = selectedIdType === PASSPORT_ID_TYPE;
   const frontAttached = frontPhoto !== null;
   const backAttached = backPhoto !== null;
   const passportAttached = passportPhoto !== null;
+
+  // Track the live Firebase session so the prefill always reflects the
+  // account that is actually signed in on this device.
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUserId(currentUser?.uid ?? null);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  // First snapshot of the user's `regular_user` document — prefill the form
+  // with the previously submitted ID type + photo URLs, and lock the screen
+  // when the submission is already verified / under review.
+  useEffect(() => {
+    if (!userId) {
+      return undefined;
+    }
+
+    const unsubscribe = onSnapshot(
+      doc(db, "regular_user", userId),
+      (snapshot) => {
+        if (hasPrefilledRef.current) {
+          return;
+        }
+
+        const data = snapshot.exists() ? snapshot.data() : undefined;
+        const idType =
+          typeof data?.validIdType === "string" ? data.validIdType : null;
+        const frontUrl =
+          typeof data?.validIdFrontUrl === "string" ? data.validIdFrontUrl : null;
+        const backUrl =
+          typeof data?.validIdBackUrl === "string" ? data.validIdBackUrl : null;
+        const status = String(data?.verificationStatus ?? "");
+
+        if (status === "verified" || status === "pending") {
+          hasPrefilledRef.current = true;
+          setIsLoading(false);
+          Alert.alert(
+            "Valid ID locked",
+            status === "verified"
+              ? "Your Valid ID has already been verified and can no longer be edited."
+              : "Your Valid ID is currently under review and cannot be edited right now.",
+            [{ text: "OK", onPress: () => router.replace(SUBMITTED_VIEW_ROUTE) }],
+          );
+          return;
+        }
+
+        if (idType) {
+          hasPrefilledRef.current = true;
+          setSelectedIdType(idType);
+          if (idType === PASSPORT_ID_TYPE) {
+            // The passport data page is stored in the "front" slot.
+            setPassportPhoto(frontUrl);
+          } else {
+            setFrontPhoto(frontUrl);
+            setBackPhoto(backUrl);
+          }
+        }
+        setIsLoading(false);
+      },
+      () => {
+        // Read failed (offline / permissions) — start from the empty form.
+        setIsLoading(false);
+      },
+    );
+
+    return unsubscribe;
+  }, [userId, router]);
 
   // The capture screen hands photos back through a module-level store (back()
   // cannot pass params to the previous screen); consume it whenever this
@@ -106,6 +203,8 @@ export default function ValidIdMainScreen() {
   }, [isFocused]);
 
   // Delete the orphaned temp file whenever a retake replaces a photo.
+  // Carried-over photos are remote URLs (not local files) — deleting those
+  // would be a no-op anyway, but the guard keeps the cleanup honest.
   const prevPhotosRef = useRef<{
     front: string | null;
     back: string | null;
@@ -116,7 +215,7 @@ export default function ValidIdMainScreen() {
     (Object.keys(current) as IdPhotoSide[]).forEach((side) => {
       const prev = prevPhotosRef.current[side];
       const curr = current[side];
-      if (prev && prev !== curr) {
+      if (prev && prev !== curr && !prev.startsWith("http")) {
         FileSystem.deleteAsync(prev, { idempotent: true }).catch(() => {});
       }
     });
@@ -139,8 +238,8 @@ export default function ValidIdMainScreen() {
   const getSideLabel = (side: IdPhotoSide): string =>
     side === "front" ? "Front" : side === "back" ? "Back" : "Passport";
 
-  // Empty box → opens the camera; attached box → opens the action card
-  // (View Image / Retake) instead of the old system alert.
+  // Empty box → opens the camera; attached box (stored or fresh photo) →
+  // opens the action card (View Image / Retake) — same as valid_id_main.
   const handleAttachPhoto = (side: IdPhotoSide) => {
     if (Platform.OS !== "web") {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
@@ -174,8 +273,9 @@ export default function ValidIdMainScreen() {
     }
   };
 
-  // Switching ID types resets attachments so stale photos never carry over
-  // between the single-passport flow and the front/back flow.
+  // Switching ID types resets attachments so the previous ID's photos never
+  // carry over between the single-passport flow and the front/back flow —
+  // the stored photos belong to the old ID type.
   const handleSelectIdType = (idType: string) => {
     setSelectedIdType(idType);
     setIsDropdownOpen(false);
@@ -185,7 +285,8 @@ export default function ValidIdMainScreen() {
   };
 
   const handleSubmit = () => {
-    // Guided mockup validation — tells the user exactly what is still missing.
+    // Same guided validation as the original submission screen — tells the
+    // user exactly what is still missing.
     if (!selectedIdType) {
       Alert.alert("Select your Valid ID", "Please choose your Valid ID type first.");
       return;
@@ -213,21 +314,21 @@ export default function ValidIdMainScreen() {
       }
     }
 
-    // Confirmation modal — same visual pattern as the signout modal.
+    // Confirmation modal — same visual pattern as the submission screen.
     setIsSubmitConfirmOpen(true);
   };
 
   const handleConfirmSubmit = async () => {
     setIsSubmitConfirmOpen(false);
 
-    // Real submission — uploads the captured ID photos to Supabase Storage
-    // and records them on the user's `regular_user` Firestore document via
-    // the Valid ID submission backend (components/verification/validid/backend).
     if (!selectedIdType) {
       Alert.alert("Select your Valid ID", "Please choose your Valid ID type first.");
       return;
     }
 
+    // Unchanged sides carry their stored Supabase URL — submitValidId
+    // recognizes the remote URI, skips the re-upload and keeps the stored
+    // object. Retaken sides are fresh local captures and upload as usual.
     const submission: ValidIdSubmissionInput = {
       idType: selectedIdType,
       frontPhoto: isPassport ? null : frontPhoto,
@@ -239,41 +340,37 @@ export default function ValidIdMainScreen() {
       setIsSubmitting(true);
       const result = await submitValidId(submission);
 
-      // The photos are safely stored now — clean up the local temp captures
-      // so they don't leak in the app cache.
+      // Clean up only the local temp captures — the carried-over remote URLs
+      // are live storage objects, not files on disk.
       [frontPhoto, backPhoto, passportPhoto]
-        .filter((uri): uri is string => uri !== null)
+        .filter((uri): uri is string => uri !== null && !uri.startsWith("http"))
         .forEach((uri) => {
           FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
         });
 
       // Without a face scan the submission is NOT "pending review" yet —
-      // send the user to the face-scan flow instead of Home so the whole
-      // identity verification gets completed before they move on.
+      // send the user to the face-scan flow so the whole identity
+      // verification gets completed (same hand-off as valid_id_main).
       if (!result.hasFaceScan) {
         Alert.alert(
           "Valid ID Submitted",
-          "Your Valid ID has been submitted. Please complete your face scan to finish your verification.",
+          "Your Valid ID has been updated. Please complete your face scan to finish your verification.",
           [{ text: "OK", onPress: () => router.replace(FACE_SELFIE_ROUTE) }],
         );
         return;
       }
 
-      // The whole submission (face scan + Valid ID) is in, but the account is
-      // only "pending" — the admin still has to approve it. Land on the
-      // verification hub instead of Home; it shows both check marks and
-      // auto-advances to Home the moment the admin approves.
       Alert.alert(
-        "Pending Admin Review",
-        "Your Valid ID has been submitted. You can start using the app once an admin approves your verification.",
-        [{ text: "OK", onPress: () => router.replace(VERIFICATION_HUB_ROUTE) }],
+        "Valid ID Updated",
+        "Your changes have been saved and your Valid ID is now pending review.",
+        [{ text: "OK", onPress: () => router.replace(SUBMITTED_VIEW_ROUTE) }],
       );
     } catch (error) {
       Alert.alert(
         "Submission Failed",
         error instanceof Error
           ? error.message
-          : "Something went wrong while submitting your Valid ID. Please try again.",
+          : "Something went wrong while saving your Valid ID. Please try again.",
       );
     } finally {
       setIsSubmitting(false);
@@ -294,9 +391,9 @@ export default function ValidIdMainScreen() {
       </TouchableOpacity>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Choose your Valid ID</Text>
+        <Text style={styles.title}>Edit your Valid ID</Text>
 
-        {/* ID type dropdown (mockup) */}
+        {/* ID type dropdown — pre-selected with the previously submitted type */}
         <TouchableOpacity
           style={styles.dropdownSelector}
           onPress={() => setIsDropdownOpen((open) => !open)}
@@ -311,7 +408,7 @@ export default function ValidIdMainScreen() {
               !selectedIdType && styles.dropdownSelectorPlaceholder,
             ]}
           >
-            {selectedIdType ?? "Select"}
+            {selectedIdType ?? (isLoading ? "Loading..." : "Select")}
           </Text>
           <Ionicons
             name={isDropdownOpen ? "chevron-up" : "chevron-down"}
@@ -383,11 +480,11 @@ export default function ValidIdMainScreen() {
           activeOpacity={0.8}
           disabled={isSubmitting}
           accessibilityRole="button"
-          accessibilityLabel="Submit your Valid ID"
+          accessibilityLabel="Save your Valid ID changes"
           accessibilityState={{ disabled: isSubmitting }}
         >
           <Text style={styles.submitButtonText}>
-            {isSubmitting ? "Submitting..." : "Submit Valid ID"}
+            {isSubmitting ? "Saving..." : "Save Changes"}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -396,10 +493,10 @@ export default function ValidIdMainScreen() {
       {isSubmitConfirmOpen && (
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>Submit this Valid ID?</Text>
+            <Text style={styles.confirmTitle}>Update this Valid ID?</Text>
             <Text style={styles.confirmMessage}>
-              Please double check your Valid ID before you submit. You won&apos;t be able to edit
-              it after submission.
+              Photos you kept stay as they are — retaken photos replace the stored ones.
+              Please double check everything before saving.
             </Text>
 
             <View style={styles.confirmActions}>
@@ -408,7 +505,7 @@ export default function ValidIdMainScreen() {
                 onPress={() => setIsSubmitConfirmOpen(false)}
                 activeOpacity={0.8}
                 accessibilityRole="button"
-                accessibilityLabel="Go back without submitting"
+                accessibilityLabel="Go back without saving"
               >
                 <Text style={[styles.confirmButtonText, styles.confirmCancelButtonText]}>
                   GO BACK
@@ -419,10 +516,11 @@ export default function ValidIdMainScreen() {
                 style={[styles.confirmButton, styles.confirmSubmitButton]}
                 onPress={handleConfirmSubmit}
                 activeOpacity={0.8}
+                disabled={isSubmitting}
                 accessibilityRole="button"
-                accessibilityLabel="Confirm and submit your Valid ID"
+                accessibilityLabel="Confirm and save your Valid ID changes"
               >
-                <Text style={styles.confirmButtonText}>SUBMIT</Text>
+                <Text style={styles.confirmButtonText}>SAVE</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -525,4 +623,3 @@ export default function ValidIdMainScreen() {
     </>
   );
 }
-

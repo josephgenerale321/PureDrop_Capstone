@@ -86,6 +86,29 @@ if (loading) {
           <Ionicons name="chevron-forward" size={24} color="#A0EEBA" style={{ opacity: 0.8 }} />
         </TouchableOpacity>
 
+        {/* Identity verification call-to-action — shown while the account is
+            not verified yet. This is the way back into the verification flow
+            for users who chose "continue later" on the verification hub (the
+            login/restore gates respect that choice and land here instead). */}
+        {String(user?.verificationStatus ?? "") !== "verified" && (
+          <TouchableOpacity
+            style={styles.primaryActionCard}
+            onPress={() => router.push("/verification/verificationmain")}
+            activeOpacity={0.85}
+          >
+            <View style={styles.primaryActionIconWrap}>
+              <Ionicons name="shield-checkmark" size={32} color="#FFFFFF" />
+            </View>
+            <View style={styles.primaryActionTextWrap}>
+              <Text style={styles.primaryActionTitle}>Verify your identity</Text>
+              <Text style={styles.primaryActionDesc}>
+                Submit your face scan and Valid ID to verify your account.
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={24} color="#A0EEBA" style={{ opacity: 0.8 }} />
+          </TouchableOpacity>
+        )}
+
         {/* Dashboard Utilities Section */}
         <Text style={styles.sectionLabel}>Dashboard Utilities</Text>
 

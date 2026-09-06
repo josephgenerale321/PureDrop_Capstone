@@ -20,9 +20,15 @@ import { auth, db } from "../../../firebaseConfig";
 // Where the user lands when backing out of the submitted-ID review.
 const BACK_ROUTE = "/verification/verificationmain" as Href;
 
-// "Replace Valid ID" reopens the submission flow — re-submitting overwrites
-// the stored photos and record (the backend uploads with upsert: true).
-const VALID_ID_ROUTE = "/verification/valid_id/valid_id_main" as Href;
+// "Replace Valid ID" reopens the submission flow pre-filled with what was
+// submitted last time (valid_id_editmain) — re-submitting overwrites the
+// stored photos and record (the backend uploads with upsert: true).
+const VALID_ID_EDIT_ROUTE = "/verification/valid_id/valid_id_editmain" as Href;
+
+// After a delete the submission is gone — the user lands on the fresh
+// submission flow (valid_id_main) to submit a new one. replace() so back
+// navigation never returns to the now-empty review screen.
+const VALID_ID_MAIN_ROUTE = "/verification/valid_id/valid_id_main" as Href;
 
 // Passport is a booklet — its data page is stored in the "front" slot, so a
 // single box is shown for it instead of the front/back pair.
@@ -113,10 +119,12 @@ export default function ValidIdSubmittedViewScreen() {
   // Edit / Delete actions only make sense when a submission actually exists.
   const showActions = !isLoading && Boolean(submitted.idType);
 
-  // "Replace Valid ID" — reopens the submission flow. Re-submitting overwrites
-  // the stored photos and Firestore record, so no delete is needed first.
+  // "Replace Valid ID" — reopens the submission flow with the previously
+  // submitted ID type + photos pre-filled (valid_id_editmain). Re-submitting
+  // overwrites the stored photos and Firestore record, so no delete is
+  // needed first.
   const handleReplace = () => {
-    router.push(VALID_ID_ROUTE);
+    router.push(VALID_ID_EDIT_ROUTE);
   };
 
   const handleDeletePress = () => {
@@ -124,8 +132,8 @@ export default function ValidIdSubmittedViewScreen() {
   };
 
   // Confirmed delete — runs the backend (storage cleanup + Firestore field
-  // clearing + status revert). The live snapshot re-renders the screen into
-  // the empty state automatically once the fields are cleared.
+  // clearing + status revert), then moves the user onto the fresh submission
+  // flow (valid_id_main) so they can submit a new ID right away.
   const handleConfirmDelete = async () => {
     if (isDeleting) {
       return;
@@ -136,7 +144,8 @@ export default function ValidIdSubmittedViewScreen() {
       setIsDeleteConfirmOpen(false);
       Alert.alert(
         "Valid ID Deleted",
-        "Your submitted Valid ID has been removed. You can submit a new one anytime.",
+        "Your submitted Valid ID has been removed. Please submit a new one to continue your verification.",
+        [{ text: "OK", onPress: () => router.replace(VALID_ID_MAIN_ROUTE) }],
       );
     } catch (error) {
       setIsDeleteConfirmOpen(false);

@@ -91,6 +91,12 @@ export async function registerUser(params: RegisterParams) {
     // has been submitted yet. Statuses: awaiting_id → pending → verified/rejected.
     verificationStatus: "awaiting_id",
     verifiedAt: null,
+    // Rejection bookkeeping for the login rejection notice:
+    // - verificationRejectionCount — bumped by the admin panel on each reject
+    // - rejectedNoticeSeenCount    — count at the time the user acknowledged
+    //                                the notice (drives "show once per rejection")
+    verificationRejectionCount: 0,
+    rejectedNoticeSeenCount: 0,
     presenceStatus: "Inactive",
     presenceSource: "register",
     presenceUpdatedAt: serverTimestamp(),
