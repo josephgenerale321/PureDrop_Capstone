@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
+  Image,
   PanResponder,
   StyleSheet,
   View,
@@ -9,6 +10,7 @@ import {
 } from "react-native";
 import { canUseReanimatedView, useZoomAnimation, ANIM_MS } from "./useZoomAnimation";
 import type { ZoomablePhotoDriver } from "./ZoomablePhotoView";
+import PinchZoomHint from "./PinchZoomHint";
 
 // Zoom limits / double-tap tuning for the verification photo lightboxes.
 const MIN_SCALE = 1;
@@ -24,6 +26,8 @@ type ZoomablePhotoProps = {
   uri: string;
   accessibilityLabel?: string;
   containerStyle?: ViewStyle;
+  /** Show the animated pinch-hint coach mark until first real zoom. */
+  showPinchHint?: boolean;
 };
 
 /**
@@ -40,7 +44,7 @@ type ZoomablePhotoProps = {
  * - Zoom is clamped to [1, 4] and pan is clamped to the photo bounds, so the
  *   image can never fly off-screen or produce a NaN transform.
  */
-export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle }: ZoomablePhotoProps) {
+export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle, showPinchHint = true }: ZoomablePhotoProps) {
   const viewRef = useRef<View | null>(null);
   // Transform backend: Reanimated UI-thread shared values when the native
   // module is present, classic Animated values otherwise. Chosen ONCE per
@@ -54,6 +58,20 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
   }, []);
   const driverRef = useRef<ZoomablePhotoDriver | null>(null);
   const zoom = useZoomAnimation(driverRef);
+  // Coach-mark visibility: shown until the first REAL zoom (pinch past the
+  // dead-zone or a double-tap toggle), or until the hint's own timer/l loop
+  // cap reports done. Never blocks touches (hint is pointerEvents="none").
+  const [hintVisible, setHintVisible] = useState(showPinchHint);
+  const hintDone = useRef(false);
+  const dismissHint = () => {
+    if (hintDone.current) return;
+    hintDone.current = true;
+    try {
+      setHintVisible(false);
+    } catch {
+      /* non-fatal */
+    }
+  };
   // Latest on-screen values. On the Reanimated backend these come from the
   // UI-thread shared values (readable from JS at any time — no stale-mirror
   // teleport). On the Animated fallback the hook mirrors setLive/animateTo
@@ -130,6 +148,11 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
     // the pan clamp must be built from — never the raw container size.
     imgW: 0,
     imgH: 0,
+    // CONTAIN letterbox offsets ((container - rendered)/2), refreshed by
+    // clamp() every frame: the focal math subtracts these so the pinch
+    // point is measured from the BITMAP center, not the view center.
+    letterX: 0,
+    letterY: 0,
     // Previous frame's per-finger positions (identifier -> page coords), used
     // to tell a two-finger SLIDE apart from a real pinch by movement
     // DIRECTION (see the two-finger branch in onPanResponderMove).
@@ -161,6 +184,43 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
   // Reset zoom whenever a different photo is shown (front/back/passport swap).
   // Also clear the cached bitmap size — the new photo's own onLoad will
   // re-seed it; until then clamp falls back to container size.
+  // Proactively fetch the bitmap size too: on a dev-build reload the image
+  // onLoad can arrive AFTER the first pinch frames, and until imgW/imgH are
+  // known the clamp falls back to container size (too-loose vertically) —
+  // the repeated-spread = slides-to-bottom report.
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      Image.getSize(
+        uri,
+        (w, h) => {
+          try {
+            if (cancelled) return;
+            if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
+              const s = state.current;
+              // Don't clobber a fresher onLoad size for the SAME uri.
+              if (s.imgW <= 0 || s.imgH <= 0) {
+                s.imgW = w;
+                s.imgH = h;
+                clamp();
+                apply();
+              }
+            }
+          } catch {
+            /* keep the previous size */
+          }
+        },
+        () => {
+          /* ignore — onLoad remains the primary source */
+        },
+      );
+    } catch {
+      /* non-fatal — onLoad remains the primary source */
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [uri]);
   useEffect(() => {
     const s = state.current;
     s.scale = 1;
@@ -179,12 +239,19 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
     liveX.current = 0;
     liveY.current = 0;
     targetScale.current = 1;
+    // A fresh photo gets a fresh coach mark (if the caller wants hints).
+    hintDone.current = false;
+    try {
+      setHintVisible(showPinchHint);
+    } catch {
+      /* non-fatal */
+    }
     try {
       zoom.setLive(1, 0, 0);
     } catch {
       /* non-fatal — next gesture re-syncs the animated values */
     }
-  }, [uri, zoom]);
+  }, [uri, zoom, showPinchHint]);
 
   const apply = () => {
     try {
@@ -225,21 +292,25 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
     const ch = Number.isFinite(s.height) && s.height > 0 ? s.height : 0;
     const { w, h } = renderedSize();
     // Scaled photo size vs the container: the photo may pan only while it
-    // still covers the container on that axis. If the scaled photo is SMALLER
-    // than the container (e.g. a short landscape photo at 1x in a tall
-    // lightbox), the offset locks to the centering value so it can NEVER
-    // slide into the top/bottom black gap from the report.
+    // still covers the container on that axis. If the scaled photo is
+    // SMALLER than the container (short landscape photo at ~1x in a tall
+    // lightbox), travel on that axis locks to 0 — the photo stays centered
+    // and can NEVER slide into the top/bottom black gap.
     const scaledW = w * s.scale;
     const scaledH = h * s.scale;
-    // Photo is centered in the container at rest: rendered rect starts at
-    // (cw - w)/2, (ch - h)/2. The pan offset that keeps that centering is
-    // zero for translate-before-scale — the image view itself fills the
-    // container and CONTAIN centers the bitmap inside it — so the lock value
-    // is simply 0 on the undersized axis.
     const maxX = Math.max(0, (scaledW - cw) / 2);
     const maxY = Math.max(0, (scaledH - ch) / 2);
     s.tx = Math.min(maxX, Math.max(-maxX, s.tx));
     s.ty = Math.min(maxY, Math.max(-maxY, s.ty));
+    // Letterbox offsets are kept for the double-tap focal path's records
+    // but are NOT subtracted from the pinch focal: the transform pivots
+    // around the VIEW center and location coords are view-relative, so the
+    // focal must stay view-relative too (subtracting the offset is what
+    // pushed repeated zoom-ins toward the bottom black).
+    const offX = (cw - w) / 2;
+    const offY = (ch - h) / 2;
+    s.letterX = Number.isFinite(offX) ? offX : 0;
+    s.letterY = Number.isFinite(offY) ? offY : 0;
   };
 
   const stopAnimations = () => {
@@ -312,6 +383,12 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
       // UI-thread timing on Reanimated (smooth even with a busy JS thread);
       // JS-driven timing of identical duration/easing on the fallback.
       zoom.animateTo({ scale: toScale, tx: toX, ty: toY });
+      // A completed double-tap zoom means the user got it — drop the hint.
+      try {
+        dismissHint();
+      } catch {
+        /* non-fatal */
+      }
       // Completion mirror: neither backend exposes an animation callback
       // (Reanimated worklets cannot safely touch this closure), so mirror
       // the animation window (ANIM_MS) plus margin for the animating flag +
@@ -433,6 +510,22 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
       for (const t of collectTouches(event?.nativeEvent?.touches)) {
         touches.current.set(t.id, { x: t.x, y: t.y, lx: t.lx, ly: t.ly, t: now });
       }
+      // Retire synthetic seeds (negative ids) as soon as two REAL fingers
+      // are tracked: from then on distance/centroid must use real data only.
+      // Otherwise the first two map entries stay (finger1 + stale seed) and
+      // the real second finger is ignored — the pinch would freeze.
+      let real = 0;
+      for (const id of touches.current.keys()) {
+        if (id >= 0) {
+          real += 1;
+          if (real >= 2) break;
+        }
+      }
+      if (real >= 2) {
+        for (const id of Array.from(touches.current.keys())) {
+          if (id < 0) touches.current.delete(id);
+        }
+      }
     } catch {
       /* keep the previous touch map */
     }
@@ -440,11 +533,19 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
 
   // Only an end frame removes touches, keyed by changedTouches (the fingers
   // that actually lifted) so a partial touch list can't wipe the pinch.
+  // Synthetic seed points (negative ids, see grant/move) are dropped here
+  // too — they only ever exist to bridge late second-finger events.
   const removeEndedTouches = (
     event: { nativeEvent?: { touches?: unknown; changedTouches?: unknown } } | null | undefined,
   ) => {
     try {
       const map = touches.current;
+      // A real end frame always drops synthetic seeds first: by release time
+      // the true touches are known, and a leftover seed would fake a second
+      // finger on the NEXT gesture (phantom pinch / wrong count).
+      for (const id of Array.from(map.keys())) {
+        if (id < 0) map.delete(id);
+      }
       const changed = collectTouches(event?.nativeEvent?.changedTouches);
       if (changed.length > 0) {
         for (const t of changed) map.delete(t.id);
@@ -461,6 +562,24 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
       for (const t of collectTouches(event?.nativeEvent?.touches)) {
         map.set(t.id, { x: t.x, y: t.y, lx: t.lx, ly: t.ly, t: now });
       }
+      // Same seed retirement as mergeTouches: two real fingers make the
+      // synthetic bridge point obsolete.
+      try {
+        let real = 0;
+        for (const id of map.keys()) {
+          if (id >= 0) {
+            real += 1;
+            if (real >= 2) break;
+          }
+        }
+        if (real >= 2) {
+          for (const id of Array.from(map.keys())) {
+            if (id < 0) map.delete(id);
+          }
+        }
+      } catch {
+        /* keep the map as-is */
+      }
     } catch {
       /* keep the previous touch map */
     }
@@ -468,20 +587,32 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
 
   // Drop entries not refreshed recently. Vivo/Funtouch under load drops
   // touch-end frames, leaving a frozen "ghost finger" that corrupts the next
-  // pinch distance (flicker). Only entries seen within the window count.
-  const STALE_TOUCH_MS = 120;
+  // pinch distance (flicker).
+  //
+  // AUTHORITATIVE for count only at gesture EDGES (grant/start/end), where a
+  // skin may report a partial list: grant takes the max with the responder
+  // count, end removes by changedTouches. Mid-gesture (move frames) this
+  // NEVER shrinks the map on its own — a move frame that lists a single
+  // touch while two fingers are down must not delete the other finger,
+  // otherwise count flaps 2→1, the baseline restarts every other frame, and
+  // spread/pinch appears to do nothing.
+  const STALE_TOUCH_MS = 350;
   // Reused across move frames — filled by livePointsInto, never allocated
   // per frame (old-phone GC win: a 120Hz touch stream used to allocate 2-3
   // arrays + a Map snapshot on EVERY frame).
   const liveScratch: Array<{ x: number; y: number; lx: number | null; ly: number | null }> = [];
   const livePointsInto = (
     out: Array<{ x: number; y: number; lx: number | null; ly: number | null }>,
+    pruneStale: boolean,
   ) => {
     out.length = 0;
     const now = Date.now();
     try {
       for (const [id, p] of touches.current) {
-        if (Number.isFinite(p.t) && now - p.t > STALE_TOUCH_MS) {
+        // Prune ONLY when explicitly asked (gesture edges + release paths).
+        // Move frames pass false so a late second-finger event can never
+        // wipe the first finger mid-pinch.
+        if (pruneStale && Number.isFinite(p.t) && now - p.t > STALE_TOUCH_MS) {
           touches.current.delete(id);
           continue;
         }
@@ -492,11 +623,10 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
     }
     return out;
   };
-  const livePoints = () => livePointsInto(liveScratch);
+  const livePoints = () => livePointsInto(liveScratch, false);
 
-  const pinchDistance = () => {
+  const pinchDistance = (pts: Array<{ x: number; y: number }>) => {
     try {
-      const pts = livePoints();
       if (pts.length < 2) return 0;
       const dx = pts[0].x - pts[1].x;
       const dy = pts[0].y - pts[1].y;
@@ -507,9 +637,8 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
     }
   };
 
-  const pinchCentroid = () => {
+  const pinchCentroid = (pts: Array<{ x: number; y: number; lx: number | null; ly: number | null }>) => {
     try {
-      const pts = livePoints();
       if (pts.length < 2) return null;
       const cx = (pts[0].x + pts[1].x) / 2;
       const cy = (pts[0].y + pts[1].y) / 2;
@@ -540,6 +669,12 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
+        // Capture phase too: inside a Modal + SafeAreaView the parent may
+        // otherwise claim the gesture (esp. right after a reload, before
+        // layout settles). Claim early so no opening frame is ever lost —
+        // a one-shot spread delivers very few frames and losing the first
+        // one means the whole gesture does nothing.
+        onStartShouldSetPanResponderCapture: () => true,
         onMoveShouldSetPanResponder: (_e, gesture) => {
           try {
             return state.current.scale > 1.02 || gesture.numberActiveTouches >= 2;
@@ -547,6 +682,12 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
             return false;
           }
         },
+        // Once WE own the gesture, never give it back mid-pinch: on Vivo a
+        // termination request arriving on the opening frame hands the rest
+        // of the gesture to the Modal/SafeAreaView parent and the spread
+        // silently dies (works after many tries only because a later grant
+        // randomly wins the race).
+        onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: (event, gesture) => {
           try {
             const s = state.current;
@@ -563,6 +704,38 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
             animating.current = false;
             touches.current = new Map();
             mergeTouches(event);
+            // Edge-authoritative count: the responder's numberActiveTouches
+            // is the backstop when the skin reports a partial touch list on
+            // grant. Seed a SYNTHETIC second point from the gesture when the
+            // map only learned one finger — without it the first spread
+            // frames see count=1, run the single-finger pan path, and the
+            // pinch "never starts" (the reported spread-does-nothing bug).
+            // The synthetic point is replaced by the real touch as soon as
+            // its events arrive (same-spot merge = zero distance change).
+            try {
+              const responderCount = Number.isFinite(gesture.numberActiveTouches)
+                ? (gesture.numberActiveTouches as number)
+                : 0;
+              if (responderCount >= 2 && touches.current.size < 2) {
+                const entries = Array.from(touches.current.values());
+                const anchor = entries[entries.length - 1];
+                if (anchor) {
+                  const gx = Number.isFinite(gesture.x0) ? (gesture.x0 as number) : anchor.x;
+                  const gy = Number.isFinite(gesture.y0) ? (gesture.y0 as number) : anchor.y;
+                  let synthId = -1;
+                  while (touches.current.has(synthId)) synthId -= 1;
+                  touches.current.set(synthId, {
+                    x: gx,
+                    y: gy,
+                    lx: anchor.lx,
+                    ly: anchor.ly,
+                    t: Date.now(),
+                  });
+                }
+              }
+            } catch {
+              /* map keeps whatever mergeTouches learned */
+            }
             // The page origin can be stale on the very first gesture (measure
             // is async), so re-sync it here — a wrong origin corrupts the
             // focal point and flings the photo off-screen into black.
@@ -571,7 +744,18 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
             s.grantAt = Date.now();
             s.grantX = Number.isFinite(gesture.x0) ? gesture.x0 : 0;
             s.grantY = Number.isFinite(gesture.y0) ? gesture.y0 : 0;
+            // Grant count takes the max with the responder count for the same
+            // late-second-finger reason — otherwise a pinch that starts on
+            // this grant is misclassified as a tap candidate.
             s.grantTouchCount = touches.current.size;
+            try {
+              const gtc = Number.isFinite(gesture.numberActiveTouches)
+                ? (gesture.numberActiveTouches as number)
+                : 0;
+              if (gtc > s.grantTouchCount) s.grantTouchCount = gtc;
+            } catch {
+              /* keep the map count */
+            }
             s.movedPastSlop = false;
             s.grantTapLx = null;
             s.grantTapLy = null;
@@ -582,7 +766,7 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
                 s.grantTapLy = entries[0].ly;
               }
             }
-            const dist = pinchDistance();
+            const dist = pinchDistance(livePointsInto(liveScratch, false));
             if (touches.current.size >= 2 && dist > 0) {
               s.baseDist = dist;
               s.baseScale = s.scale;
@@ -602,6 +786,44 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
             // Merge-only: a move frame that reports a single touch must NOT
             // shrink the map while the second finger is still down.
             mergeTouches(event);
+            // Responder count is the backstop for the raw touch map: on
+            // skins where the second finger's touch event arrives late, the
+            // map still shows 1 while numberActiveTouches is already 2.
+            // Carry a SYNTHETIC second point (seeded at grant) forward with
+            // the gesture position so the pinch path runs from the first
+            // spread frame instead of panning-then-jumping.
+            try {
+              const responderCount = Number.isFinite(gesture.numberActiveTouches)
+                ? (gesture.numberActiveTouches as number)
+                : 0;
+              if (responderCount >= 2 && touches.current.size < 2) {
+                const entries = Array.from(touches.current.values());
+                const anchor = entries[entries.length - 1];
+                if (anchor) {
+                  const gx = Number.isFinite(gesture.moveX)
+                    ? (gesture.moveX as number)
+                    : Number.isFinite(gesture.x0)
+                      ? (gesture.x0 as number)
+                      : anchor.x;
+                  const gy = Number.isFinite(gesture.moveY)
+                    ? (gesture.moveY as number)
+                    : Number.isFinite(gesture.y0)
+                      ? (gesture.y0 as number)
+                      : anchor.y;
+                  let synthId = -1;
+                  while (touches.current.has(synthId)) synthId -= 1;
+                  touches.current.set(synthId, {
+                    x: gx,
+                    y: gy,
+                    lx: anchor.lx,
+                    ly: anchor.ly,
+                    t: Date.now(),
+                  });
+                }
+              }
+            } catch {
+              /* map keeps whatever mergeTouches learned */
+            }
             // The gesture owns the values now — a stale double-tap spring
             // completion must not overwrite this frame (Vivo flicker).
             gestureSeq.current += 1;
@@ -609,7 +831,21 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
             const count = livePoints().length;
             // Any second finger joining, or movement past the tap slop,
             // kills the single-tap candidate — a slide is never a tap.
-            if (count >= 2) s.grantTouchCount = Math.max(s.grantTouchCount, count);
+            // Count takes the max with the responder count (same late-event
+            // reason as the grant seed): the move frame that carries the
+            // second finger must already count as 2.
+            let effCount = count;
+            try {
+              const rc = Number.isFinite(gesture.numberActiveTouches)
+                ? (gesture.numberActiveTouches as number)
+                : 0;
+              if (rc > effCount) effCount = rc;
+            } catch {
+              /* keep the map count */
+            }
+            if (effCount >= 2) s.grantTouchCount = Math.max(s.grantTouchCount, effCount);
+            // Tap-slop tracking: any movement past the slop kills the
+            // single-tap candidate — a slide is never a tap.
             try {
               const mx = Number.isFinite(gesture.moveX) ? gesture.moveX : NaN;
               const my = Number.isFinite(gesture.moveY) ? gesture.moveY : NaN;
@@ -630,16 +866,27 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
             } catch {
               /* tap candidacy unchanged */
             }
-            if (count >= 2) {
-              const dist = pinchDistance();
+            if (effCount >= 2) {
+              // ONE shared pass per frame: every consumer below (distance,
+              // baseline seed, direction check, centroid) reads framePts.
+              // Previously each helper re-iterated the map with a fresh
+              // array — 120Hz touch streams paid that 2-3x per frame.
+              const framePts = livePointsInto(liveScratch, false);
+              const dist = pinchDistance(framePts);
               if (!(dist > 0)) return;
               if (!s.pinching || !(s.baseDist > 0)) {
+                // FIRST two-finger frame seeds the baseline AND applies this
+                // frame's ratio immediately. Previously it returned without
+                // zooming, so a one-shot spread (a single quick move frame)
+                // did nothing — only repeated spreads accumulated enough
+                // later frames to move. Now one spread = one zoom.
+                const prevBase = s.baseDist > 0 ? s.baseDist : dist;
                 s.baseDist = dist;
                 s.baseScale = s.scale;
                 s.pinching = true;
                 // Seed the two-finger pan tracking so the first slide frame
                 // has a valid previous centroid to diff against.
-                const seed = pinchCentroid();
+                const seed = pinchCentroid(framePts);
                 if (seed) {
                   s.prevCentroidX = seed.x;
                   s.prevCentroidY = seed.y;
@@ -652,6 +899,52 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
                   seedPositions.set(id, { x: p.x, y: p.y });
                 }
                 s.prevPositions = seedPositions;
+                // Apply THIS frame's spread right away (same clamped-ratio +
+                // focal math as the steady path): baseline kept across frames
+                // of one pinch vs today's distance. Fresh pinch (no baseline
+                // yet): prevBase == dist so ratio is 1 — nothing jumps, later
+                // frames zoom normally. Continuing pinch (baseline from an
+                // earlier frame): a one-shot spread applies immediately.
+                const seedFrameRatio = prevBase > 0 ? dist / prevBase : 1;
+                if (Number.isFinite(seedFrameRatio) && seedFrameRatio > 0 && seedFrameRatio !== 1) {
+                  const seedClamped = Math.min(1.15, Math.max(1 / 1.15, seedFrameRatio));
+                  const seedNext = s.scale * seedClamped;
+                  if (Number.isFinite(seedNext)) {
+                    const seedFocal = pinchCentroid(framePts);
+                    let seedLocal = { x: 0, y: 0 };
+                    if (seedFocal && seedFocal.lx != null && seedFocal.ly != null) {
+                      const ssw = Number.isFinite(s.width) && s.width > 0 ? s.width : 0;
+                      const ssh = Number.isFinite(s.height) && s.height > 0 ? s.height : 0;
+                      seedLocal = { x: seedFocal.lx - ssw / 2, y: seedFocal.ly - ssh / 2 };
+                    } else if (seedFocal) {
+                      seedLocal = toLocal(seedFocal.x, seedFocal.y);
+                    }
+                    const shw = (Number.isFinite(s.width) ? s.width : 0) / 2;
+                    const shh = (Number.isFinite(s.height) ? s.height : 0) / 2;
+                    seedLocal.x = Math.min(shw, Math.max(-shw, seedLocal.x));
+                    seedLocal.y = Math.min(shh, Math.max(-shh, seedLocal.y));
+                    const seedOld = s.scale;
+                    if (Number.isFinite(seedOld) && seedOld > 0) {
+                      const seedCheck = seedNext / Math.max(seedOld, 0.01);
+                      if (Number.isFinite(seedCheck) && seedCheck <= 1.5 && seedCheck >= 1 / 1.5) {
+                        s.scale = seedNext;
+                        s.tx += seedLocal.x * (seedOld - seedNext);
+                        s.ty += seedLocal.y * (seedOld - seedNext);
+                        s.baseScale = s.scale;
+                        if (Math.abs(seedNext - 1) > 0.02) {
+                          try {
+                            dismissHint();
+                          } catch {
+                            /* non-fatal */
+                          }
+                        }
+                        clamp();
+                        apply();
+                        return;
+                      }
+                    }
+                  }
+                }
                 // Reset the single-finger pan baseline so that when one finger
                 // lifts, pan doesn't jump by the gesture's accumulated delta.
                 s.lastDx = Number.isFinite(gesture.dx) ? gesture.dx : 0;
@@ -683,16 +976,24 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
                     if (prev.has(id)) common.push(id);
                   }
                   if (common.length >= 2) {
-                    const v0 = (() => {
-                      const c = curr.get(common[0])!;
-                      const p = prev.get(common[0])!;
-                      return { x: c.x - p.x, y: c.y - p.y };
-                    })();
-                    const v1 = (() => {
-                      const c = curr.get(common[1])!;
-                      const p = prev.get(common[1])!;
-                      return { x: c.x - p.x, y: c.y - p.y };
-                    })();
+                    // Positions come from the SHARED frame pass (framePts in
+                    // map order) — never a second livePoints() call, which
+                    // used to re-iterate mid-frame and could disagree.
+                    const currIds = Array.from(curr.keys());
+                    const posOf = (id: number) => {
+                      const idx = currIds.indexOf(id);
+                      if (idx >= 0 && idx < framePts.length) return framePts[idx];
+                      return curr.get(id);
+                    };
+                    const c0 = posOf(common[0]);
+                    const p0 = prev.get(common[0]);
+                    const c1 = posOf(common[1]);
+                    const p1 = prev.get(common[1]);
+                    if (c0 == null || p0 == null || c1 == null || p1 == null) {
+                      throw new Error("skip-frame");
+                    }
+                    const v0 = { x: c0.x - p0.x, y: c0.y - p0.y };
+                    const v1 = { x: c1.x - p1.x, y: c1.y - p1.y };
                     const m0 = Math.hypot(v0.x, v0.y);
                     const m1 = Math.hypot(v1.x, v1.y);
                     if (Number.isFinite(m0) && Number.isFinite(m1)) {
@@ -707,7 +1008,7 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
                         const cos = (v0.x * v1.x + v0.y * v1.y) / Math.max(m0 * m1, 0.01);
                         if (Number.isFinite(cos) && cos > -0.25) {
                           isTwoFingerPan = true;
-                          const focalSlide = pinchCentroid();
+                          const focalSlide = pinchCentroid(framePts);
                           if (focalSlide) {
                             const px = Number.isFinite(s.prevCentroidX) ? s.prevCentroidX : focalSlide.x;
                             const py = Number.isFinite(s.prevCentroidY) ? s.prevCentroidY : focalSlide.y;
@@ -732,7 +1033,7 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
                 s.ty += slideDy;
                 s.baseDist = dist;
                 s.baseScale = s.scale;
-                const focalSlide = pinchCentroid();
+                const focalSlide = pinchCentroid(framePts);
                 if (focalSlide) {
                   s.prevCentroidX = focalSlide.x;
                   s.prevCentroidY = focalSlide.y;
@@ -756,10 +1057,12 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
               const clampedRatio = Math.min(1.15, Math.max(1 / 1.15, frameRatio));
               const nextScale = s.scale * clampedRatio;
               if (!Number.isFinite(nextScale)) return;
-              const focal = pinchCentroid();
-              // Prefer the touches' own container-relative centroid (exact, no
-              // origin math). Fall back to the gesture point only when the
-              // events didn't carry locationX/locationY, else center.
+              const focal = pinchCentroid(framePts);
+              // Focal is VIEW-relative (location coords minus view center) —
+              // matching the transform, which pivots around the VIEW center.
+              // (A previous revision subtracted the CONTAIN letterbox offset
+              // here; that double-counts the centering and pushes repeated
+              // zoom-ins toward the bottom black — the reported slide bug.)
               let local = { x: 0, y: 0 };
               if (focal && focal.lx != null && focal.ly != null) {
                 const w = Number.isFinite(s.width) && s.width > 0 ? s.width : 0;
@@ -815,6 +1118,14 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
               // Keep the pan baseline in sync during the pinch as well.
               s.lastDx = Number.isFinite(gesture.dx) ? gesture.dx : 0;
               s.lastDy = Number.isFinite(gesture.dy) ? gesture.dy : 0;
+              // First real pinch-zoom past ~1x: the user got it — drop hint.
+              if (Math.abs(nextScale - 1) > 0.02) {
+                try {
+                  dismissHint();
+                } catch {
+                  /* non-fatal */
+                }
+              }
               clamp();
               apply();
               return;
@@ -1107,6 +1418,7 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle 
       {...panResponder.panHandlers}
     >
       {renderZoomImage()}
+      {hintVisible && <PinchZoomHint visible={hintVisible} onDone={dismissHint} />}
     </View>
   );
 }
