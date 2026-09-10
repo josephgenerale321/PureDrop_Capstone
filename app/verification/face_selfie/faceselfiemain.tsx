@@ -2,6 +2,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { type Href, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import useVerificationDecisionWatcher from "../../../components/verification/backend/useVerificationDecisionWatcher";
 
 const SELFIE_CAPTURE_ROUTE =
   "/verification/face_selfie/cameraface_selfie/selfiecapture" as Href;
@@ -17,6 +18,10 @@ const REQUIREMENTS: string[] = [
 
 export default function FaceSelfieMainScreen() {
   const router = useRouter();
+  // Realtime admin decision watcher — see useVerificationDecisionWatcher:
+  // reacts to approve/reject decisions made in the admin panel while the user
+  // is on this screen (deduplicated across all stacked verification screens).
+  useVerificationDecisionWatcher();
 
   const handleBack = () => {
     if (router.canGoBack()) {

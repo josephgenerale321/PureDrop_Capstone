@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { styles } from "../../../components/verification/faceselfie_comp/submittedview/facesubmittedstyles";
 import { deleteSubmittedFaceScan } from "../../../components/verification/faceselfie_comp/backend/faceScanBackend";
 import { auth, db } from "../../../firebaseConfig";
+import useVerificationDecisionWatcher from "../../../components/verification/backend/useVerificationDecisionWatcher";
 // Type-only import — erased at compile time, so this never pulls the
 // native-only vision-camera module graph into the web bundle.
 import type { LivenessCheck } from "../../../components/verification/faceselfie_comp/selfiecapture/backend/selfiecaptfunc";
@@ -115,6 +116,10 @@ function formatSubmittedAt(raw: unknown): string | null {
  */
 export default function FaceScanSubmittedViewScreen() {
   const router = useRouter();
+  // Realtime admin decision watcher — see useVerificationDecisionWatcher:
+  // reacts to approve/reject decisions made in the admin panel while the user
+  // is on this screen (deduplicated across all stacked verification screens).
+  useVerificationDecisionWatcher();
   const [userId, setUserId] = useState<string | null>(null);
   // True until the first snapshot for the signed-in account arrives — keeps
   // the preview as a neutral gray placeholder instead of "unavailable" hints.

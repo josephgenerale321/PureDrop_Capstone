@@ -14,6 +14,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../../firebaseConfig";
+import useVerificationDecisionWatcher from "../../components/verification/backend/useVerificationDecisionWatcher";
 
 type Lightbox = { label: string; uri: string } | null;
 
@@ -38,6 +39,10 @@ const VERIFICATION_HUB_ROUTE = "/verification/verificationmain";
  */
 export default function ReviewSubmissionScreen() {
   const router = useRouter();
+  // Realtime admin decision watcher — see useVerificationDecisionWatcher:
+  // reacts to approve/reject decisions made in the admin panel while the user
+  // is on this screen (deduplicated across all stacked verification screens).
+  useVerificationDecisionWatcher();
   const [userId, setUserId] = useState<string | null>(null);
   // True until the first Firestore snapshot arrives.
   const [isLoading, setIsLoading] = useState(true);

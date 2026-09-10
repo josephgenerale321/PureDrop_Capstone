@@ -27,6 +27,7 @@ import {
   submitValidId,
   type ValidIdSubmissionInput,
 } from "../../../components/verification/validid/backend/validIdBackend";
+import useVerificationDecisionWatcher from "../../../components/verification/backend/useVerificationDecisionWatcher";
 
 // Route of the Valid ID camera capture screen.
 const ID_CAPTURE_ROUTE = "/verification/valid_id/validid_cam/valididcapture";
@@ -62,6 +63,10 @@ const PASSPORT_ID_TYPE = "Passport";
 
 export default function ValidIdMainScreen() {
   const router = useRouter();
+  // Realtime admin decision watcher — see useVerificationDecisionWatcher:
+  // reacts to approve/reject decisions made in the admin panel while the user
+  // is on this screen (deduplicated across all stacked verification screens).
+  useVerificationDecisionWatcher();
   const [selectedIdType, setSelectedIdType] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   // Captured photo URIs per side (null = not captured yet).
@@ -130,6 +135,32 @@ export default function ValidIdMainScreen() {
     });
     prevPhotosRef.current = current;
   }, [frontPhoto, backPhoto, passportPhoto]);
+
+  // Abandoned-submission cleanup — when this screen unmounts (backing out
+  // without submitting), delete any local capture temp files that were never
+  // uploaded so they don't leak in the app cache. prevPhotosRef always
+  // mirrors the current photo state (kept fresh by the replacement effect
+  // above). Carried-over/stored photos are remote URLs (https) and are never
+  // touched; temps of a successful submission were already deleted right
+  // after the upload, so those deletes are no-ops.
+  useEffect(() => {
+    return () => {
+      Object.values(prevPhotosRef.current).forEach((uri) => {
+        if (uri && !uri.startsWith("http")) {
+          FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+        }
+      });
+      // Drain any capture handoff that was set but never consumed (e.g. the
+      // screen was replaced by a realtime redirect at the moment of a crop
+      // confirm) so neither the store entry nor its temp file leaks.
+      (Object.keys(prevPhotosRef.current) as IdPhotoSide[]).forEach((side) => {
+        const uri = consumeCapturedIdPhoto(side);
+        if (uri && !uri.startsWith("http")) {
+          FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+        }
+      });
+    };
+  }, []);
 
   const handleBack = () => {
     if (router.canGoBack()) {

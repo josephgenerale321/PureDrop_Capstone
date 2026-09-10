@@ -25,6 +25,11 @@ import {
 
 export type IdPhotoSide = "front" | "back" | "passport";
 
+// Fallback host when the capture screen has no history to pop (deep link
+// entry): the fresh submission screen consumes the capture handoff on focus
+// the same way the edit screen does.
+const VALID_ID_MAIN_ROUTE = "/verification/valid_id/valid_id_main";
+
 // Module-level handoff store: the capture screen writes the captured photo
 // URI here and pops back to the main Valid ID screen, which consumes it when
 // it regains focus (expo-router's back() cannot pass params to the previous
@@ -151,7 +156,19 @@ export function useIdCapture({
       }
       setCapturedIdPhoto(side, croppedUri);
       setPendingPhoto(null);
-      router.back();
+      // Pop back to the host screen (valid_id_main / valid_id_editmain),
+      // which consumes the handoff when it regains focus. With no history
+      // to pop (deep link entry), replace to the fresh submission screen
+      // instead of leaving the user stranded on the capture screen.
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        try {
+          router.replace(VALID_ID_MAIN_ROUTE);
+        } catch {
+          // Navigation must never crash the app.
+        }
+      }
     },
     [pendingPhoto, router, side],
   );

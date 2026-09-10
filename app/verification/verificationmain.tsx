@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  Alert,
   BackHandler,
   Platform,
   StyleSheet,
@@ -14,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { markVerificationLater } from "../../components/login/backend/postEmailVerificationGate";
+import useVerificationDecisionWatcher from "../../components/verification/backend/useVerificationDecisionWatcher";
 import { auth, db } from "../../firebaseConfig";
 
 const FACE_SELFIE_ROUTE = "/verification/face_selfie/faceselfiemain" as Href;
@@ -28,13 +28,6 @@ const VALID_ID_ROUTE = "/verification/valid_id/valid_id_main" as Href;
 const VALID_ID_SUBMITTED_ROUTE =
   "/verification/valid_id/valid_id_submittedview" as Href;
 const START_ROUTE = "/start" as Href;
-// Rejection notice screen — the admin can reject this account's verification
-// WHILE the user sits on this screen; the live Firestore subscription below
-// detects it in realtime and auto-redirects here.
-const REJECTED_NOTICE_ROUTE = "/login/validation/rejectedverif" as Href;
-// Verified users' destination — when the admin approves a "pending" account
-// while the user sits on this hub, the live snapshot below takes them Home.
-const HOME_ROUTE = "/regular_user/home" as Href;
 // Read-only overview of EVERYTHING the user has submitted for verification
 // (face scan + Valid ID photos) — opened by the "Review Submission" button.
 const REVIEW_SUBMISSION_ROUTE = "/verification/reviewsubmission" as Href;
@@ -56,14 +49,13 @@ export default function VerificationMainScreen() {
   // Lightbox confirmation for the back action — opened by both the on-screen
   // arrow and the Android hardware back button.
   const [isBackConfirmOpen, setIsBackConfirmOpen] = useState(false);
-  // Rejection count already redirected away for on this screen mount — guards
-  // the realtime redirect below against firing twice for the same rejection
-  // (the Firestore snapshot re-emits on every document write).
-  const handledRejectionRef = useRef<number | null>(null);
-  // Guards the realtime APPROVAL redirect below — like the rejection guard,
-  // it must only ever fire once per screen mount even though the Firestore
-  // snapshot re-emits on every document write.
-  const handledApprovalRef = useRef(false);
+  // Realtime admin decision watcher — shared with EVERY other verification
+  // screen (see useVerificationDecisionWatcher): the moment the admin
+  // approves or rejects this account while the user sits anywhere in the flow
+  // (hub, face selfie, Valid ID, camera, review), it alerts and auto-redirects
+  // (Home on approval, rejection notice on reject). Module-level guards make
+  // the stacked screens' duplicate listeners fire exactly once.
+  useVerificationDecisionWatcher();
 
   // Track the live Firebase session so the banner always shows the account
   // that is actually signed in on this device (and updates if it changes).
@@ -97,69 +89,10 @@ export default function VerificationMainScreen() {
         const status = String(data?.verificationStatus ?? "");
         setVerificationStatus(status);
 
-        // Realtime approval redirect — the moment the admin approves this
-        // account ("pending" → "verified") while the user sits on this hub,
-        // take them into the app. One-shot per mount so the snapshot's
-        // re-emissions can never fire it twice.
-        if (status === "verified" && !handledApprovalRef.current) {
-          handledApprovalRef.current = true;
-          Alert.alert(
-            "Account Verified",
-            "An admin has approved your verification. Welcome to PureDrop!",
-            [
-              {
-                text: "OK",
-                onPress: () => {
-                  try {
-                    router.replace(HOME_ROUTE);
-                  } catch {
-                    // Navigation must never crash the app.
-                  }
-                },
-              },
-            ],
-          );
-        }
-
-        // Realtime rejection redirect — if the admin rejects this account's
-        // verification while the user is on this screen, send them straight
-        // to the rejection notice screen (same design as the email success
-        // screen; final-warning text at 3 rejections). Mirrors the gate
-        // logic in postEmailVerificationGate.ts: the notice fires for a
-        // rejection the user has NOT acknowledged yet (seen count differs
-        // from the current rejection count), so a user who already
-        // acknowledged and came here to re-verify is not interrupted.
-        if (data?.verificationStatus === "rejected") {
-          const parsedCount = Number(data.verificationRejectionCount);
-          const rejectionCount =
-            Number.isFinite(parsedCount) && parsedCount > 0
-              ? Math.floor(parsedCount)
-              : 0;
-
-          // Absent field = never acknowledged any rejection notice (-1),
-          // so even a legacy rejected account gets redirected once.
-          const seenRaw = data.rejectedNoticeSeenCount;
-          let seenCount = -1;
-          if (seenRaw !== null && seenRaw !== undefined) {
-            const parsedSeen = Number(seenRaw);
-            if (Number.isFinite(parsedSeen)) {
-              seenCount = Math.floor(parsedSeen);
-            }
-          }
-
-          if (
-            seenCount !== rejectionCount &&
-            handledRejectionRef.current !== rejectionCount
-          ) {
-            handledRejectionRef.current = rejectionCount;
-            try {
-              router.replace(REJECTED_NOTICE_ROUTE);
-            } catch {
-              // Navigation must never crash the app — the user can still
-              // re-verify manually from here.
-            }
-          }
-        }
+        // Approval / rejection decisions are handled by the shared
+        // useVerificationDecisionWatcher hook (called above) so the hub and
+        // every other screen in the flow react to an admin decision the same
+        // way — and only ONE alert / redirect ever fires per decision.
       },
       () => {
         // Read failed (offline / permissions) — hide the checks; the cards

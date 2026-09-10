@@ -14,6 +14,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../../firebaseConfig";
+import useVerificationDecisionWatcher from "../../components/verification/backend/useVerificationDecisionWatcher";
 
 const METHOD_LABELS: Record<string, string> = {
   face: "Face Recognition",
@@ -30,6 +31,10 @@ const VERIFICATION_HUB_ROUTE = "/verification/verificationmain";
 
 export default function ReviewDetailsVerifMainScreen() {
   const router = useRouter();
+  // Realtime admin decision watcher — see useVerificationDecisionWatcher:
+  // reacts to approve/reject decisions made in the admin panel while the user
+  // is on this screen (deduplicated across all stacked verification screens).
+  useVerificationDecisionWatcher();
   const params = useLocalSearchParams<{ method?: string | string[] }>();
   const method = Array.isArray(params.method) ? params.method[0] : params.method;
   const methodLabel = method ? (METHOD_LABELS[method] ?? method) : null;

@@ -1,6 +1,7 @@
-import { memo, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import {
   ActivityIndicator,
+  BackHandler,
   Linking,
   Platform,
   StyleSheet,
@@ -9,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "expo-router";
 import type { Face } from "react-native-vision-camera-face-detector";
 import { styles } from "../../../../components/verification/faceselfie_comp/selfiecapture/selfiecaptstyles";
 import { BackButton, IdleScreen } from "../../../../components/verification/faceselfie_comp/selfiecapture/selfiecaptui";
@@ -21,6 +23,7 @@ import {
   type FaceHint,
   type VisionCameraModule,
 } from "../../../../components/verification/faceselfie_comp/selfiecapture/backend/selfiecaptfunc";
+import useVerificationDecisionWatcher from "../../../../components/verification/backend/useVerificationDecisionWatcher";
 
 // Hint text for each live face-quality state (classified by evaluateFace in
 // the func file). The "ok" entry matches the capture-enabled message.
@@ -46,6 +49,13 @@ const LIVE_HINT_MESSAGES: Record<FaceHint, string> = {
  * components/verification/faceselfie_comp/selfiecapture/selfiecaptfunc.tsx.
  */
 export default function SelfieCaptureScreen() {
+  // Realtime admin decision watcher — see useVerificationDecisionWatcher:
+  // reacts to approve/reject decisions made in the admin panel while the user
+  // is on this screen (deduplicated across all stacked verification screens).
+  // Called before the platform/module early returns so the hook order stays
+  // stable on every render.
+  useVerificationDecisionWatcher();
+
   // Bumped by the setup screen's Retry button to force a fresh loader run.
   const [, setModuleAttempt] = useState(0);
 
@@ -190,6 +200,27 @@ function NativeSelfieCapture({
     handleCapture,
   } = useSelfieCapture({ visionCamera, faceDetector });
 
+  // Android hardware back: swallow back while the shutter is mid-flight
+  // (capture + stage-2 face check) so the operation can't be aborted
+  // half-way — same guard as the Valid ID capture screen. Otherwise the
+  // default pop applies. Active only while this screen is focused.
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== "android") {
+        return undefined;
+      }
+
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        () => isCapturing,
+      );
+
+      return () => {
+        subscription.remove();
+      };
+    }, [isCapturing]),
+  );
+
   if (!hasPermission) {
     return (
       <IdleScreen icon="camera-outline" message="Camera access is needed to scan your face">
@@ -236,11 +267,23 @@ function NativeSelfieCapture({
           onFacesDetected={handleFacesDetected}
           onError={handleCameraError}
         />
-      ) : (
+      ) : device ? (
+        // A device exists but the detector camera element is not ready yet.
         <View style={StyleSheet.absoluteFill}>
           <View style={[styles.container, styles.containerIdle]}>
             <Ionicons name="camera-outline" size={90} color="#94A3B8" />
             <Text style={styles.idleText}>Preparing camera…</Text>
+          </View>
+        </View>
+      ) : (
+        // No front camera on this device (device stays undefined when none
+        // matches) — an explicit idle state instead of an endless
+        // "Preparing camera…", mirroring the Valid ID capture screen's
+        // no-rear-camera message.
+        <View style={StyleSheet.absoluteFill}>
+          <View style={[styles.container, styles.containerIdle]}>
+            <Ionicons name="camera-outline" size={90} color="#94A3B8" />
+            <Text style={styles.idleText}>No front camera is available on this device.</Text>
           </View>
         </View>
       )}

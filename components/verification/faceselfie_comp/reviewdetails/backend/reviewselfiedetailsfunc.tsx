@@ -15,6 +15,9 @@ import type { LivenessCheck } from "../../selfiecapture/backend/selfiecaptfunc";
 
 // Valid ID destinations from the "Face Scan Uploaded" lightbox.
 const VALID_ID_MAIN_ROUTE = "/verification/valid_id/valid_id_main";
+// Pre-filled edit screen — where REPLACE ID goes so the already-submitted ID
+// type and photos are shown and can be kept or retaken.
+const VALID_ID_EDIT_ROUTE = "/verification/valid_id/valid_id_editmain";
 // Read-only review of the already-submitted Valid ID — where the hub sends
 // users who already have an ID on file (check mark showing).
 const VALID_ID_SUBMITTED_ROUTE = "/verification/valid_id/valid_id_submittedview";
@@ -253,14 +256,15 @@ export function useReviewSelfieDetails() {
     }
   };
 
-  // "Replace Valid ID" — continue into the fresh submission flow. The
-  // lightbox already explained that re-submitting overwrites the stored
-  // photos and record (backend uploads with upsert: true) and re-triggers
-  // admin review.
+  // "Replace Valid ID" — continue into the pre-filled edit screen so the
+  // already-submitted ID type and photos are shown and can be kept or
+  // retaken. The lightbox already explained that re-saving overwrites the
+  // stored photos and record (backend uploads with upsert: true) and
+  // re-triggers admin review.
   const handleReplaceValidId = () => {
     setIsReplaceIdModalOpen(false);
     try {
-      router.push(VALID_ID_MAIN_ROUTE);
+      router.push(VALID_ID_EDIT_ROUTE);
     } catch {
       // Navigation must never crash the app.
     }

@@ -16,17 +16,20 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { styles } from "../../../components/verification/validid/valididstyles";
 import { deleteSubmittedValidId } from "../../../components/verification/validid/backend/validIdBackend";
 import { auth, db } from "../../../firebaseConfig";
+import useVerificationDecisionWatcher from "../../../components/verification/backend/useVerificationDecisionWatcher";
 
 // Where the user lands when backing out of the submitted-ID review.
 const BACK_ROUTE = "/verification/verificationmain" as Href;
 
-// After a delete — OR via "Replace Valid ID" — the user lands on the fresh
-// submission flow (valid_id_main). Replace deliberately does NOT open the
-// pre-filled edit screen (valid_id_editmain): that screen blocks accounts
-// whose submission is pending/verified with its "Valid ID locked" alert.
-// Re-submitting from valid_id_main overwrites the stored photos and record
-// (the backend uploads with upsert: true), so no delete is needed first.
+// After a delete the user lands on the fresh submission flow (valid_id_main):
+// there is nothing left to pre-fill, so they submit a brand-new ID.
 const VALID_ID_MAIN_ROUTE = "/verification/valid_id/valid_id_main" as Href;
+
+// "Replace Valid ID" opens the pre-filled edit screen (valid_id_editmain) so
+// the already-submitted ID type and photos are shown and can be kept or
+// retaken. Re-saving overwrites the stored photos and record (the backend
+// uploads with upsert: true) and re-triggers admin review — no delete first.
+const VALID_ID_EDIT_ROUTE = "/verification/valid_id/valid_id_editmain" as Href;
 
 // Passport is a booklet — its data page is stored in the "front" slot, so a
 // single box is shown for it instead of the front/back pair.
@@ -47,6 +50,10 @@ type SubmittedIdData = {
  */
 export default function ValidIdSubmittedViewScreen() {
   const router = useRouter();
+  // Realtime admin decision watcher — see useVerificationDecisionWatcher:
+  // reacts to approve/reject decisions made in the admin panel while the user
+  // is on this screen (deduplicated across all stacked verification screens).
+  useVerificationDecisionWatcher();
   const [userId, setUserId] = useState<string | null>(null);
   // True until the first snapshot for the signed-in account arrives — keeps
   // the boxes as neutral gray placeholders instead of "unavailable" hints.
@@ -118,20 +125,19 @@ export default function ValidIdSubmittedViewScreen() {
   const showActions = !isLoading && Boolean(submitted.idType);
 
   // "Replace Valid ID" — the user already has a submission on file, so show
-  // an alert explaining that instead of redirecting anywhere right away (and
-  // never into the pre-filled edit screen, which is locked for submitted
-  // accounts). Only if they confirm do we continue into the fresh submission
-  // flow (valid_id_main), where re-submitting overwrites the stored photos
-  // and record.
+  // an alert explaining what replacing means. Confirming opens the pre-filled
+  // edit screen (valid_id_editmain), where the submitted ID type and photos
+  // are shown and can be kept or retaken; re-saving overwrites the stored
+  // photos and record and re-triggers admin review.
   const handleReplace = () => {
     Alert.alert(
       "Valid ID Already Submitted",
-      "You have already submitted your Valid ID. Submitting a new one will replace the stored photos and ID type, and it will be reviewed again by an admin.",
+      "You have already submitted your Valid ID. You can keep the submitted photos or retake them — saving will replace the stored photos and ID type, and it will be reviewed again by an admin.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Replace Now",
-          onPress: () => router.push(VALID_ID_MAIN_ROUTE),
+          onPress: () => router.push(VALID_ID_EDIT_ROUTE),
         },
       ],
     );

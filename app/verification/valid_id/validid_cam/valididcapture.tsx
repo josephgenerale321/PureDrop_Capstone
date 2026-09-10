@@ -24,6 +24,7 @@ import {
 } from "../../../../components/verification/validid/valididcapture/backend/idcapturefunc";
 import ValidIdCropper from "../../../../components/verification/validid/valididcapture/valididcropper";
 import CropperOldPhone from "../../../../components/verification/validid/valididcapture/cropperoldphone";
+import useVerificationDecisionWatcher from "../../../../components/verification/backend/useVerificationDecisionWatcher";
 
 const SIDE_TITLES: Record<IdPhotoSide, string> = {
   front: "Capture the Front of your ID",
@@ -58,6 +59,13 @@ const SIDE_HINTS: Record<IdPhotoSide, string> = {
  * components/verification/validid/idcapturefunc.tsx.
  */
 export default function ValidIdCaptureScreen() {
+  // Realtime admin decision watcher — see useVerificationDecisionWatcher:
+  // reacts to approve/reject decisions made in the admin panel while the user
+  // is on this screen (deduplicated across all stacked verification screens).
+  // Called before the platform/module early returns so the hook order stays
+  // stable on every render.
+  useVerificationDecisionWatcher();
+
   const params = useLocalSearchParams<{ side?: string | string[] }>();
   const sideParam = Array.isArray(params.side) ? params.side[0] : params.side;
   const side: IdPhotoSide =

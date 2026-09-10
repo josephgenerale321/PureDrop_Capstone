@@ -30,6 +30,7 @@ import {
   type ValidIdSubmissionInput,
 } from "../../../components/verification/validid/backend/validIdBackend";
 import { auth, db } from "../../../firebaseConfig";
+import useVerificationDecisionWatcher from "../../../components/verification/backend/useVerificationDecisionWatcher";
 
 // Route of the Valid ID camera capture screen.
 const ID_CAPTURE_ROUTE = "/verification/valid_id/validid_cam/valididcapture";
@@ -68,10 +69,11 @@ const PASSPORT_ID_TYPE = "Passport";
 /**
  * Edit Valid ID screen — the editable counterpart of the submission screen
  * (valid_id_main.tsx), for signed-in users who still need to verify their
- * identity. On load it pre-fills the form with what the user submitted last
- * time (stored on the user's `regular_user` document by the Valid ID
- * backend): the ID type dropdown shows the submitted category and the photo
- * boxes show the submitted photos (their stored Supabase URLs).
+ * identity AND for the "Replace Valid ID" flow from the submitted-ID review.
+ * On load it pre-fills the form with what the user submitted last time
+ * (stored on the user's `regular_user` document by the Valid ID backend):
+ * the ID type dropdown shows the submitted category and the photo boxes show
+ * the submitted photos (their stored Supabase URLs).
  *
  *   - Photos that are NOT retaken keep their stored URL — the backend
  *     recognizes the remote URI, skips the re-upload and reuses the stored
@@ -80,11 +82,18 @@ const PASSPORT_ID_TYPE = "Passport";
  *   - Changing the ID type clears the carried-over photos (they belong to
  *     the previous ID), same reset behavior as valid_id_main.
  *
- * Editing is locked while the submission is "pending" (under admin review)
- * or "verified" (already approved) — same policy as deleteSubmittedValidId.
+ * Editing is locked only once the submission is "verified" (already
+ * approved). A "pending" (under review) or "rejected" submission can still
+ * be edited/replaced — re-saving overwrites the stored photos and record and
+ * re-triggers admin review (submitValidId sets the status back to "pending"),
+ * the same overwrite behavior the fresh submission flow already has.
  */
 export default function ValidIdEditMainScreen() {
   const router = useRouter();
+  // Realtime admin decision watcher — see useVerificationDecisionWatcher:
+  // reacts to approve/reject decisions made in the admin panel while the user
+  // is on this screen (deduplicated across all stacked verification screens).
+  useVerificationDecisionWatcher();
   const [selectedIdType, setSelectedIdType] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   // Photo per side — either a fresh local capture URI or the stored Supabase
@@ -125,7 +134,7 @@ export default function ValidIdEditMainScreen() {
 
   // First snapshot of the user's `regular_user` document — prefill the form
   // with the previously submitted ID type + photo URLs, and lock the screen
-  // when the submission is already verified / under review.
+  // once the submission is already verified.
   useEffect(() => {
     if (!userId) {
       return undefined;
@@ -147,19 +156,21 @@ export default function ValidIdEditMainScreen() {
           typeof data?.validIdBackUrl === "string" ? data.validIdBackUrl : null;
         const status = String(data?.verificationStatus ?? "");
 
-        if (status === "verified" || status === "pending") {
+        if (status === "verified") {
           hasPrefilledRef.current = true;
           setIsLoading(false);
           Alert.alert(
             "Valid ID locked",
-            status === "verified"
-              ? "Your Valid ID has already been verified and can no longer be edited."
-              : "Your Valid ID is currently under review and cannot be edited right now.",
+            "Your Valid ID has already been verified and can no longer be edited.",
             [{ text: "OK", onPress: () => router.replace(SUBMITTED_VIEW_ROUTE) }],
           );
           return;
         }
 
+        // "pending" / "rejected" / "awaiting_id" — prefill and allow editing:
+        // re-saving overwrites the stored photos and record and re-triggers
+        // admin review, the same overwrite behavior the fresh submission
+        // flow (valid_id_main) has always had for the Replace action.
         if (idType) {
           hasPrefilledRef.current = true;
           setSelectedIdType(idType);
@@ -224,6 +235,30 @@ export default function ValidIdEditMainScreen() {
     });
     prevPhotosRef.current = current;
   }, [frontPhoto, backPhoto, passportPhoto]);
+
+  // Abandoned-submission cleanup — when this screen unmounts (backing out
+  // without saving), delete any local capture temp files that were never
+  // uploaded so they don't leak in the app cache. Carried-over photos are
+  // remote URLs (https) and are never touched; temps of a successful save
+  // were already deleted right after the upload, so those are no-ops.
+  useEffect(() => {
+    return () => {
+      Object.values(prevPhotosRef.current).forEach((uri) => {
+        if (uri && !uri.startsWith("http")) {
+          FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+        }
+      });
+      // Drain any capture handoff that was set but never consumed (e.g. the
+      // screen was replaced by a realtime redirect at the moment of a crop
+      // confirm) so neither the store entry nor its temp file leaks.
+      (Object.keys(prevPhotosRef.current) as IdPhotoSide[]).forEach((side) => {
+        const uri = consumeCapturedIdPhoto(side);
+        if (uri && !uri.startsWith("http")) {
+          FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+        }
+      });
+    };
+  }, []);
 
   const handleBack = () => {
     if (router.canGoBack()) {

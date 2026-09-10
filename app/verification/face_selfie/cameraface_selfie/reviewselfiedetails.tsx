@@ -10,6 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { styles } from "../../../../components/verification/faceselfie_comp/reviewdetails/reviewselfiedetailsstyles";
 import { useReviewSelfieDetails } from "../../../../components/verification/faceselfie_comp/reviewdetails/backend/reviewselfiedetailsfunc";
+import useVerificationDecisionWatcher from "../../../../components/verification/backend/useVerificationDecisionWatcher";
 
 /**
  * Face Scan Details — review the captured selfie before submitting.
@@ -38,6 +39,10 @@ export default function ReviewSelfieDetailsScreen() {
     handleReplaceValidId,
     handleCloseReplaceModal,
   } = useReviewSelfieDetails();
+  // Realtime admin decision watcher — see useVerificationDecisionWatcher:
+  // reacts to approve/reject decisions made in the admin panel while the user
+  // is on this screen (deduplicated across all stacked verification screens).
+  useVerificationDecisionWatcher();
 
   return (
     <>
