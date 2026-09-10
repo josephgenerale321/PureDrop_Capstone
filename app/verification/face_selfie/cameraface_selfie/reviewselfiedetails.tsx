@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Image,
   Modal,
@@ -11,6 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { styles } from "../../../../components/verification/faceselfie_comp/reviewdetails/reviewselfiedetailsstyles";
 import { useReviewSelfieDetails } from "../../../../components/verification/faceselfie_comp/reviewdetails/backend/reviewselfiedetailsfunc";
 import useVerificationDecisionWatcher from "../../../../components/verification/backend/useVerificationDecisionWatcher";
+import ZoomablePhoto from "../../../../components/verification/photozoom/ZoomablePhoto";
 
 /**
  * Face Scan Details — review the captured selfie before submitting.
@@ -45,6 +47,8 @@ export default function ReviewSelfieDetailsScreen() {
   // reacts to approve/reject decisions made in the admin panel while the user
   // is on this screen (deduplicated across all stacked verification screens).
   useVerificationDecisionWatcher();
+  // Full-screen zoomable viewer for the captured selfie (null/closed otherwise).
+  const [isPhotoViewerOpen, setIsPhotoViewerOpen] = useState(false);
 
   return (
     <>
@@ -61,11 +65,28 @@ export default function ReviewSelfieDetailsScreen() {
           <Text style={styles.title}>Face Scan Details</Text>
 
           {/* Captured selfie preview — falls back to a placeholder when missing.
+              Tapping the photo opens the fullscreen zoomable viewer.
               When the admin rejected the face scan, a red ✕ badge pins to the
               preview corner and the reason shows in the banner underneath. */}
-          <View style={[styles.previewWrap, isFaceRejected && styles.previewWrapRejected]}>
+          <TouchableOpacity
+            style={[styles.previewWrap, isFaceRejected && styles.previewWrapRejected]}
+            onPress={() => setIsPhotoViewerOpen(true)}
+            activeOpacity={photoUri ? 0.85 : 1}
+            disabled={!photoUri}
+            accessibilityRole={photoUri ? "button" : "text"}
+            accessibilityLabel={
+              photoUri
+                ? "View your captured selfie fullscreen. Pinch or double-tap to zoom."
+                : "Photo preview appears here"
+            }
+          >
             {photoUri ? (
-              <Image source={{ uri: photoUri }} style={styles.previewImage} resizeMode="cover" />
+              <>
+                <Image source={{ uri: photoUri }} style={styles.previewImage} resizeMode="cover" />
+                <View style={styles.previewZoomHint} pointerEvents="none">
+                  <Ionicons name="expand-outline" size={18} color="#FFFFFF" />
+                </View>
+              </>
             ) : (
               <View style={styles.previewPlaceholder}>
                 <Ionicons name="person-circle-outline" size={48} color="#CBD5E1" />
@@ -81,7 +102,7 @@ export default function ReviewSelfieDetailsScreen() {
                 <Ionicons name="close" size={22} color="#FFFFFF" />
               </View>
             )}
-          </View>
+          </TouchableOpacity>
 
           {isFaceRejected && (
             <View style={styles.rejectionBanner}>
@@ -291,6 +312,42 @@ export default function ReviewSelfieDetailsScreen() {
           </View>
         </Modal>
       )}
+
+      {/* Full-screen zoomable viewer for the captured selfie — same black
+          lightbox look as the submitted Valid ID viewer. Android hardware
+          back dismisses it without touching any of the confirm modals. */}
+      <Modal
+        visible={isPhotoViewerOpen && !!photoUri}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsPhotoViewerOpen(false)}
+      >
+        <SafeAreaView style={styles.photoViewerOverlay}>
+          <View style={styles.photoViewerHeader}>
+            <TouchableOpacity
+              style={styles.photoViewerCloseButton}
+              onPress={() => setIsPhotoViewerOpen(false)}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Close selfie preview"
+            >
+              <Ionicons name="close" size={24} color="#FFFFFF" />
+            </TouchableOpacity>
+            <Text style={styles.photoViewerTitle}>Captured selfie</Text>
+            <Text style={styles.photoViewerHint}>Pinch or double-tap to zoom</Text>
+          </View>
+
+          <View style={styles.photoViewerImageWrap}>
+            {photoUri && (
+              <ZoomablePhoto
+                key={photoUri}
+                uri={photoUri}
+                accessibilityLabel="Your captured selfie. Pinch or double-tap to zoom."
+              />
+            )}
+          </View>
+        </SafeAreaView>
+      </Modal>
     </>
   );
 }

@@ -391,6 +391,13 @@ export const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
   },
+  // Zoom hint pinned to the right of the lightbox header — tells the user
+  // the submitted photo supports pinch / double-tap zoom.
+  lightboxHint: {
+    color: "rgba(255,255,255,0.65)",
+    fontSize: 11,
+    fontWeight: "600",
+  },
   lightboxImageWrap: {
     flex: 1,
     alignItems: "center",

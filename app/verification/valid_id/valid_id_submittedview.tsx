@@ -17,6 +17,7 @@ import { styles } from "../../../components/verification/validid/valididstyles";
 import { deleteSubmittedValidId } from "../../../components/verification/validid/backend/validIdBackend";
 import { auth, db } from "../../../firebaseConfig";
 import useVerificationDecisionWatcher from "../../../components/verification/backend/useVerificationDecisionWatcher";
+import ZoomablePhoto from "../../../components/verification/photozoom/ZoomablePhoto";
 
 // Where the user lands when backing out of the submitted-ID review.
 const BACK_ROUTE = "/verification/verificationmain" as Href;
@@ -383,14 +384,15 @@ export default function ValidIdSubmittedViewScreen() {
               <Ionicons name="close" size={24} color="#FFFFFF" />
             </TouchableOpacity>
             <Text style={styles.lightboxTitle}>{lightbox?.label ?? ""} photo</Text>
+            <Text style={styles.lightboxHint}>Pinch or double-tap to zoom</Text>
           </View>
 
           <View style={styles.lightboxImageWrap}>
             {lightbox && (
-              <Image
-                source={{ uri: lightbox.uri }}
-                style={styles.lightboxImage}
-                resizeMode="contain"
+              <ZoomablePhoto
+                key={lightbox.uri}
+                uri={lightbox.uri}
+                accessibilityLabel={`${lightbox.label} photo of your Valid ID. Pinch or double-tap to zoom.`}
               />
             )}
           </View>

@@ -62,6 +62,19 @@ export const styles = StyleSheet.create({
     fontSize: 13,
     color: "#94A3B8",
   },
+  // Expand hint pinned to the preview corner — tells the user the captured
+  // selfie can be tapped open into the fullscreen zoomable viewer.
+  previewZoomHint: {
+    position: "absolute",
+    left: 12,
+    bottom: 12,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   // Admin-rejection state — red corner ✕ badge pinned over the selfie preview
   // plus the reason banner underneath, mirroring the hub's red ✕ language.
   previewWrapRejected: {
@@ -271,6 +284,46 @@ export const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: "#94A3B8",
+  },
+  // Full-screen zoomable viewer for the captured selfie — same black
+  // lightbox look as the submitted Valid ID viewer (valididstyles.ts).
+  photoViewerOverlay: {
+    flex: 1,
+    backgroundColor: "#000000",
+  },
+  photoViewerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 10,
+  },
+  photoViewerCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
+  },
+  photoViewerTitle: {
+    flex: 1,
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  photoViewerHint: {
+    color: "rgba(255,255,255,0.65)",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  photoViewerImageWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    paddingBottom: 20,
   },
 });
 
