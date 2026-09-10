@@ -94,6 +94,35 @@ export const styles = StyleSheet.create({
     borderColor: "#22C55E",
     backgroundColor: "#FFFFFF",
   },
+  // Admin-rejection state on the submitted-ID review — red border swaps over
+  // the green attached look when the admin rejected the Valid ID attachment.
+  photoBoxRejected: {
+    borderStyle: "solid",
+    borderColor: "#FCA5A5",
+    backgroundColor: "#FEF2F2",
+  },
+  // Rejection reason banner under the submitted photos — same red language as
+  // the verification hub's ✕ state.
+  rejectionBanner: {
+    width: "85%",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FCA5A5",
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginTop: 16,
+  },
+  rejectionBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#B91C1C",
+    lineHeight: 18,
+  },
   photoBoxHeader: {
     width: "100%",
     flexDirection: "row",

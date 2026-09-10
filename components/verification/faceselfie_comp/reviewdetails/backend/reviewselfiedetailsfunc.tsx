@@ -114,6 +114,12 @@ export function useReviewSelfieDetails() {
   // flow would silently overwrite it, so the choice is surfaced first.
   const [userId, setUserId] = useState<string | null>(null);
   const [hasValidId, setHasValidId] = useState(false);
+  // Live admin-rejection state — drives the red ✕ on this review screen when
+  // the admin rejected the face scan (same source as the verification hub:
+  // verificationStatus "rejected" + rejectionTarget "face_scan" / "both";
+  // a missing target on a legacy row behaves as "both").
+  const [rejectionReason, setRejectionReason] = useState<string | null>(null);
+  const [isFaceRejected, setIsFaceRejected] = useState(false);
   // "Valid ID Already Submitted" lightbox — opened by UPLOAD ID when an ID
   // exists, offering to view it or replace it instead of barging into the
   // overwrite flow.
@@ -142,11 +148,28 @@ export function useReviewSelfieDetails() {
       (snapshot) => {
         const data = snapshot.exists() ? snapshot.data() : undefined;
         setHasValidId(Boolean(data?.validIdFrontUrl ?? data?.validIdSubmittedAt));
+        // Same rejection source as the verification hub (verificationmain.tsx):
+        // a "rejected" status whose target covers the face scan shows the red
+        // ✕ here; the admin's reason is shown underneath the preview.
+        const status = String(data?.verificationStatus ?? "");
+        const target = data?.rejectionTarget;
+        const faceRejected =
+          status === "rejected" &&
+          (target === "face_scan" || target === "both" || target == null);
+        setIsFaceRejected(faceRejected);
+        const reason = data?.rejectionReason;
+        setRejectionReason(
+          faceRejected && typeof reason === "string" && reason.length > 0
+            ? reason
+            : null,
+        );
       },
       () => {
         // Read failed (offline / permissions) — treat as no ID so UPLOAD ID
         // keeps its original behavior; the Valid ID flow itself re-checks.
         setHasValidId(false);
+        setIsFaceRejected(false);
+        setRejectionReason(null);
       },
     );
 
@@ -280,6 +303,8 @@ export function useReviewSelfieDetails() {
     photoUri,
     livenessScore,
     livenessChecks,
+    isFaceRejected,
+    rejectionReason,
     isSubmitConfirmOpen,
     isUploadedModalOpen,
     isReplaceIdModalOpen,

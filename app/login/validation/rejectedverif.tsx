@@ -33,6 +33,10 @@ export default function RejectedVerificationScreen() {
   // missing record, missing fields, or a failed Firestore read.
   const [rejectionCount, setRejectionCount] = useState(0);
   const [rejectionReason, setRejectionReason] = useState<string | null>(null);
+  // Which part the admin rejected ("valid_id" / "face_scan" / "both") —
+  // surfaced as an explicit resubmission hint below the reason. Null when
+  // the field is absent (legacy rejections).
+  const [rejectionTarget, setRejectionTarget] = useState<string | null>(null);
   // Guards the button while the "seen" write + navigation are in flight.
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -61,6 +65,16 @@ export default function RejectedVerificationScreen() {
         const reason = data.rejectionReason;
         if (typeof reason === "string" && reason.length > 0 && !cancelled) {
           setRejectionReason(reason);
+        }
+
+        const target = data.rejectionTarget;
+        if (
+          (target === "valid_id" ||
+            target === "face_scan" ||
+            target === "both") &&
+          !cancelled
+        ) {
+          setRejectionTarget(target);
         }
       } catch {
         // Non-fatal — the screen already renders with the default texts, so
@@ -123,6 +137,17 @@ export default function RejectedVerificationScreen() {
         {rejectionReason !== null && (
           <Text style={styles.reasonText} numberOfLines={4}>
             Reason: {rejectionReason}
+          </Text>
+        )}
+
+        {rejectionTarget !== null && (
+          <Text style={styles.reasonText} numberOfLines={2}>
+            Please resubmit:{" "}
+            {rejectionTarget === "valid_id"
+              ? "Valid ID"
+              : rejectionTarget === "face_scan"
+                ? "Face Scan"
+                : "Valid ID + Face Scan"}
           </Text>
         )}
 

@@ -46,6 +46,14 @@ export default function VerificationMainScreen() {
   // Live verificationStatus ("awaiting_id" / "pending" / "verified" /
   // "rejected") — drives the pending-admin-review banner below.
   const [verificationStatus, setVerificationStatus] = useState<string>("");
+  // Which part the admin's rejection applied to ("valid_id" / "face_scan" /
+  // "both") — drives which submitted card shows the red ✕ after a rejection.
+  // Absent field (legacy rows) behaves as "both".
+  const [rejectionTarget, setRejectionTarget] = useState<string>("both");
+  // The submitted ID category (e.g. "Philippine National ID (PhilID)") — shown
+  // as a subtitle on the "Verify your id" card so the user can see exactly
+  // WHICH ID type is on file under the check / cross mark.
+  const [validIdType, setValidIdType] = useState<string | null>(null);
   // Lightbox confirmation for the back action — opened by both the on-screen
   // arrow and the Android hardware back button.
   const [isBackConfirmOpen, setIsBackConfirmOpen] = useState(false);
@@ -75,6 +83,7 @@ export default function VerificationMainScreen() {
     if (!userId) {
       setHasFaceScan(false);
       setHasValidId(false);
+      setValidIdType(null);
       return undefined;
     }
 
@@ -86,8 +95,22 @@ export default function VerificationMainScreen() {
           Boolean(data?.faceScanUrl ?? data?.faceScanPath ?? data?.faceScanSubmittedAt),
         );
         setHasValidId(Boolean(data?.validIdFrontUrl ?? data?.validIdSubmittedAt));
+        setValidIdType(
+          typeof data?.validIdType === "string" && data.validIdType.length > 0
+            ? data.validIdType
+            : null,
+        );
         const status = String(data?.verificationStatus ?? "");
         setVerificationStatus(status);
+
+        // Which part the admin rejected — only the rejected card(s) show the
+        // red ✕ (defaults to "both" for legacy rows without the field).
+        const rawTarget = data?.rejectionTarget;
+        setRejectionTarget(
+          rawTarget === "valid_id" || rawTarget === "face_scan"
+            ? rawTarget
+            : "both",
+        );
 
         // Approval / rejection decisions are handled by the shared
         // useVerificationDecisionWatcher hook (called above) so the hub and
@@ -99,6 +122,7 @@ export default function VerificationMainScreen() {
         // stay tappable either way.
         setHasFaceScan(false);
         setHasValidId(false);
+        setValidIdType(null);
         setVerificationStatus("");
       },
     );
@@ -253,14 +277,27 @@ export default function VerificationMainScreen() {
           >
             <Ionicons name="camera-outline" size={30} color="#0F172A" />
             <Text style={styles.optionText}>Face Recognition</Text>
-            {hasFaceScan && (
-              <Ionicons
-                name="checkmark-circle"
-                size={24}
-                color="#16A34A"
-                style={styles.optionCheck}
-              />
-            )}
+            {/* Submitted face scan: green check while it stands, red X while
+                the admin has REJECTED the face scan (or everything — see
+                rejectionTarget). A resubmission flips the status back to
+                "pending" and the check returns. */}
+            {hasFaceScan &&
+              (verificationStatus === "rejected" &&
+              (rejectionTarget === "face_scan" || rejectionTarget === "both") ? (
+                <Ionicons
+                  name="close-circle"
+                  size={24}
+                  color="#DC2626"
+                  style={styles.optionCheck}
+                />
+              ) : (
+                <Ionicons
+                  name="checkmark-circle"
+                  size={24}
+                  color="#16A34A"
+                  style={styles.optionCheck}
+                />
+              ))}
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -278,15 +315,39 @@ export default function VerificationMainScreen() {
                 <View style={[styles.idCardIconLine, styles.idCardIconLineShort]} />
               </View>
             </View>
-            <Text style={styles.optionText}>Verify your id</Text>
-            {hasValidId && (
-              <Ionicons
-                name="checkmark-circle"
-                size={24}
-                color="#16A34A"
-                style={styles.optionCheck}
-              />
-            )}
+            {/* Label + submitted ID category (e.g. "Philippine National ID
+                (PhilID)") — the category sits under the title so the user
+                always sees WHICH ID type is on file, right next to the
+                check / cross mark. */}
+            <View style={styles.optionTextWrap}>
+              <Text style={styles.optionTextInWrap}>Verify your id</Text>
+              {hasValidId && validIdType !== null && (
+                <Text style={styles.optionSubText} numberOfLines={1}>
+                  {validIdType}
+                </Text>
+              )}
+            </View>
+            {/* Submitted Valid ID: green check while it stands, red X while
+                the admin has REJECTED the Valid ID (or everything — see
+                rejectionTarget). A resubmission flips the status back to
+                "pending" and the check returns. */}
+            {hasValidId &&
+              (verificationStatus === "rejected" &&
+              (rejectionTarget === "valid_id" || rejectionTarget === "both") ? (
+                <Ionicons
+                  name="close-circle"
+                  size={24}
+                  color="#DC2626"
+                  style={styles.optionCheck}
+                />
+              ) : (
+                <Ionicons
+                  name="checkmark-circle"
+                  size={24}
+                  color="#16A34A"
+                  style={styles.optionCheck}
+                />
+              ))}
           </TouchableOpacity>
 
           {/* Review Submission — one read-only overview of everything the
@@ -530,6 +591,24 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: "#0F172A",
     marginLeft: 20,
+  },
+  // Text stack on the "Verify your id" card — holds the title plus the
+  // submitted ID category subtitle. marginLeft matches optionText's indent;
+  // the inner title re-declares the font without the extra margin.
+  optionTextWrap: {
+    flex: 1,
+    marginLeft: 20,
+  },
+  optionTextInWrap: {
+    fontSize: 17,
+    color: "#0F172A",
+  },
+  // Submitted ID category subtitle on the "Verify your id" card — smaller and
+  // muted so it reads as metadata under the title.
+  optionSubText: {
+    fontSize: 12,
+    color: "#64748B",
+    marginTop: 2,
   },
   // Completion check pinned to the right edge of an option card —
   // marginLeft: "auto" pushes it to the end of the row layout.

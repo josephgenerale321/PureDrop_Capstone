@@ -25,6 +25,8 @@ export default function ReviewSelfieDetailsScreen() {
     photoUri,
     livenessScore,
     livenessChecks,
+    isFaceRejected,
+    rejectionReason,
     isSubmitConfirmOpen,
     isUploadedModalOpen,
     isReplaceIdModalOpen,
@@ -58,8 +60,10 @@ export default function ReviewSelfieDetailsScreen() {
         >
           <Text style={styles.title}>Face Scan Details</Text>
 
-          {/* Captured selfie preview — falls back to a placeholder when missing */}
-          <View style={styles.previewWrap}>
+          {/* Captured selfie preview — falls back to a placeholder when missing.
+              When the admin rejected the face scan, a red ✕ badge pins to the
+              preview corner and the reason shows in the banner underneath. */}
+          <View style={[styles.previewWrap, isFaceRejected && styles.previewWrapRejected]}>
             {photoUri ? (
               <Image source={{ uri: photoUri }} style={styles.previewImage} resizeMode="cover" />
             ) : (
@@ -68,7 +72,25 @@ export default function ReviewSelfieDetailsScreen() {
                 <Text style={styles.previewPlaceholderText}>Photo preview appears here</Text>
               </View>
             )}
+            {isFaceRejected && (
+              <View
+                style={styles.rejectionBadge}
+                accessibilityRole="image"
+                accessibilityLabel="Face scan rejected by admin"
+              >
+                <Ionicons name="close" size={22} color="#FFFFFF" />
+              </View>
+            )}
           </View>
+
+          {isFaceRejected && (
+            <View style={styles.rejectionBanner}>
+              <Ionicons name="close-circle" size={18} color="#DC2626" />
+              <Text style={styles.rejectionBannerText}>
+                Face scan rejected{rejectionReason ? `: ${rejectionReason}` : " — please retake and resubmit."}
+              </Text>
+            </View>
+          )}
 
           {/* Real liveness score — computed from the captured photo's face
               metrics; neutral placeholder when it is missing. */}

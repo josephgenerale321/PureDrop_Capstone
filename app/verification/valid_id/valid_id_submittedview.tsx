@@ -65,6 +65,12 @@ export default function ValidIdSubmittedViewScreen() {
   });
   // Photo shown in the full-screen lightbox (null = closed).
   const [lightbox, setLightbox] = useState<{ label: string; uri: string } | null>(null);
+  // Live admin-rejection state — drives the red ✕ on the submitted photo boxes
+  // when the admin rejected the Valid ID (same source as the verification hub:
+  // verificationStatus "rejected" + rejectionTarget "valid_id" / "both";
+  // a missing target on a legacy row behaves as "both").
+  const [isIdRejected, setIsIdRejected] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState<string | null>(null);
   // Delete confirmation lightbox + in-flight flag (disables the buttons so
   // the delete can't be double-fired).
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
@@ -86,6 +92,8 @@ export default function ValidIdSubmittedViewScreen() {
     if (!userId) {
       setSubmitted({ idType: null, frontUrl: null, backUrl: null });
       setIsLoading(false);
+      setIsIdRejected(false);
+      setRejectionReason(null);
       return undefined;
     }
 
@@ -100,11 +108,28 @@ export default function ValidIdSubmittedViewScreen() {
           backUrl: typeof data?.validIdBackUrl === "string" ? data.validIdBackUrl : null,
         });
         setIsLoading(false);
+        // Same rejection source as the verification hub
+        // (verificationmain.tsx): a "rejected" status whose target covers the
+        // Valid ID shows the red ✕ on the submitted photo boxes.
+        const status = String(data?.verificationStatus ?? "");
+        const target = data?.rejectionTarget;
+        const idRejected =
+          status === "rejected" &&
+          (target === "valid_id" || target === "both" || target == null);
+        setIsIdRejected(idRejected);
+        const reason = data?.rejectionReason;
+        setRejectionReason(
+          idRejected && typeof reason === "string" && reason.length > 0
+            ? reason
+            : null,
+        );
       },
       () => {
         // Read failed (offline / permissions) — show the empty state.
         setSubmitted({ idType: null, frontUrl: null, backUrl: null });
         setIsLoading(false);
+        setIsIdRejected(false);
+        setRejectionReason(null);
       },
     );
 
@@ -216,6 +241,7 @@ export default function ValidIdSubmittedViewScreen() {
               label="Passport"
               photoUri={submitted.frontUrl}
               isLoading={isLoading}
+              isRejected={isIdRejected}
               onPress={() => {
                 if (submitted.frontUrl) {
                   setLightbox({ label: "Passport", uri: submitted.frontUrl });
@@ -229,6 +255,7 @@ export default function ValidIdSubmittedViewScreen() {
                 label="Front"
                 photoUri={submitted.frontUrl}
                 isLoading={isLoading}
+                isRejected={isIdRejected}
                 onPress={() => {
                   if (submitted.frontUrl) {
                     setLightbox({ label: "Front", uri: submitted.frontUrl });
@@ -241,6 +268,7 @@ export default function ValidIdSubmittedViewScreen() {
                 label="Back"
                 photoUri={submitted.backUrl}
                 isLoading={isLoading}
+                isRejected={isIdRejected}
                 onPress={() => {
                   if (submitted.backUrl) {
                     setLightbox({ label: "Back", uri: submitted.backUrl });
@@ -248,6 +276,17 @@ export default function ValidIdSubmittedViewScreen() {
                 }}
               />
             </>
+          )}
+
+          {/* Admin-rejection banner — shows the red ✕ context + reason when
+              the admin rejected the Valid ID attachment. */}
+          {isIdRejected && (
+            <View style={styles.rejectionBanner}>
+              <Ionicons name="close-circle" size={18} color="#DC2626" />
+              <Text style={styles.rejectionBannerText}>
+                Valid ID rejected{rejectionReason ? `: ${rejectionReason}` : " — please replace it and resubmit."}
+              </Text>
+            </View>
           )}
 
           {/* Edit / Delete actions — only when a submission exists. */}
@@ -367,17 +406,21 @@ type SubmittedPhotoBoxProps = {
   photoUri: string | null;
   /** True until the first Firestore snapshot arrives — shows a neutral box. */
   isLoading: boolean;
+  /** True when the admin rejected the Valid ID — swaps the green check for a red ✕. */
+  isRejected?: boolean;
   onPress: () => void;
 };
 
 /**
  * Read-only counterpart of IdPhotoBox — same box geometry and header, but it
  * only previews the submitted photo (green check, no attach/retake actions).
+ * When the admin rejects the Valid ID, the header check swaps to a red ✕ and
+ * the box border turns red so it matches the hub's rejection language.
  */
-function SubmittedPhotoBox({ label, photoUri, isLoading, onPress }: SubmittedPhotoBoxProps) {
+function SubmittedPhotoBox({ label, photoUri, isLoading, isRejected = false, onPress }: SubmittedPhotoBoxProps) {
   return (
     <TouchableOpacity
-      style={[styles.photoBox, styles.photoBoxAttached]}
+      style={[styles.photoBox, styles.photoBoxAttached, isRejected && styles.photoBoxRejected]}
       onPress={onPress}
       activeOpacity={photoUri ? 0.8 : 1}
       disabled={!photoUri}
@@ -386,7 +429,11 @@ function SubmittedPhotoBox({ label, photoUri, isLoading, onPress }: SubmittedPho
     >
       <View style={styles.photoBoxHeader}>
         <Text style={styles.photoBoxLabel}>{label}</Text>
-        <Ionicons name="checkmark-circle" size={18} color="#22C55E" />
+        {isRejected ? (
+          <Ionicons name="close-circle" size={18} color="#DC2626" />
+        ) : (
+          <Ionicons name="checkmark-circle" size={18} color="#22C55E" />
+        )}
       </View>
 
       <View style={styles.previewArea}>
