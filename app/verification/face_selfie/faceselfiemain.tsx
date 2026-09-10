@@ -2,6 +2,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { type Href, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import useNavigateOnce from "../../../components/verification/backend/useNavigateOnce";
 import useVerificationDecisionWatcher from "../../../components/verification/backend/useVerificationDecisionWatcher";
 
 const SELFIE_CAPTURE_ROUTE =
@@ -22,6 +23,7 @@ export default function FaceSelfieMainScreen() {
   // reacts to approve/reject decisions made in the admin panel while the user
   // is on this screen (deduplicated across all stacked verification screens).
   useVerificationDecisionWatcher();
+  const navigateOnce = useNavigateOnce();
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -39,7 +41,7 @@ export default function FaceSelfieMainScreen() {
 
   // "Start Camera" launches the full-screen face recognition capture screen.
   const handleStartCamera = () => {
-    router.push(SELFIE_CAPTURE_ROUTE);
+    navigateOnce(SELFIE_CAPTURE_ROUTE);
   };
 
   return (

@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { styles } from "../../../components/verification/validid/valididstyles";
 import { deleteSubmittedValidId } from "../../../components/verification/validid/backend/validIdBackend";
 import { auth, db } from "../../../firebaseConfig";
+import useNavigateOnce from "../../../components/verification/backend/useNavigateOnce";
 import useVerificationDecisionWatcher from "../../../components/verification/backend/useVerificationDecisionWatcher";
 import ZoomablePhoto from "../../../components/verification/photozoom/ZoomablePhoto";
 
@@ -55,6 +56,7 @@ export default function ValidIdSubmittedViewScreen() {
   // reacts to approve/reject decisions made in the admin panel while the user
   // is on this screen (deduplicated across all stacked verification screens).
   useVerificationDecisionWatcher();
+  const navigateOnce = useNavigateOnce();
   const [userId, setUserId] = useState<string | null>(null);
   // True until the first snapshot for the signed-in account arrives — keeps
   // the boxes as neutral gray placeholders instead of "unavailable" hints.
@@ -163,7 +165,7 @@ export default function ValidIdSubmittedViewScreen() {
         { text: "Cancel", style: "cancel" },
         {
           text: "Replace Now",
-          onPress: () => router.push(VALID_ID_EDIT_ROUTE),
+          onPress: () => navigateOnce(VALID_ID_EDIT_ROUTE),
         },
       ],
     );

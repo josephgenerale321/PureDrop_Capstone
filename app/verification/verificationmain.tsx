@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { markVerificationLater } from "../../components/login/backend/postEmailVerificationGate";
+import useNavigateOnce from "../../components/verification/backend/useNavigateOnce";
 import useVerificationDecisionWatcher from "../../components/verification/backend/useVerificationDecisionWatcher";
 import { auth, db } from "../../firebaseConfig";
 
@@ -57,6 +58,14 @@ export default function VerificationMainScreen() {
   // Lightbox confirmation for the back action — opened by both the on-screen
   // arrow and the Android hardware back button.
   const [isBackConfirmOpen, setIsBackConfirmOpen] = useState(false);
+  // Single-flight forward-navigation guard — rapid taps on the Face
+  // Recognition / Verify your id / Review Submission cards used to fire
+  // router.push() per tap (3 taps = 3 stacked copies, so backing out popped
+  // 3 times). The shared hook flips a ref synchronously on the FIRST tap, so
+  // taps 2..N in the same gesture are dropped; it re-arms on refocus
+  // (returning via back) plus a fallback timeout, identically in dev,
+  // preview, and production builds.
+  const navigateOnce = useNavigateOnce();
   // Realtime admin decision watcher — shared with EVERY other verification
   // screen (see useVerificationDecisionWatcher): the moment the admin
   // approves or rejects this account while the user sits anywhere in the flow
@@ -147,6 +156,10 @@ export default function VerificationMainScreen() {
   // Android hardware back opens the same lightbox; while it is open,
   // hardware back just dismisses it. Active only while this screen is
   // focused, so back navigation from nested screens keeps working.
+  // (The forward-navigation guard re-arms itself on refocus inside
+  // useNavigateOnce — on return via back pop its focus effect re-runs and
+  // clears the flag, so the cards are tappable again exactly once per visit
+  // with no timers or animation-frame races to differ between builds.)
   useFocusEffect(
     useCallback(() => {
       if (Platform.OS !== "android") {
@@ -204,32 +217,32 @@ export default function VerificationMainScreen() {
   const handleFaceRecognition = () => {
     // A submitted face scan (check mark showing) opens the read-only review of
     // the enrolled selfie with its Retake / Delete actions; nothing submitted
-    // yet opens the face-scan flow.
+    // yet opens the face-scan flow. navigateOnce drops same-gesture double /
+    // triple taps so exactly ONE copy is pushed.
     if (hasFaceScan) {
-      try {
-        router.push(FACE_SELFIE_SUBMITTED_ROUTE);
-        return;
-      } catch {
-        // Navigation must never crash the app — fall through to the flow.
-      }
+      navigateOnce(FACE_SELFIE_SUBMITTED_ROUTE);
+      return;
     }
-    router.push(FACE_SELFIE_ROUTE);
+    navigateOnce(FACE_SELFIE_ROUTE);
   };
 
   const handleValidId = () => {
     // A submitted ID (check mark showing) opens the read-only review of what
     // was submitted; nothing submitted yet opens the submission flow.
+    // navigateOnce drops same-gesture double / triple taps so exactly ONE
+    // copy is pushed.
     if (hasValidId) {
-      router.push(VALID_ID_SUBMITTED_ROUTE);
+      navigateOnce(VALID_ID_SUBMITTED_ROUTE);
       return;
     }
-    router.push(VALID_ID_ROUTE);
+    navigateOnce(VALID_ID_ROUTE);
   };
 
   // Review everything submitted so far — face scan AND Valid ID photos in
   // one read-only overview (visible once at least one step is submitted).
+  // Same single-flight guard as the two cards above.
   const handleReviewSubmission = () => {
-    router.push(REVIEW_SUBMISSION_ROUTE);
+    navigateOnce(REVIEW_SUBMISSION_ROUTE);
   };
 
   return (

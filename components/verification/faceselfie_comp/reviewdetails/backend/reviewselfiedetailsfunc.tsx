@@ -8,6 +8,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { submitFaceScan } from "../../backend/faceScanBackend";
+import useNavigateOnce from "../../../backend/useNavigateOnce";
 import { auth, db } from "../../../../../firebaseConfig";
 // Type-only import — erased at compile time, so this never pulls the
 // native-only vision-camera module graph into the web bundle.
@@ -77,6 +78,7 @@ function parseLivenessChecks(raw: string | undefined): LivenessCheck[] {
 }
 
 export function useReviewSelfieDetails() {
+  const navigateOnce = useNavigateOnce();
   const router = useRouter();
   const params = useLocalSearchParams<{
   photo?: string | string[];
@@ -261,7 +263,7 @@ export function useReviewSelfieDetails() {
       return;
     }
     try {
-      router.push(VALID_ID_MAIN_ROUTE);
+      navigateOnce(VALID_ID_MAIN_ROUTE as never);
     } catch {
       // Navigation must never crash the app.
     }
@@ -273,7 +275,7 @@ export function useReviewSelfieDetails() {
   const handleViewSubmittedId = () => {
     setIsReplaceIdModalOpen(false);
     try {
-      router.push(VALID_ID_SUBMITTED_ROUTE);
+      navigateOnce(VALID_ID_SUBMITTED_ROUTE as never);
     } catch {
       // Navigation must never crash the app.
     }
@@ -287,7 +289,7 @@ export function useReviewSelfieDetails() {
   const handleReplaceValidId = () => {
     setIsReplaceIdModalOpen(false);
     try {
-      router.push(VALID_ID_EDIT_ROUTE);
+      navigateOnce(VALID_ID_EDIT_ROUTE as never);
     } catch {
       // Navigation must never crash the app.
     }

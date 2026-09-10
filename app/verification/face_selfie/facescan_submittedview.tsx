@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { styles } from "../../../components/verification/faceselfie_comp/submittedview/facesubmittedstyles";
 import { deleteSubmittedFaceScan } from "../../../components/verification/faceselfie_comp/backend/faceScanBackend";
 import { auth, db } from "../../../firebaseConfig";
+import useNavigateOnce from "../../../components/verification/backend/useNavigateOnce";
 import useVerificationDecisionWatcher from "../../../components/verification/backend/useVerificationDecisionWatcher";
 // Type-only import — erased at compile time, so this never pulls the
 // native-only vision-camera module graph into the web bundle.
@@ -120,6 +121,7 @@ export default function FaceScanSubmittedViewScreen() {
   // reacts to approve/reject decisions made in the admin panel while the user
   // is on this screen (deduplicated across all stacked verification screens).
   useVerificationDecisionWatcher();
+  const navigateOnce = useNavigateOnce();
   const [userId, setUserId] = useState<string | null>(null);
   // True until the first snapshot for the signed-in account arrives — keeps
   // the preview as a neutral gray placeholder instead of "unavailable" hints.
@@ -202,13 +204,7 @@ export default function FaceScanSubmittedViewScreen() {
         { text: "Cancel", style: "cancel" },
         {
           text: "Retake Now",
-          onPress: () => {
-            try {
-              router.push(FACE_SELFIE_ROUTE);
-            } catch {
-              // Navigation must never crash the app.
-            }
-          },
+          onPress: () => navigateOnce(FACE_SELFIE_ROUTE),
         },
       ],
     );

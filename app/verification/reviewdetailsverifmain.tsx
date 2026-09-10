@@ -14,6 +14,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../../firebaseConfig";
+import useNavigateOnce from "../../components/verification/backend/useNavigateOnce";
 import useVerificationDecisionWatcher from "../../components/verification/backend/useVerificationDecisionWatcher";
 
 const METHOD_LABELS: Record<string, string> = {
@@ -35,6 +36,7 @@ export default function ReviewDetailsVerifMainScreen() {
   // reacts to approve/reject decisions made in the admin panel while the user
   // is on this screen (deduplicated across all stacked verification screens).
   useVerificationDecisionWatcher();
+  const navigateOnce = useNavigateOnce();
   const params = useLocalSearchParams<{ method?: string | string[] }>();
   const method = Array.isArray(params.method) ? params.method[0] : params.method;
   const methodLabel = method ? (METHOD_LABELS[method] ?? method) : null;
@@ -99,7 +101,7 @@ export default function ReviewDetailsVerifMainScreen() {
   // "Upload ID" (face upload) — continue straight into the Valid ID flow.
   const handleVerifyIdNow = () => {
     setIsUploadedModalOpen(false);
-    router.push("/verification/valid_id/valid_id_main");
+    navigateOnce("/verification/valid_id/valid_id_main" as never);
   };
 
   // "Done" (Valid ID / other uploads) — back to the verification hub.

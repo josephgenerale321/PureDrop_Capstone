@@ -27,6 +27,7 @@ import {
   submitValidId,
   type ValidIdSubmissionInput,
 } from "../../../components/verification/validid/backend/validIdBackend";
+import useNavigateOnce from "../../../components/verification/backend/useNavigateOnce";
 import useVerificationDecisionWatcher from "../../../components/verification/backend/useVerificationDecisionWatcher";
 
 // Route of the Valid ID camera capture screen.
@@ -67,6 +68,7 @@ export default function ValidIdMainScreen() {
   // reacts to approve/reject decisions made in the admin panel while the user
   // is on this screen (deduplicated across all stacked verification screens).
   useVerificationDecisionWatcher();
+  const navigateOnce = useNavigateOnce();
   const [selectedIdType, setSelectedIdType] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   // Captured photo URIs per side (null = not captured yet).
@@ -176,8 +178,10 @@ export default function ValidIdMainScreen() {
     }
   };
 
+  // Single-flight guard — rapid taps on a photo box / Retake push exactly ONE
+  // capture screen copy (same fix as the verification hub cards).
   const goToCapture = (side: IdPhotoSide) => {
-    router.push({ pathname: ID_CAPTURE_ROUTE, params: { side } } as Href);
+    navigateOnce({ pathname: ID_CAPTURE_ROUTE, params: { side } } as Href);
   };
 
   const getPhotoForSide = (side: IdPhotoSide): string | null =>
