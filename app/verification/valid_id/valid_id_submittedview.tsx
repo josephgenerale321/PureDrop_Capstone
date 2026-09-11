@@ -386,7 +386,6 @@ export default function ValidIdSubmittedViewScreen() {
               <Ionicons name="close" size={24} color="#FFFFFF" />
             </TouchableOpacity>
             <Text style={styles.lightboxTitle}>{lightbox?.label ?? ""} photo</Text>
-            <Text style={styles.lightboxHint}>Pinch or double-tap to zoom</Text>
           </View>
 
           <View style={styles.lightboxImageWrap}>
@@ -394,6 +393,7 @@ export default function ValidIdSubmittedViewScreen() {
               <ZoomablePhoto
                 key={lightbox.uri}
                 uri={lightbox.uri}
+                showPinchHint={false}
                 accessibilityLabel={`${lightbox.label} photo of your Valid ID. Pinch or double-tap to zoom.`}
               />
             )}

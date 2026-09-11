@@ -334,7 +334,6 @@ export default function ReviewSelfieDetailsScreen() {
               <Ionicons name="close" size={24} color="#FFFFFF" />
             </TouchableOpacity>
             <Text style={styles.photoViewerTitle}>Captured selfie</Text>
-            <Text style={styles.photoViewerHint}>Pinch or double-tap to zoom</Text>
           </View>
 
           <View style={styles.photoViewerImageWrap}>
@@ -342,6 +341,7 @@ export default function ReviewSelfieDetailsScreen() {
               <ZoomablePhoto
                 key={photoUri}
                 uri={photoUri}
+                showPinchHint={false}
                 accessibilityLabel="Your captured selfie. Pinch or double-tap to zoom."
               />
             )}

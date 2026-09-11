@@ -16,7 +16,12 @@ import PinchZoomHint from "./PinchZoomHint";
 const MIN_SCALE = 1;
 const MAX_SCALE = 4;
 const DOUBLE_TAP_ZOOM = 2.5;
-const DOUBLE_TAP_DELAY_MS = 300;
+// Double-tap pairing window (release-to-release). 450ms, not the textbook
+// 300ms: Funtouch touch dispatch on Vivo eats 50-150ms between a finger-UP
+// and the next DOWN, so a 300ms UP→UP window drops every other pair on fast
+// repeats ("fine twice, stuck on the 4th tap"). 450ms still pairs only
+// deliberate quick taps — a slow deliberate tap minutes later never pairs.
+const DOUBLE_TAP_DELAY_MS = 450;
 const DOUBLE_TAP_SLOP_PX = 24;
 // A tap must be a quick down-up: anything held longer is a hold, not a tap.
 const TAP_MAX_DURATION_MS = 400;
@@ -86,6 +91,21 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
   // Completion-mirror timer for animateTo (neither backend exposes an
   // animation callback). Cleared + replaced on every new animation.
   const animTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tap-vs-double-tap snapshot refs. They exist ONLY as in-gesture guards:
+  // - tapPending: snapshot taken at grant (down-stroke pos + PanResponder
+  //   delta at that moment + touch count). A MOVE frame that drifts past the
+  //   slop, or any touch-count change, clears it — so a slide/pinch can NEVER
+  //   later replay as a double-tap toggle ("zoomed out by itself").
+  // - tapTimer: reserved timeout handle for the tap-pairing window. Cleared
+  //   on every new grant so a slow-to-fire timer from the PREVIOUS gesture
+  //   can never arm a phantom double-tap window mid-new-gesture (identical
+  //   timing on dev and preview builds since it is shared-JS logic).
+  const tapPending = useRef<{
+    dx0: number;
+    dy0: number;
+    count: number;
+  } | null>(null);
+  const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Reanimated view module, loaded lazily so builds WITHOUT the native
   // module (Expo Go, web preview) never crash on import. Null = Animated
   // fallback path renders instead.
@@ -157,6 +177,23 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
     // to tell a two-finger SLIDE apart from a real pinch by movement
     // DIRECTION (see the two-finger branch in onPanResponderMove).
     prevPositions: null as Map<number, { x: number; y: number }> | null,
+    // Rolling pinch-distance smoother (exponential moving average) + the raw
+    // baseline it is anchored to. Per-finger page coords arrive quantized to
+    // whole px and each touch has independent 1-2px jitter: raw dist jumps
+    // ±3-5px frame-to-frame, which used to zoom OUT during a pure two-finger
+    // slide. The EMA absorbs that noise; only a sustained real spread/pinch
+    // moves it enough to pass the zoom dead-zone below.
+    smoothDist: 0,
+    // Consecutive two-finger frames with a confident, non-degenerate pinch
+    // direction pattern (both fingers moving clearly along the pinch axis,
+    // in opposite directions). Slow but deliberate pinches build this up and
+    // bypass the dead-zone; random slide jitter never sustains it.
+    pinchStreak: 0,
+    // Set whenever a pinch/multi-touch ends or releases: the NEXT single-finger
+    // move frame must re-anchor its pan baseline instead of replaying a stale
+    // gesture.dx left over from the ended two-finger gesture (the repeated
+    // spread-at-max-zoom sideways slide).
+    needsPanReanchor: false,
   });
   // Live map of every active touch (identifier -> page coords + optional
   // container-relative location), synced from raw touch handlers because
@@ -239,6 +276,28 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
     liveX.current = 0;
     liveY.current = 0;
     targetScale.current = 1;
+    // New photo = new intent: kill any tap-pairing window carried over from
+    // the previous photo, or its single tap pairs with the new photo's first
+    // tap into a phantom double-tap ("stuck" toggle on the first taps).
+    try {
+      const s = state.current;
+      s.lastTapAt = 0;
+    } catch {
+      /* non-fatal */
+    }
+    try {
+      tapPending.current = null;
+    } catch {
+      /* non-fatal */
+    }
+    if (tapTimer.current != null) {
+      try {
+        clearTimeout(tapTimer.current);
+      } catch {
+        /* non-fatal */
+      }
+      tapTimer.current = null;
+    }
     // A fresh photo gets a fresh coach mark (if the caller wants hints).
     hintDone.current = false;
     try {
@@ -369,11 +428,18 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
   const animateTo = (toScale: number, toX: number, toY: number) => {
     try {
       const s = state.current;
+      // Take a NEW ownership id FIRST and publish it before stopping: on Vivo
+      // a syncLive() from the release/grant interleaved between stop and start
+      // used to grab the same id and the stale timer below then dropped the
+      // live values mid-flight (the 4th-tap "stuck" state). With a fresh id
+      // claimed up-front, any stale completion self-drops.
+      gestureSeq.current += 1;
+      const id = gestureSeq.current;
+      animSeq.current = id;
       s.scale = toScale;
       s.tx = toX;
       s.ty = toY;
       stopAnimations();
-      const id = gestureSeq.current;
       animSeq.current = id;
       animating.current = true;
       // Publish the destination FIRST so a rapid follow-up tap toggles from
@@ -600,9 +666,9 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
   // Reused across move frames — filled by livePointsInto, never allocated
   // per frame (old-phone GC win: a 120Hz touch stream used to allocate 2-3
   // arrays + a Map snapshot on EVERY frame).
-  const liveScratch: Array<{ x: number; y: number; lx: number | null; ly: number | null }> = [];
+  const liveScratch: Array<{ id: number; x: number; y: number; lx: number | null; ly: number | null }> = [];
   const livePointsInto = (
-    out: Array<{ x: number; y: number; lx: number | null; ly: number | null }>,
+    out: Array<{ id: number; x: number; y: number; lx: number | null; ly: number | null }>,
     pruneStale: boolean,
   ) => {
     out.length = 0;
@@ -616,7 +682,16 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
           touches.current.delete(id);
           continue;
         }
-        out.push(p);
+        out.push({ id, x: p.x, y: p.y, lx: p.lx, ly: p.ly });
+      }
+      // Sort by STABLE touch identifier so every consumer (centroid, span,
+      // per-finger direction) reads the same finger pairing no matter which
+      // order the OS delivered the move batch in. OEM skins — notably Vivo
+      // Funtouch — reorder batch entries across frames; without a stable
+      // order the span/centroid teleport and a slide "zooms out by itself".
+      // Sorting here (once per frame) covers pinch + slide + hold paths.
+      if (out.length > 1) {
+        out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       }
     } catch {
       /* use whatever we collected */
@@ -695,11 +770,42 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
             s.lastDy = 0;
             s.baseDist = 0;
             s.pinching = false;
+            s.smoothDist = 0;
+            s.pinchStreak = 0;
+            // New contact kills the double-tap timeout: without this, a
+            // slow-to-fire tap timer from the PREVIOUS gesture can expire
+            // mid-new-gesture and arm a phantom double-tap window — the next
+            // quick touch then reads as a double-tap toggle and the photo
+            // "randomly zooms out / sticks". Shared-JS guard: identical on
+            // dev and preview builds.
+            if (tapTimer.current != null) {
+              try {
+                clearTimeout(tapTimer.current);
+              } catch {
+                /* non-fatal */
+              }
+              tapTimer.current = null;
+            }
+            // Same for an in-flight tap-vs-double-tap snapshot window.
+            tapPending.current = null;
+            // New contact: the pan baseline is already zeroed above, so there
+            // is no stale dx to replay — clear the re-anchor flag here.
+            s.needsPanReanchor = false;
             // New gesture takes over: stop the double-tap spring (if any) and
             // invalidate its completion, otherwise the spring keeps writing
             // the old zoom under the new fingers — the Vivo flicker.
             // Also clear the map FIRST so a ghost finger from a dropped
             // touch-end can't corrupt this gesture's pinch distance.
+            // Stop the DRIVER-level animation too (Reanimated worklet or
+            // Animated timing): without this the spring keeps writing values
+            // while the new gesture reads them — the zoom "sticks" mid-value
+            // and a fast follow-up double-tap then toggles from a stale
+            // target, so it zooms OUT (or nowhere) instead of in.
+            try {
+              zoom.stop();
+            } catch {
+              /* non-fatal: driver may be mid-teardown */
+            }
             syncLive();
             animating.current = false;
             touches.current = new Map();
@@ -765,6 +871,21 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                 s.grantTapLx = entries[0].lx;
                 s.grantTapLy = entries[0].ly;
               }
+            }
+            // Arm the tap snapshot for THIS grant: dx/dy are 0 here (fresh
+            // gesture), count is the max'd grant count above. Any move past
+            // the slop, or any touch-count change, clears it — so the release
+            // path can trust it as "this gesture never moved / never grew a
+            // second finger". The release ALSO re-checks lift position, so a
+            // fast flick that outruns its move frames still can't count.
+            try {
+              tapPending.current = {
+                dx0: 0,
+                dy0: 0,
+                count: s.grantTouchCount,
+              };
+            } catch {
+              tapPending.current = null;
             }
             const dist = pinchDistance(livePointsInto(liveScratch, false));
             if (touches.current.size >= 2 && dist > 0) {
@@ -882,8 +1003,16 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                 // later frames to move. Now one spread = one zoom.
                 const prevBase = s.baseDist > 0 ? s.baseDist : dist;
                 s.baseDist = dist;
+                s.smoothDist = dist;
                 s.baseScale = s.scale;
                 s.pinching = true;
+                s.pinchStreak = 0;
+                // The gesture is two fingers now: any pending 1-finger tap
+                // snapshot is dead — a tap that grows a second finger is not a
+                // tap. Without this, spread → lift → quick tap replays the
+                // stale snapshot as a double-tap toggle and the photo "zooms
+                // out by itself".
+                tapPending.current = null;
                 // Seed the two-finger pan tracking so the first slide frame
                 // has a valid previous centroid to diff against.
                 const seed = pinchCentroid(framePts);
@@ -908,8 +1037,8 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                 const seedFrameRatio = prevBase > 0 ? dist / prevBase : 1;
                 if (Number.isFinite(seedFrameRatio) && seedFrameRatio > 0 && seedFrameRatio !== 1) {
                   const seedClamped = Math.min(1.15, Math.max(1 / 1.15, seedFrameRatio));
-                  const seedNext = s.scale * seedClamped;
-                  if (Number.isFinite(seedNext)) {
+                  const seedRaw = s.scale * seedClamped;
+                  if (Number.isFinite(seedRaw)) {
                     const seedFocal = pinchCentroid(framePts);
                     let seedLocal = { x: 0, y: 0 };
                     if (seedFocal && seedFocal.lx != null && seedFocal.ly != null) {
@@ -925,13 +1054,30 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                     seedLocal.y = Math.min(shh, Math.max(-shh, seedLocal.y));
                     const seedOld = s.scale;
                     if (Number.isFinite(seedOld) && seedOld > 0) {
+                      // Clamp BEFORE the focal shift (same at-limit rule as the
+                      // steady path): a spread at MAX (or pinch at MIN) zoom
+                      // holds position instead of walking the image sideways.
+                      const seedNext = Math.min(MAX_SCALE, Math.max(MIN_SCALE, seedRaw));
                       const seedCheck = seedNext / Math.max(seedOld, 0.01);
                       if (Number.isFinite(seedCheck) && seedCheck <= 1.5 && seedCheck >= 1 / 1.5) {
-                        s.scale = seedNext;
-                        s.tx += seedLocal.x * (seedOld - seedNext);
-                        s.ty += seedLocal.y * (seedOld - seedNext);
+                        if (seedNext !== seedOld) {
+                          s.scale = seedNext;
+                          s.tx += seedLocal.x * (seedOld - seedNext);
+                          s.ty += seedLocal.y * (seedOld - seedNext);
+                          // Same target lockstep as the steady path (see below).
+                          try {
+                            targetScale.current = seedNext;
+                          } catch {
+                            /* non-fatal */
+                          }
+                        }
                         s.baseScale = s.scale;
-                        if (Math.abs(seedNext - 1) > 0.02) {
+                        if (seedFocal) {
+                          s.prevCentroidX = seedFocal.x;
+                          s.prevCentroidY = seedFocal.y;
+                          s.hasPrevCentroid = true;
+                        }
+                        if (Math.abs(seedNext - 1) > 0.02 && seedNext !== seedOld) {
                           try {
                             dismissHint();
                           } catch {
@@ -951,11 +1097,21 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                 s.lastDy = Number.isFinite(gesture.dy) ? gesture.dy : 0;
                 return;
               }
-              // Continuous baseline: each frame measures from the previous
-              // frame instead of from the gesture start. Combined with the
-              // per-frame clamp below, one bad/spiky frame can only nudge the
-              // zoom instead of restarting the whole pinch (the flicker).
-              const frameRatio = dist / s.baseDist;
+              // Smoothed-span baseline: page coords arrive quantized to whole px
+              // with 1-2px of independent jitter per finger, so the RAW span
+              // jumps ±3-5px frame-to-frame — that used to read as a zoom-OUT
+              // during a pure two-finger slide. The EMA absorbs the jitter;
+              // the ratio is measured against the last DECISION baseline (hold
+              // frames below deliberately do NOT advance it), so a slow
+              // sustained spread/pinch still accumulates past the dead-zone
+              // while jitter averages to ~zero. One bad/spiky frame can only
+              // nudge the zoom instead of restarting the pinch (the flicker).
+              // Shared-JS filter: identical on dev and preview builds.
+              const prevSmooth = s.smoothDist > 0 ? s.smoothDist : s.baseDist;
+              const smoothDist = prevSmooth + 0.5 * (dist - prevSmooth);
+              if (!Number.isFinite(smoothDist) || smoothDist <= 0) return;
+              s.smoothDist = smoothDist;
+              const frameRatio = smoothDist / s.baseDist;
               if (!Number.isFinite(frameRatio) || frameRatio <= 0) return;
               // Direction check: per-finger movement vectors this frame.
               // Sliding both fingers left/right moves them the SAME way
@@ -965,6 +1121,7 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
               // no matter what the distance number says (distance shrinks
               // spuriously while sliding due to per-finger position noise).
               let isTwoFingerPan = false;
+              let pinchConfident = false;
               let slideDx = 0;
               let slideDy = 0;
               try {
@@ -1006,6 +1163,13 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                         // Cosine of the angle between the two movement vectors.
                         // ~+1 = same direction (slide), ~-1 = opposite (pinch).
                         const cos = (v0.x * v1.x + v0.y * v1.y) / Math.max(m0 * m1, 0.01);
+                        // Confident opposite motion (both fingers clearly moving
+                        // apart/together along the pinch axis) marks a DELIBERATE
+                        // pinch — even a slow one — so it can bypass the zoom
+                        // dead-zone below. Slide jitter never sustains this.
+                        if (minM >= 2 && Number.isFinite(cos) && cos < -0.4) {
+                          pinchConfident = true;
+                        }
                         if (Number.isFinite(cos) && cos > -0.25) {
                           isTwoFingerPan = true;
                           const focalSlide = pinchCentroid(framePts);
@@ -1024,8 +1188,14 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                 }
               } catch {
                 isTwoFingerPan = false;
+                pinchConfident = false;
               }
-              if (isTwoFingerPan) {
+              // Pinch streak: a confident opposite-direction frame extends it,
+              // anything else breaks it. Two confident frames in a row = a real
+              // deliberate pinch, even if slow (bypasses the dead-zone below).
+              s.pinchStreak = pinchConfident ? s.pinchStreak + 1 : 0;
+              const sustainedPinch = pinchConfident && s.pinchStreak >= 2;
+              if (isTwoFingerPan && !sustainedPinch) {
                 // Pure pan: move with the centroid, leave the zoom EXACTLY
                 // alone, and re-sync the pinch baseline to today's distance
                 // so no error can accumulate into a zoom-out.
@@ -1033,6 +1203,10 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                 s.ty += slideDy;
                 s.baseDist = dist;
                 s.baseScale = s.scale;
+                // Slide decision: resync the smoother too, and drop the pinch
+                // streak — a later pinch starts accumulating from here.
+                s.pinchStreak = 0;
+                s.smoothDist = dist;
                 const focalSlide = pinchCentroid(framePts);
                 if (focalSlide) {
                   s.prevCentroidX = focalSlide.x;
@@ -1054,9 +1228,52 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                 apply();
                 return;
               }
+              // Zoom dead-zone on the SMOOTHED span: per-finger quantization +
+              // jitter moves dist by ~±3-5px with no real zoom intent, which
+              // used to read as zoom-OUT mid-slide. Below ~6px of smoothed
+              // movement the frame HOLDs: pan follows the centroid, zoom stays
+              // EXACTLY put, and the baseline is deliberately NOT advanced so
+              // a slow real pinch still accumulates past the zone. A sustained
+              // confident pinch (see streak above) bypasses the zone so slow
+              // deliberate zooms stay responsive.
+              const smoothDeltaPx = Math.abs(smoothDist - s.baseDist);
+              if (!sustainedPinch && smoothDeltaPx < 6) {
+                // Jitter-scale HOLD: follow the centroid (so the slide still
+                // tracks the fingers), leave zoom EXACTLY put, and resync the
+                // smoother to the raw span so a held slide can't drift it.
+                // The decision baseline is NOT advanced: a slow real pinch
+                // keeps accumulating and zooms once it clears the zone.
+                const holdCentroid = pinchCentroid(framePts);
+                if (holdCentroid && s.hasPrevCentroid) {
+                  const hdx = holdCentroid.x - s.prevCentroidX;
+                  const hdy = holdCentroid.y - s.prevCentroidY;
+                  if (Number.isFinite(hdx)) s.tx += hdx;
+                  if (Number.isFinite(hdy)) s.ty += hdy;
+                }
+                if (holdCentroid) {
+                  s.prevCentroidX = holdCentroid.x;
+                  s.prevCentroidY = holdCentroid.y;
+                  s.hasPrevCentroid = true;
+                }
+                s.smoothDist = dist;
+                s.baseScale = s.scale;
+                const holdSnap = new Map<number, { x: number; y: number }>();
+                let holdCount = 0;
+                for (const [id, p] of touches.current) {
+                  if (holdCount >= 2) break;
+                  holdSnap.set(id, { x: p.x, y: p.y });
+                  holdCount += 1;
+                }
+                s.prevPositions = holdSnap;
+                s.lastDx = Number.isFinite(gesture.dx) ? gesture.dx : 0;
+                s.lastDy = Number.isFinite(gesture.dy) ? gesture.dy : 0;
+                clamp();
+                apply();
+                return;
+              }
               const clampedRatio = Math.min(1.15, Math.max(1 / 1.15, frameRatio));
-              const nextScale = s.scale * clampedRatio;
-              if (!Number.isFinite(nextScale)) return;
+              const rawNextScale = s.scale * clampedRatio;
+              if (!Number.isFinite(rawNextScale)) return;
               const focal = pinchCentroid(framePts);
               // Focal is VIEW-relative (location coords minus view center) —
               // matching the transform, which pivots around the VIEW center.
@@ -1082,20 +1299,73 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
               // shifts by L * (oldScale - nextScale).
               const oldScale = s.scale;
               if (!Number.isFinite(oldScale) || oldScale <= 0) return;
+              // Clamp BEFORE computing the focal shift: at MIN/MAX zoom a further
+              // spread/pinch must not translate the photo at all. (Previously the
+              // shift was applied with the unclamped scale and only clamped
+              // afterwards — pan bounds then leaked the leftovers, so repeating
+              // spread at max zoom walked the image left/right.)
+              const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, rawNextScale));
               // Vivo guard: one bad frame (teleported finger from a dropped
               // Funtouch touch batch) must never double/halve the zoom in a
               // single step — that single-frame flash IS the flicker.
               const pinchRatioCheck = nextScale / Math.max(oldScale, 0.01);
               if (!Number.isFinite(pinchRatioCheck) || pinchRatioCheck > 1.5 || pinchRatioCheck < 1 / 1.5) {
                 s.baseDist = dist;
+                s.smoothDist = dist;
                 s.baseScale = s.scale;
+                return;
+              }
+              // At a zoom limit with no room left to move, hold the transform
+              // (but still advance the baselines so the next frame stays in
+              // sync and no error accumulates into a slide).
+              if (nextScale === oldScale) {
+                s.baseDist = dist;
+                s.smoothDist = dist;
+                s.baseScale = s.scale;
+                // Held AT the limit: scale didn't move, but the stale toggle
+                // target might still say otherwise — re-sync it so the next
+                // double-tap reads the truth.
+                try {
+                  targetScale.current = oldScale;
+                } catch {
+                  /* non-fatal */
+                }
+                if (focal) {
+                  s.prevCentroidX = focal.x;
+                  s.prevCentroidY = focal.y;
+                  s.hasPrevCentroid = true;
+                }
+                const held = new Map<number, { x: number; y: number }>();
+                let heldCount = 0;
+                for (const [id, p] of touches.current) {
+                  if (heldCount >= 2) break;
+                  held.set(id, { x: p.x, y: p.y });
+                  heldCount += 1;
+                }
+                s.prevPositions = held;
+                s.lastDx = Number.isFinite(gesture.dx) ? gesture.dx : 0;
+                s.lastDy = Number.isFinite(gesture.dy) ? gesture.dy : 0;
+                clamp();
+                apply();
                 return;
               }
               s.scale = nextScale;
               s.tx += local.x * (oldScale - nextScale);
               s.ty += local.y * (oldScale - nextScale);
+              // Keep the toggle TARGET in lockstep with pinch zoom: the
+              // double-tap direction is read from targetScale, so a pinch
+              // that never publishes leaves a stale target and the next
+              // double-tap zooms the WRONG way (or appears stuck).
+              try {
+                targetScale.current = nextScale;
+              } catch {
+                /* non-fatal */
+              }
               // Advance the baseline so the next frame compounds smoothly.
+              // Baselines include the smoother so the EMA stays anchored to the
+              // last DECISION (slide/hold/zoom) rather than drifting.
               s.baseDist = dist;
+              s.smoothDist = dist;
               s.baseScale = s.scale;
               // Sync the two-finger pan tracking so a following slide frame
               // diffs from THIS centroid, not a stale one.
@@ -1137,18 +1407,79 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
             if (s.pinching) {
               s.pinching = false;
               s.baseDist = 0;
+              s.smoothDist = 0;
+              s.pinchStreak = 0;
               s.hasPrevCentroid = false;
               s.prevPositions = null;
               s.lastDx = Number.isFinite(gesture.dx) ? gesture.dx : 0;
               s.lastDy = Number.isFinite(gesture.dy) ? gesture.dy : 0;
+              // Next single-finger move re-anchors instead of replaying the
+              // ended two-finger gesture's leftover dx (the sideways slide).
+              s.needsPanReanchor = true;
               clamp();
               apply();
               return;
             }
-            // Single-finger drag pans only while zoomed in.
+            // Single-finger drag pans only while zoomed in. At ~1x a one-finger
+            // move is NOTHING (not a tap — real taps lift without moving): it
+            // clears the tap snapshot AND the stale last-tap window, so a
+            // one-finger drag can never later pair as a phantom double-tap.
+            // This is the "[spread -> start*start -> finger]" case: after a
+            // spread, the finger resting/sliding on the glass must not arm a
+            // tap that the NEXT quick touch completes into a stuck zoom-out.
+            if (s.scale <= 1.02) {
+              if (tapPending.current) tapPending.current = null;
+              s.lastTapAt = 0;
+              s.lastDx = Number.isFinite(gesture.dx) ? gesture.dx : 0;
+              s.lastDy = Number.isFinite(gesture.dy) ? gesture.dy : 0;
+            }
             if (s.scale > 1.02) {
               const dx = Number.isFinite(gesture.dx) ? gesture.dx : 0;
               const dy = Number.isFinite(gesture.dy) ? gesture.dy : 0;
+              // Any real MOVE cancels a pending tap-vs-double-tap snapshot window:
+              // a finger that moved is panning, not tapping — otherwise the
+              // LATER release replays a stale double-tap toggle ("zoomed out by
+              // itself" after slide → lift → quick tap, or stuck-zoom after fast
+              // repeat taps). A touch-count change cancels it too: the second
+              // finger joining/leaving means this was never a clean 1-finger tap.
+              if (tapPending.current) {
+                const pending = tapPending.current;
+                const movedPx = Math.hypot(dx - pending.dx0, dy - pending.dy0);
+                if (
+                  !Number.isFinite(movedPx) ||
+                  movedPx > DOUBLE_TAP_SLOP_PX ||
+                  !Number.isFinite(gesture.numberActiveTouches) ||
+                  gesture.numberActiveTouches !== pending.count
+                ) {
+                  tapPending.current = null;
+                }
+              }
+              // Fresh single-finger contact after a pinch/release: re-anchor the
+              // baseline FIRST so a leftover dx from the ended two-finger gesture
+              // can never replay as a jump/slide. Shared-JS guard, so dev and
+              // preview builds behave the same.
+              if (s.needsPanReanchor) {
+                s.needsPanReanchor = false;
+                s.lastDx = dx;
+                s.lastDy = dy;
+                // Re-anchoring also re-arms the tap snapshot to THIS frame's
+                // baseline: the leftover two-finger dx must not count as tap
+                // movement on the release check below.
+                try {
+                  tapPending.current = {
+                    dx0: dx,
+                    dy0: dy,
+                    count: Number.isFinite(gesture.numberActiveTouches)
+                      ? (gesture.numberActiveTouches as number)
+                      : 1,
+                  };
+                } catch {
+                  tapPending.current = null;
+                }
+                clamp();
+                apply();
+                return;
+              }
               s.tx += dx - s.lastDx;
               s.ty += dy - s.lastDy;
               s.lastDx = dx;
@@ -1166,8 +1497,27 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
             const s = state.current;
             s.pinching = false;
             s.baseDist = 0;
+            s.smoothDist = 0;
+            s.pinchStreak = 0;
             s.hasPrevCentroid = false;
             s.prevPositions = null;
+            // Any finger still down after this release starts fresh: the next
+            // move re-anchors its pan baseline (same sideways-slide guard as
+            // the pinch-end path above).
+            s.needsPanReanchor = true;
+            // Vivo coalesces rapid UP events: changedTouches may list only one
+            // of two lifted fingers (or none), leaving a ghost entry that fails
+            // the size===0 tap check on every later release ("double-tap
+            // permanently stuck"). The responder's own count is authoritative —
+            // zero active touches means every finger is up, so drop the map.
+            try {
+              const active = Number.isFinite(gesture.numberActiveTouches)
+                ? (gesture.numberActiveTouches as number)
+                : -1;
+              if (active === 0) touches.current.clear();
+            } catch {
+              /* keep the map */
+            }
             removeEndedTouches(event);
             // Double-tap zoom fires ONLY here, on a clean release: the finger
             // went down and up quickly, never moved past the slop, and no
@@ -1220,9 +1570,18 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
               !s.movedPastSlop &&
               s.grantTouchCount <= 1 &&
               touches.current.size === 0 &&
+              // Snapshot check: the tap snapshot must have SURVIVED the whole
+              // gesture — i.e. no move frame ever drifted past the slop and
+              // no second finger ever joined/left. This kills the stale replay
+              // where a slide/pinch's release pairs with the NEXT quick tap as
+              // a phantom double-tap ("zoomed out by itself" / stuck zoom).
+              tapPending.current != null &&
               // Final lift-position check: a fast flick's release point is far
               // from its down point even if its move frames were skipped.
               (!Number.isFinite(liftDist) || liftDist <= DOUBLE_TAP_SLOP_PX);
+            // Snapshot is single-use: consume it on every release so a tap can
+            // never pair twice (the fast-repeat-tap stuck bug).
+            tapPending.current = null;
             s.grantAt = 0;
             s.grantTouchCount = 0;
             if (isQuickTap) {
@@ -1233,6 +1592,7 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
               if (
                 s.lastTapAt > 0 &&
                 now - s.lastTapAt < DOUBLE_TAP_DELAY_MS &&
+                now - s.lastTapAt >= 0 &&
                 Number.isFinite(tapDist) &&
                 tapDist < DOUBLE_TAP_SLOP_PX
               ) {
@@ -1240,10 +1600,19 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                 // Direction comes from the animation TARGET (targetScale),
                 // not the interrupted live value: rapid taps alternate
                 // cleanly in -> out -> in instead of parking at a
-                // half-zoomed state (the fast-tap hold bug).
+                // half-zoomed state (the fast-tap hold bug). The target is
+                // stopped + synced FIRST so the new spring starts from the
+                // true on-screen value — otherwise a mid-flight toggle
+                // "sticks" and the next fast tap reads a stale target and
+                // zooms OUT (or nowhere) instead of in.
                 s.lastTapAt = 0;
                 // Re-sync to the true on-screen value first, so the zoom-out
                 // starts from the screen even if the zoom-in is mid-flight.
+                // NOTE: no zoom.stop() here — syncLive() already owns the
+                // handoff (capture-live + bump gestureSeq + stale-drop), and
+                // animateTo() claims its own fresh id. Stopping twice used to
+                // let a release/grant interleave grab the id and drop the
+                // live values mid-flight (the 4th-repeat-tap "stuck").
                 syncLive();
                 clamp();
                 if (targetScale.current > 1.1) {
@@ -1274,9 +1643,20 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                 return;
               }
               // First clean tap of a possible pair — arm the window.
+              // A previous tap can ONLY pair with the tapPending snapshot flow:
+              // arming here uses down-stroke coords validated on release, and
+              // the move-frame + grant-time guards above already killed any
+              // stale snapshot from a pinch/slide — so a spread-then-tap can
+              // never pair as a phantom double-tap ("zoomed out by itself").
               s.lastTapAt = now;
               s.lastTapX = s.grantX;
               s.lastTapY = s.grantY;
+            } else {
+              // Not a tap at all (moved / held / multi-touch / slow release):
+              // the old tap window is dead. Without this a slide's stale
+              // first-tap arms a phantom pair and the NEXT quick tap toggles
+              // zoom out of nowhere (the "sometimes it zoomed out" bug).
+              s.lastTapAt = 0;
             }
             clamp();
             if (s.scale <= 1.02) animateTo(1, 0, 0);
@@ -1295,11 +1675,17 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
             const s = state.current;
             s.pinching = false;
             s.baseDist = 0;
+            s.smoothDist = 0;
+            s.pinchStreak = 0;
             s.hasPrevCentroid = false;
             s.prevPositions = null;
             s.grantAt = 0;
             s.grantTouchCount = 0;
             s.movedPastSlop = false;
+            // Terminated mid-gesture: kill any tap pairing too — the finger
+            // never lifted cleanly, so it must never count as a tap later.
+            s.lastTapAt = 0;
+            s.needsPanReanchor = true;
             touches.current = new Map();
             try { targetScale.current = s.scale; } catch {}
             clamp();
