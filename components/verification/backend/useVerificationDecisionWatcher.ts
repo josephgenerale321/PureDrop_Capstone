@@ -6,7 +6,12 @@ import { type Href, useRouter } from "expo-router";
 import { auth, db } from "../../../firebaseConfig";
 
 // Verified users' destination — when the admin approves a "pending" account
-// while the user sits anywhere in the verification flow, take them Home.
+// while the user sits anywhere in the verification flow, the "Account
+// Verified" alert takes them straight Home. The alert IS this session's
+// celebration, so the one-time fullyverif marker is consumed here — the next
+// login goes directly Home instead of resurrecting fullyverif.tsx for an
+// approval the user already acknowledged. (fullyverif.tsx still shows once
+// for approvals that happened while the user was AWAY, via the login gate.)
 const HOME_ROUTE = "/regular_user/home" as Href;
 // Rejection notice screen — the admin can reject this account's verification
 // while the user sits anywhere in the flow; the live subscription detects it
@@ -43,8 +48,11 @@ let handledRejectionKey: string | null = null;
  * verification screen (hub, face selfie, Valid ID, camera, review):
  *
  *   - Approved ("pending" → "verified"): shows the "Account Verified" alert
- *     and takes the user Home (dismissAll + replace, so no stale flow screen
- *     survives underneath).
+ *     and takes the user straight Home (dismissAll + replace, so no stale
+ *     flow screen survives underneath). The one-time fullyverif marker is
+ *     consumed at the same time, so the next login also goes directly Home
+ *     instead of replaying the celebration for an already-acknowledged
+ *     approval.
  *   - Rejected ("rejected" with an unacknowledged rejection count): redirects
  *     to the rejection notice screen (same gate as the login flow — the
  *     notice only fires for a rejection the user has NOT acknowledged yet).
@@ -86,11 +94,15 @@ export default function useVerificationDecisionWatcher() {
 
           // ---- Realtime APPROVAL redirect ---------------------------------
           // The moment the admin approves this account ("pending" →
-          // "verified") while the user sits on any verification screen, take
-          // them into the app. The updatedAt fingerprint keeps snapshot
-          // re-emissions (and the duplicate listeners on stacked screens)
-          // from firing twice, while still allowing a future reject →
-          // re-approve cycle to alert again.
+          // "verified") while the user sits on any verification screen, the
+          // "Account Verified" alert takes them STRAIGHT Home — no
+          // fullyverif stop in between (the alert is this session's
+          // celebration). The one-time fullyverif marker is CONSUMED here so
+          // the next login also goes directly Home instead of replaying the
+          // celebration for an approval the user already acknowledged. The
+          // updatedAt fingerprint keeps snapshot re-emissions (and the
+          // duplicate listeners on stacked screens) from firing twice, while
+          // still allowing a future reject → re-approve cycle to alert again.
           if (status === "verified") {
             const updatedAt = data.updatedAt as
               | { toMillis?: () => number }
@@ -110,12 +122,36 @@ export default function useVerificationDecisionWatcher() {
                   {
                     text: "OK",
                     onPress: () => {
+                      // The user acknowledged THIS approval in-session — burn
+                      // the one-time fullyverif ticket now (best-effort, never
+                      // blocks navigation) so the next login skips it.
+                      void (async () => {
+                        try {
+                          const { markFullyVerifiedNoticeSeen } = await import(
+                            "../../login/backend/postEmailVerificationGate"
+                          );
+                          await markFullyVerifiedNoticeSeen(uid);
+                        } catch {
+                          // Non-fatal — worst case the login gate shows
+                          // fullyverif once; never crash or trap.
+                        }
+                      })();
                       try {
                         // Dismiss any flow screens (camera/review) pushed
                         // above the hub first, so the user is actually taken
                         // Home instead of being left on a stale camera/review
                         // screen with Home only underneath it in the stack.
-                        router.dismissAll();
+                        // Guarded: dismissAll() on a stack with nothing to
+                        // dismiss emits POP_TO_TOP (dev-only warning) — and
+                        // replace() alone already guarantees the landing, so
+                        // the dismiss is best-effort only.
+                        try {
+                          if (router.canDismiss && router.canDismiss()) {
+                            router.dismissAll();
+                          }
+                        } catch {
+                          // Dismiss unsupported here — replace() below still lands Home.
+                        }
                         router.replace(HOME_ROUTE);
                       } catch {
                         // Navigation must never crash the app.
@@ -163,8 +199,17 @@ export default function useVerificationDecisionWatcher() {
               try {
                 // Same dismiss-first rule as the approval redirect: flow
                 // screens (camera/review) pushed above the hub must not
-                // survive the redirect into the rejection notice.
-                router.dismissAll();
+                // survive the redirect into the rejection notice. Guarded:
+                // dismissAll() with nothing to dismiss emits POP_TO_TOP
+                // (dev-only warning) — replace() alone already guarantees
+                // the landing, so the dismiss is best-effort only.
+                try {
+                  if (router.canDismiss && router.canDismiss()) {
+                    router.dismissAll();
+                  }
+                } catch {
+                  // Dismiss unsupported here — replace() below still lands.
+                }
                 router.replace(REJECTED_NOTICE_ROUTE);
               } catch {
                 // Navigation must never crash the app — the user can still

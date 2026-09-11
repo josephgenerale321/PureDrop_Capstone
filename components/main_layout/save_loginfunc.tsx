@@ -29,9 +29,10 @@ type SavedLoginState = {
  *   confirmed, so an auth event fires while the user is still here; without
  *   this exclusion the auto-redirect would hijack them to Home and they
  *   would never see the success screen / "Verify Identity" step.
- * - `/login/validation` — the rejection notice screen (rejectedverif). The
- *   user must acknowledge it and tap "Re-verify ID" themselves; an
- *   auto-redirect firing while it is open would bypass the notice.
+ * - `/login/validation` — the rejection notice screen (rejectedverif), the
+ *   legacy notice (legacyverif), and the one-time fully-verified celebration
+ *   (fullyverif). The user must acknowledge each of them themselves; an
+ *   auto-redirect firing while one is open would bypass the notice.
  * - `/verification` — the identity verification flow itself (face selfie +
  *   Valid ID). An unverified user belongs here, not on Home.
  */
@@ -174,6 +175,8 @@ export default function SaveLoginSync() {
               const target = await resolvePostLoginTarget();
               if (target === "rejected_notice") {
                 router.replace("/login/validation/rejectedverif" as Href);
+              } else if (target === "fully_verified_notice") {
+                router.replace("/login/validation/fullyverif" as Href);
               } else if (target === "home") {
                 router.replace("/regular_user/home");
               }
@@ -197,12 +200,15 @@ export default function SaveLoginSync() {
           try {
             // Post-login gate — routes a rejected verification to the
             // rejection notice, a pending/unverified user to the verification
-            // flow, and a verified account to Home.
+            // flow, a newly-approved account to the one-time fully-verified
+            // celebration, and a verified account to Home.
             const loginTarget = await resolvePostLoginTarget();
             if (loginTarget === "rejected_notice") {
               target = "/login/validation/rejectedverif" as Href;
             } else if (loginTarget === "legacy_notice") {
               target = "/login/validation/legacyverif" as Href;
+            } else if (loginTarget === "fully_verified_notice") {
+              target = "/login/validation/fullyverif" as Href;
             } else if (loginTarget === "verification") {
               target = "/verification/verificationmain" as Href;
             }

@@ -125,8 +125,12 @@ export async function resolveIdentityVerificationTarget(): Promise<IdentityVerif
  * - "legacy_notice"   — a legacy account the admin marked "verified" without
  *                       real submissions: show the success-style notice that
  *                       the face scan and Valid ID are still owed.
+ * - "fully_verified_notice" — the admin has VERIFIED the account AND both
+ *                       steps are genuinely submitted AND the account has not
+ *                       celebrated yet: show fullyverif.tsx ONCE, then Home.
  * - "home"            — the admin has VERIFIED the account AND both steps are
- *                       genuinely submitted, or the state could not be read
+ *                       genuinely submitted AND the one-time notice was already
+ *                       celebrated, or the state could not be read
  *                       (non-fatal fallback — never trap the user on a gate
  *                       screen).
  *
@@ -147,6 +151,7 @@ export async function resolveIdentityVerificationTarget(): Promise<IdentityVerif
 export type PostLoginTarget =
   | "rejected_notice"
   | "legacy_notice"
+  | "fully_verified_notice"
   | "verification"
   | "home";
 
@@ -222,6 +227,86 @@ const asSeenCount = (value: unknown): number => {
   return Number.isFinite(parsed) ? Math.floor(parsed) : -1;
 };
 
+// ---------------------------------------------------------------------------
+// "Fully verified" one-time notice (app/login/validation/fullyverif.tsx)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-account marker for the one-time "fully verified" celebration screen.
+ * Shown ONCE per account: when the admin has approved the account, the NEXT
+ * explicit login (and the next silent session auto-redirect) lands on
+ * fullyverif.tsx first, then the marker is consumed and every later login
+ * goes straight to Home. Stored per-uid so a different account on the same
+ * device still gets its own one-time celebration.
+ *
+ * Firestore `fullyVerifiedNoticeSeenAt` is authoritative (survives reinstall /
+ * device change); the AsyncStorage uid marker is a fast offline mirror so an
+ * offline login still shows the notice exactly once. Both are best-effort —
+ * a storage failure only ever costs one extra (or one skipped) celebration,
+ * never a crash or a trap.
+ */
+const FULLY_VERIFIED_LATER_KEY = "@puredrop/fully_verified_notice_seen";
+
+const fullyVerifiedSeenKey = (uid: string): string => `${FULLY_VERIFIED_LATER_KEY}:${uid}`;
+
+/** True when this account already celebrated its fully-verified notice. */
+export async function hasSeenFullyVerifiedNotice(uid?: string | null): Promise<boolean> {
+  const resolvedUid = uid ?? auth.currentUser?.uid ?? null;
+  if (!resolvedUid) {
+    return false;
+  }
+  try {
+    const seen = await AsyncStorage.getItem(fullyVerifiedSeenKey(resolvedUid));
+    if (seen === "true") {
+      return true;
+    }
+  } catch {
+    // Storage read failure — fall through to the Firestore check.
+  }
+  try {
+    const userSnap = await getDoc(doc(db, "regular_user", resolvedUid));
+    if (userSnap.exists() && userSnap.data().fullyVerifiedNoticeSeenAt != null) {
+      try {
+        await AsyncStorage.setItem(fullyVerifiedSeenKey(resolvedUid), "true");
+      } catch {
+        // Mirror write is best-effort.
+      }
+      return true;
+    }
+  } catch {
+    // Firestore hiccup — treat as unseen so the notice still shows once the
+    // user can reach it; the consume step retries the write later.
+  }
+  return false;
+}
+
+/**
+ * Consumes the one-time notice for this account: marks it seen locally AND on
+ * the user's `regular_user` document (both best-effort). Called when
+ * fullyverif.tsx is acknowledged (button press) AND on mount as a safety net
+ * so backing out via hardware back can never resurrect it on the next login.
+ */
+export async function markFullyVerifiedNoticeSeen(uid?: string | null): Promise<void> {
+  const resolvedUid = uid ?? auth.currentUser?.uid ?? null;
+  if (!resolvedUid) {
+    return;
+  }
+  try {
+    await AsyncStorage.setItem(fullyVerifiedSeenKey(resolvedUid), "true");
+  } catch {
+    // Non-fatal.
+  }
+  try {
+    await updateDoc(doc(db, "regular_user", resolvedUid), {
+      fullyVerifiedNoticeSeenAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-fatal — the local mirror still suppresses repeats on this device;
+    // the Firestore write is retried on the next acknowledgement.
+  }
+}
+
 export async function resolvePostLoginTarget(): Promise<PostLoginTarget> {
   const user = auth.currentUser;
   if (!user?.uid) {
@@ -262,6 +347,16 @@ export async function resolvePostLoginTarget(): Promise<PostLoginTarget> {
           // Genuinely verified — the account may enter the app. Any earlier
           // "later" choice is moot; drop it.
           await clearVerificationLater();
+          // One-time celebration: the FIRST login after the admin's approval
+          // lands on fullyverif.tsx; every later login goes straight Home.
+          try {
+            const celebrated = await hasSeenFullyVerifiedNotice(user.uid);
+            if (!celebrated) {
+              return "fully_verified_notice";
+            }
+          } catch {
+            // Gate check failure is non-fatal — fall through to Home.
+          }
           return "home";
         }
         return "legacy_notice";
