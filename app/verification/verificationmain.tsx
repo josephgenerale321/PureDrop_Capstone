@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  Alert,
   BackHandler,
   Platform,
   StyleSheet,
@@ -8,11 +9,11 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { type Href, useRouter, useFocusEffect } from "expo-router";
+import { type Href, useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
-import { markVerificationLater } from "../../components/login/backend/postEmailVerificationGate";
+import { getVerificationLaterOutcome } from "../../components/login/backend/postEmailVerificationGate";
 import useNavigateOnce from "../../components/verification/backend/useNavigateOnce";
 import useVerificationDecisionWatcher from "../../components/verification/backend/useVerificationDecisionWatcher";
 import { auth, db } from "../../firebaseConfig";
@@ -193,22 +194,58 @@ export default function VerificationMainScreen() {
   };
 
   // [ GO BACK ] — leave for the start screen ("continue verification later").
-  const handleConfirmBack = () => {
+  // Records the "later" choice — PERSISTED across app restarts: the auto-
+  // redirect sync (SaveLoginSync) then leaves the user on index/start/
+  // login/register instead of bouncing them back into this screen, whether
+  // both steps are submitted or not. The marker is cleared once the admin
+  // verifies the account (or re-recorded if they back out again).
+  //
+  // AWAITED (never fire-and-forget): SaveLoginSync + the realtime decision
+  // watcher re-run the moment the route changes, so navigating before this
+  // write lands made them read a stale "no later choice" and bounce
+  // straight back into this hub — the "Later goes back to verificationmain"
+  // loop.
+  //
+  // Rejected accounts can NEVER use this marker: getVerificationLaterOutcome()
+  // refuses to write while the account's live verificationStatus is "rejected",
+  // and reports whether the account was EVER previously verified (via the
+  // verifiedAt timestamp the admin panel writes on every approval) so the
+  // right wording is shown:
+  //   - first-time rejection (no verifiedAt): "Your verification was rejected.
+  //     Please resubmit your ID to continue." — the user has never been
+  //     verified, so "resubmit" is more accurate than "re-verify".
+  //   - was-verified-then-rejected (verifiedAt exists): "Re-verification
+  //     required — your account was approved before but has been rejected.
+  //     Finish re-verifying to continue." — the user HAD verified, so
+  //     "re-verification" is the accurate framing.
+  //   - error (doc read / storage failed): same as rejected — keep the user
+  //     in the verification flow, the safe default.
+  //
+  // SINGLE replace() (never dismissAll()+replace back-to-back): the two
+  // calls race — dismissAll() unmounts this screen mid-flight, so the
+  // replace() never runs and the hub stays put ("Later goes back to
+  // verificationmain"). replace() alone swaps this hub for /start in place,
+  // keeping index underneath — so the NEXT back press from /start exits to
+  // the welcome screen instead of popping back into the hub.
+  const handleConfirmBack = async () => {
     setIsBackConfirmOpen(false);
-    // Record the "later" choice — PERSISTED across app restarts: the auto-
-    // redirect sync (SaveLoginSync) then leaves the user on index/start/
-    // login/register instead of bouncing them back into this screen, whether
-    // both steps are submitted or not. The marker is cleared once the admin
-    // verifies the account (or re-recorded if they back out again).
-    // Fire-and-forget — a failed write only costs one extra redirect.
-    void markVerificationLater();
-    // dismissTo() pops back to /start when it is already in the stack at any
-    // depth (even past intermediate screens such as /login) — and when it is
-    // NOT in the stack (deep link / app-restart redirect), it REPLACES this
-    // screen instead of pushing a new /start on top, so the verification hub
-    // can never be left underneath for the hardware back to bounce back into.
+
+    const outcome = await getVerificationLaterOutcome();
+    if (outcome.kind !== "allowed") {
+      // Rejected (or error — treat as rejected, the safe default).
+      const wasPreviouslyVerified = outcome.kind === "rejected" && outcome.wasPreviouslyVerified;
+      Alert.alert(
+        "Re-verification required",
+        wasPreviouslyVerified
+          ? "Your account was approved before but has been rejected. Finish re-verifying before leaving this screen."
+          : "Your verification was rejected. Please resubmit your ID to continue.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
     try {
-      router.dismissTo(START_ROUTE);
+      router.replace(START_ROUTE);
     } catch {
       // Navigation must never crash the app.
     }
@@ -389,14 +426,18 @@ export default function VerificationMainScreen() {
 
       {/* Back confirmation lightbox — verification-aware: leaving is safe,
           progress is saved and can be continued later (same pattern as the
-          other verification modals). */}
+          other verification modals). When the account is currently rejected,
+          the message explains WHY leaving is blocked (the admin rejected the
+          submission) instead of promising a resume — a rejected account's
+          only way forward is to resubmit. */}
       {isBackConfirmOpen && (
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmCard}>
             <Text style={styles.confirmTitle}>Cancel Verification?</Text>
             <Text style={styles.confirmMessage}>
-              Your Face Recognition and Valid ID progress will be saved. You can come back
-              and continue your verification anytime. Go back to the start screen?
+              {verificationStatus === "rejected"
+                ? "Your verification was rejected by the admin. You need to resubmit before leaving this screen."
+                : "Your Face Recognition and Valid ID progress will be saved. You can come back and continue your verification anytime. Go back to the start screen?"}
             </Text>
 
             <View style={styles.confirmActions}>

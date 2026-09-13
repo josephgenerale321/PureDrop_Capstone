@@ -158,6 +158,17 @@ export type PostLoginTarget =
 const REJECTED_STATUS = "rejected";
 const VERIFIED_STATUS = "verified";
 
+/** Toggle with `__DEV__` logging for slow-restore diagnostics on Vivo. */
+const GATE_DEBUG = __DEV__;
+
+/** Timestamped diagnostic line used to find the slow span on cold start. */
+const gateLog = (label: string, t0: number): void => {
+  if (GATE_DEBUG) {
+    // eslint-disable-next-line no-console
+    console.log(`[gate] ${label} +${Date.now() - t0}ms`);
+  }
+};
+
 // ---------------------------------------------------------------------------
 // "Continue later" marker (Cancel Verification → GO BACK on verificationmain)
 // ---------------------------------------------------------------------------
@@ -173,18 +184,100 @@ const VERIFIED_STATUS = "verified";
  * are the enforcement point that still routes an unverified / pending user
  * into verificationmain. The stored value is the uid of the account that made
  * the choice, so a different account on the same device never inherits it.
+ *
+ * A REJECTED account can never use this marker: `markVerificationLater()`
+ * refuses to write while the account's live verificationStatus is
+ * "rejected", so "Later" can never stash a flag that parks a rejected user
+ * on the pre-login screens (and bouncing between hub <-> notice).
  */
 const VERIFICATION_LATER_KEY = "@puredrop/verification_later";
 
 /** Records the "continue verification later" choice for the signed-in account. */
-export async function markVerificationLater(): Promise<void> {
+export async function markVerificationLater(): Promise<boolean> {
+  const outcome = await getVerificationLaterOutcome();
+  return outcome.kind === "allowed";
+}
+
+/**
+ * Discriminant result of attempting to record the "continue verification
+ * later" choice. Callers use `kind` to pick the right messaging / behavior.
+ *
+ * - `allowed`            — the account is NOT rejected; the marker was written.
+ * - `rejected`           — the account's live `verificationStatus` is "rejected";
+ *                          no marker is written. `wasPreviouslyVerified` is true
+ *                          when the account has a `verifiedAt` timestamp (i.e. the
+ *                          admin approved it at least once before re-rejecting it),
+ *                          so callers can say "Re-verification required" vs "Your
+ *                          verification was rejected" without tracking a separate
+ *                          boolean field.
+ * - `error`              — the doc read or the AsyncStorage write failed; the
+ *                          marker was NOT written and the account was NOT confirmed
+ *                          as rejected. The safe default for callers is to keep the
+ *                          user in the verification flow (the realtime watcher still
+ *                          enforces any rejection once Firestore is reachable).
+ */
+export type VerificationLaterOutcome =
+  | { kind: "allowed"; uid: string }
+  | { kind: "rejected"; wasPreviouslyVerified: boolean }
+  | { kind: "error" };
+
+/**
+ * Rejected accounts must finish re-verification now — never stash a "later"
+ * flag for them. Parking a rejected user on index/start/login is exactly what
+ * produced the "Later backs to verificationmain, back redirects to index"
+ * ping-pong: every gate (SaveLoginSync, Home's fail-closed check, the realtime
+ * watcher) yanks the rejected account right back into the verification flow.
+ *
+ * The function also reports whether the account was EVER previously verified
+ * (via the `verifiedAt` timestamp the admin panel writes on every approval —
+ * see PureDrop_Admin/.../verificationService.js:273-274) so callers can
+ * distinguish a first-time rejection from a re-rejection of a previously-
+ * approved account and use the matching wording.
+ */
+export async function getVerificationLaterOutcome(): Promise<VerificationLaterOutcome> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) {
+    return { kind: "error" };
+  }
+
+  // --- read the live doc once (status + was-previously-verified signal) ---
+  let isRejected = false;
+  let wasPreviouslyVerified = false;
   try {
-    const uid = auth.currentUser?.uid;
-    if (uid) {
-      await AsyncStorage.setItem(VERIFICATION_LATER_KEY, uid);
+    const userSnap = await getDoc(doc(db, "regular_user", uid));
+    if (userSnap.exists()) {
+      const data = userSnap.data();
+      if (data.verificationStatus === REJECTED_STATUS) {
+        isRejected = true;
+      }
+      // The admin panel writes `verifiedAt` on every approval. Its presence
+      // means the account has been verified at least once before (whether the
+      // current status is "verified", "pending" re-approval, or "rejected"
+      // again). Absent field = never approved.
+      wasPreviouslyVerified =
+        data.verifiedAt != null &&
+        (typeof data.verifiedAt === "object" ||
+          typeof data.verifiedAt === "number");
     }
   } catch {
+    // Doc read failed — cannot confirm the account is NOT rejected, so do NOT
+    // record a "later" choice. The realtime watcher still enforces any
+    // rejection once Firestore is reachable; the safe default is to keep the
+    // user in the verification flow.
+    return { kind: "error" };
+  }
+
+  if (isRejected) {
+    return { kind: "rejected", wasPreviouslyVerified };
+  }
+
+  // --- write the persisted "later" marker (only for non-rejected accounts) ---
+  try {
+    await AsyncStorage.setItem(VERIFICATION_LATER_KEY, uid);
+    return { kind: "allowed", uid };
+  } catch {
     // Storage errors are non-fatal — the worst case is one extra redirect.
+    return { kind: "error" };
   }
 }
 
@@ -307,16 +400,41 @@ export async function markFullyVerifiedNoticeSeen(uid?: string | null): Promise<
   }
 }
 
-export async function resolvePostLoginTarget(): Promise<PostLoginTarget> {
+/**
+ * Optional preloaded user document (already fetched by the caller).
+ * Passing it avoids a duplicate Firestore `getDoc` — the gate reuses the same
+ * snapshot for status + submission markers + rejection counters.
+ */
+export type PreloadedUserDoc = {
+  uid: string;
+  data: Record<string, unknown> | null;
+} | null;
+
+export async function resolvePostLoginTarget(
+  preloaded: PreloadedUserDoc = null
+): Promise<PostLoginTarget> {
+  const t0 = Date.now();
   const user = auth.currentUser;
   if (!user?.uid) {
     return "home";
   }
 
   try {
-    const userSnap = await getDoc(doc(db, "regular_user", user.uid));
-    if (userSnap.exists()) {
-      const data = userSnap.data();
+    // ONE read total: reuse the caller's snapshot when available (SaveLoginSync
+    // profile sync already fetched it), otherwise a single `getDoc` here.
+    let data: Record<string, unknown> | null = null;
+    if (preloaded && preloaded.uid === user.uid) {
+      data = preloaded.data;
+      gateLog("gate: reused preloaded profile (0 reads)", t0);
+    } else {
+      gateLog("gate: getDoc start", t0);
+      const userSnap = await getDoc(doc(db, "regular_user", user.uid));
+      gateLog("gate: getDoc done", t0);
+      data = userSnap.exists()
+        ? (userSnap.data() as Record<string, unknown>)
+        : null;
+    }
+    if (data) {
 
       // Rejected accounts: show the rejection notice once per rejection,
       // then send the user straight into re-verification on later logins.
@@ -349,16 +467,27 @@ export async function resolvePostLoginTarget(): Promise<PostLoginTarget> {
           await clearVerificationLater();
           // One-time celebration: the FIRST login after the admin's approval
           // lands on fullyverif.tsx; every later login goes straight Home.
+          // FAST PATH: the preloaded doc already carries
+          // `fullyVerifiedNoticeSeenAt`, so reuse it instead of a 2nd getDoc.
+          // Only when the field is missing do we fall back to the full
+          // `hasSeenFullyVerifiedNotice()` check (AsyncStorage + Firestore).
+          gateLog("gate: verified+docs, checking celebration", t0);
           try {
-            const celebrated = await hasSeenFullyVerifiedNotice(user.uid);
-            if (!celebrated) {
-              return "fully_verified_notice";
+            const celebratedFromDoc = data.fullyVerifiedNoticeSeenAt != null;
+            if (!celebratedFromDoc) {
+              const celebrated = await hasSeenFullyVerifiedNotice(user.uid);
+              if (!celebrated) {
+                gateLog("gate: -> fully_verified_notice", t0);
+                return "fully_verified_notice";
+              }
             }
           } catch {
             // Gate check failure is non-fatal — fall through to Home.
           }
+          gateLog("gate: -> home", t0);
           return "home";
         }
+        gateLog("gate: -> legacy_notice", t0);
         return "legacy_notice";
       }
 
@@ -370,13 +499,16 @@ export async function resolvePostLoginTarget(): Promise<PostLoginTarget> {
       // redirect for an account that chose "later", while an explicit login
       // (app/login/index.tsx) always runs this gate so verification stays
       // enforced.
+      gateLog("gate: -> verification", t0);
       return "verification";
     }
   } catch {
     // Non-fatal — a Firestore hiccup must never trap the user; they can
     // always proceed and re-verify later.
+    gateLog("gate: error, fallback home", t0);
   }
 
+  gateLog("gate: -> home (fallback)", t0);
   return "home";
 }
 

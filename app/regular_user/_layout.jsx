@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
 import HomeMainLoading from "../../components/loading/homepage/homemain_loading";
@@ -15,6 +15,7 @@ import { auth, db } from "../../firebaseConfig";
 import RegularUserPresenceSync from "./status/RegularUserPresenceSync";
 import {
   clearSavedLogin,
+  clearSessionReady,
   getSavedLogin,
 } from "../../components/main_layout/save_loginfunc";
 import {
@@ -31,10 +32,10 @@ import {
 // NOTE ON TUNING: if this is set LOWER than the actual token-refresh time on
 // the slowest supported network, the app will bounce to /login before the
 // session restores, then get redirected back once it does — that is the exact
-// "flip-flop" this grace window exists to prevent. 6s matches the 6s loading
+// "flip-flop" this grace window exists to prevent. 25s matches the 25s loading
 // overlay timeout in `components/loading/restore_session/loading_session.tsx`
-// for coherent behavior.
-const AUTH_RESTORE_GRACE_MS = 6000;
+// for coherent behavior (Vivo-class devices measured at 10–20s on cold start).
+const AUTH_RESTORE_GRACE_MS = 25000;
 
 export default function RegularUserLayout() {
   return (
@@ -48,6 +49,11 @@ function RegularUserTabs() {
   const router = useRouter();
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  // Fail-closed gate: Home tabs render ONLY after the verification-status
+  // check below resolves to "allowed". A rejected account must never see
+  // Home — not even for one frame — so this stays false until proven.
+  const [accessChecked, setAccessChecked] = useState(false);
+  const [accessAllowed, setAccessAllowed] = useState(false);
   const [profileImageUrl, setProfileImageUrl] = useState(null);
   const redirectingRef = useRef(false);
   // True while this open still holds a saved-login marker. During the short
@@ -63,6 +69,7 @@ function RegularUserTabs() {
 
   useEffect(() => {
     let unsubscribeProfile = null;
+    let unsubscribeAccess = null;
     let isMounted = true;
 
     const clearGraceTimer = () => {
@@ -77,6 +84,115 @@ function RegularUserTabs() {
         redirectingRef.current = true;
         router.replace("/login");
       }
+    };
+
+    // Sends the user to the right non-Home destination for a rejected
+    // account. Session is KEPT (no sign-out): rejectedverif + the
+    // verification flow need the live uid to load the record and resubmit.
+    // Unseen rejection count  -> rejection notice (once per rejection).
+    // Already acknowledged    -> straight back into re-verification.
+    const redirectForRejected = (data) => {
+      if (redirectingRef.current) {
+        return;
+      }
+      redirectingRef.current = true;
+      const asCount = (v) =>
+        typeof v === "number" && Number.isFinite(v)
+          ? Math.max(0, Math.floor(v))
+          : 0;
+      let target = "/verification/verificationmain";
+      try {
+        const current = asCount(data?.verificationRejectionCount);
+        const seenRaw = data?.rejectedNoticeSeenCount;
+        const seen =
+          seenRaw === null || seenRaw === undefined ? -1 : asCount(seenRaw);
+        if (seen !== current) {
+          target = "/login/validation/rejectedverif";
+        }
+      } catch {
+        target = "/verification/verificationmain";
+      }
+      // Belt-and-suspenders: this device must not fast-path to Home again.
+      void clearSessionReady().catch(() => {});
+      try {
+        router.replace(target);
+      } catch {
+        // Navigation must never crash the app.
+      }
+    };
+
+    // Fail-closed verification gate for the whole `/regular_user` area.
+    // Runs once a live session exists: a single `getDoc` decides whether
+    // this account may see Home. Rejected  -> bounced out immediately
+    // (session kept). Missing record / read error -> allowed (fail-open,
+    // preserves the old offline behaviour — never trap a valid user).
+    // `watchRejections` also arms a live listener so a mid-session admin
+    // rejection kicks the user out without waiting for a reopen.
+    const runAccessCheck = (uid, { watchRejections = false } = {}) => {
+      void (async () => {
+        if (!isMounted) {
+          return;
+        }
+        try {
+          const snap = await getDoc(doc(db, "regular_user", uid));
+          if (!isMounted) {
+            return;
+          }
+          if (snap.exists()) {
+            const data = snap.data() || {};
+            if (data.verificationStatus === "rejected") {
+              setAccessAllowed(false);
+              setAccessChecked(true);
+              setAuthChecked(true);
+              redirectForRejected(data);
+              return;
+            }
+          }
+          // Verified / pending / missing record — Home stays reachable.
+          setAccessAllowed(true);
+          setAccessChecked(true);
+        } catch {
+          // Read error (offline etc.) — fail OPEN, not closed: keep the old
+          // behaviour so a valid user is never trapped on a loader.
+          // NOTE: a rejected user on a fully-offline device can therefore
+          // still see cached Home until the network returns. That is an
+          // accepted tradeoff (Firestore has no signed offline ACL); the
+          // online check above is what enforces the rule.
+          if (isMounted) {
+            setAccessAllowed(true);
+            setAccessChecked(true);
+          }
+        }
+
+        if (watchRejections && isMounted) {
+          try {
+            if (unsubscribeAccess) {
+              unsubscribeAccess();
+            }
+            unsubscribeAccess = onSnapshot(
+              doc(db, "regular_user", uid),
+              (liveSnap) => {
+                if (!isMounted || !liveSnap.exists()) {
+                  return;
+                }
+                try {
+                  if (liveSnap.data()?.verificationStatus === "rejected") {
+                    setAccessAllowed(false);
+                    redirectForRejected(liveSnap.data() || {});
+                  }
+                } catch {
+                  // Never crash on a live update.
+                }
+              },
+              () => {
+                // Listener error — ignore, the one-shot check already ran.
+              }
+            );
+          } catch {
+            // Non-fatal.
+          }
+        }
+      })();
     };
 
     const handleNoCurrentUser = () => {
@@ -115,16 +231,20 @@ function RegularUserTabs() {
 
       if (!currentUser) {
         setIsAuthenticated(false);
+        setAccessAllowed(false);
+        setAccessChecked(false);
         setProfileImageUrl(null);
         handleNoCurrentUser();
       } else {
         // A session arrived (restored or fresh) — cancel any pending grace
-        // fallback and show the tab UI.
+        // fallback. The tab UI renders ONLY after the access check below
+        // proves this account may see Home (fail-closed for rejected).
         clearGraceTimer();
         hasSavedLoginRef.current = false;
         markerPendingRef.current = false;
         setIsAuthenticated(true);
         redirectingRef.current = false;
+        runAccessCheck(currentUser.uid, { watchRejections: true });
         const userRef = doc(db, "regular_user", currentUser.uid);
         unsubscribeProfile = onSnapshot(
           userRef,
@@ -213,6 +333,14 @@ function RegularUserTabs() {
       if (unsubscribeProfile) {
         unsubscribeProfile();
       }
+      if (unsubscribeAccess) {
+        try {
+          unsubscribeAccess();
+        } catch {
+          // Non-fatal.
+        }
+        unsubscribeAccess = null;
+      }
     };
   }, [router]);
 
@@ -220,7 +348,10 @@ function RegularUserTabs() {
     ? { uri: profileImageUrl }
     : require("../../assets/images/default_account.png");
 
-if (!authChecked || !isAuthenticated) {
+  // Fail-closed: Home tabs render ONLY when auth is live AND the access
+  // check proved this account is not rejected. Until then (or when bounced)
+  // the loader stays up — a rejected account never sees Home, not one frame.
+  if (!authChecked || !isAuthenticated || !accessChecked || !accessAllowed) {
     return <HomeMainLoading />;
   }
 

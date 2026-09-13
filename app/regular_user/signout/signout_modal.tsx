@@ -3,7 +3,10 @@ import { signOut } from "firebase/auth";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { auth } from "../../../firebaseConfig";
-import { clearSavedLogin } from "../../../components/main_layout/save_loginfunc";
+import {
+  clearSavedLogin,
+  noteManualLogout,
+} from "../../../components/main_layout/save_loginfunc";
 import { clearProfileCache } from "../../../components/main_layout/offline_profile_cache";
 import { clearReports } from "../../../components/my_report/offlinefunc";
 import { beginLogout, finishLogout } from "../../../lib/auth/logoutState";
@@ -33,8 +36,10 @@ export default function SignOutModal() {
     }
 
 // Forget the locally saved login marker so the app does NOT auto-login
-    // again on the next launch after an explicit sign-out.
+    // again on the next launch after an explicit sign-out. Suppress the
+    // optimistic fast path too (module flag survives layout remounts).
     try {
+      noteManualLogout();
       await clearSavedLogin();
     } catch {
       // Non-fatal — Firebase sign-out still proceeds.

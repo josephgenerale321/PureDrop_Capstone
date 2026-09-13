@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { type Href, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { BackHandler, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../../../firebaseConfig";
@@ -92,6 +92,23 @@ export default function RejectedVerificationScreen() {
   // Third rejection (and beyond) gets the different, final-warning text.
   const isFinalWarning = rejectionCount >= MAX_REJECTIONS;
 
+  // A rejected account must finish re-verification — it can NEVER go back to
+  // Home (the /regular_user fail-closed gate + this watcher both bounce it
+  // back out) or loiter on the pre-login screens (SaveLoginSync sends it
+  // straight back here). So the hardware back button is consumed while this
+  // notice is up; the ONLY way forward is [Re-verify ID]. BackHandler
+  // returning true consumes the event before expo-router acts on it (this
+  // screen renders no header back button of its own).
+  useEffect(() => {
+    if (Platform.OS !== "android" && Platform.OS !== "ios") {
+      return undefined;
+    }
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => true);
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
   const handleReverify = async () => {
     if (isSubmitting) {
       return;
@@ -102,7 +119,9 @@ export default function RejectedVerificationScreen() {
     // rejection (a new admin rejection shows it again). Non-fatal.
     await markRejectedNoticeSeen(rejectionCount);
 
-    // Into the re-verification flow. Navigation is wrapped so an Expo Router
+    // Into the re-verification flow — SINGLE replace() (never
+    // dismissAll()+replace back-to-back: dismissAll() unmounts this screen
+    // mid-flight, so the replace() never runs). Wrapped so an Expo Router
     // hiccup can never crash the app; the finally block always re-enables
     // the button if the replace did not unmount the screen.
     try {

@@ -17,6 +17,11 @@ import { finishLogout } from "../../lib/auth/logoutState";
 import { getLoginErrorMessage } from "../../lib/login/logerror";
 import { loginUser } from "../../lib/login/loginfunctions";
 import SavedLoginWait from "../../components/loading/restore_session/loading_session";
+import { auth } from "../../firebaseConfig";
+import {
+  clearManualLogoutFlag,
+  markSessionReady,
+} from "../../components/main_layout/save_loginfunc";
 import { resolvePostLoginTarget } from "../../components/login/backend/postEmailVerificationGate";
 
 const FORGOT_PASSWORD_ROUTE = "/login/forgot_password" as Href;
@@ -69,11 +74,27 @@ const handleLogin = async () => {
       await loginUser({ email, password });
 
       setStage("verification");
+      // A fresh manual sign-in clears the manual-logout suppression so the
+      // next cold start may use the optimistic fast path again.
+      clearManualLogoutFlag();
       // An explicit login is the enforcement point for identity verification:
       // an unverified / pending user is routed into the flow even if they
       // previously chose "later" — the persisted later marker only suppresses
       // the SILENT session auto-redirect on the pre-login screens.
       const loginTarget = await resolvePostLoginTarget();
+
+      // Only a fully-resolved Home navigation arms the optimistic fast path
+      // for the next cold start (verified + celebrated already).
+      if (loginTarget === "home") {
+        try {
+          const uid = auth.currentUser?.uid;
+          if (uid) {
+            await markSessionReady(uid);
+          }
+        } catch {
+          // Non-fatal — fast path simply stays unarmed.
+        }
+      }
 
       // Rejected verifications land on the rejection notice screen first
       // (shown once per rejection), then the user must re-verify their ID.

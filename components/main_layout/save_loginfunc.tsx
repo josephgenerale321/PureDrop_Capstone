@@ -9,9 +9,20 @@ import {
   resolvePostLoginTarget,
 } from "../login/backend/postEmailVerificationGate";
 
+/**
+ * Storage keys + helpers for the lightweight "saved login" marker.
+ *
+ * Extra key: `@puredrop/session_ready` — written AFTER a session has fully
+ * resolved once (auth OK + gate OK -> home reachable). On the next cold start
+ * it lets `SaveLoginSync` redirect instantly (optimistic fast path) instead of
+ * waiting 10–20s for Firebase + Firestore on slow devices, while the fresh
+ * Firestore read re-validates in the background.
+ */
 const SAVED_LOGIN_KEY = "@puredrop/saved_login";
 const SAVED_LOGIN_EMAIL_KEY = "@puredrop/saved_login_email";
 const SAVED_LOGIN_NAME_KEY = "@puredrop/saved_login_name";
+const SESSION_READY_KEY = "@puredrop/session_ready";
+const SESSION_READY_UID_KEY = "@puredrop/session_ready_uid";
 
 type SavedLoginState = {
   saved: boolean;
@@ -60,6 +71,96 @@ const isPreLoginRoute = (pathname: string): boolean => {
     pathname.startsWith("/login/")
   );
 };
+
+/**
+ * True when this is a confirmed manual logout (explicit logout flow ran).
+ * In that case the optimistic fast path must NOT fire — the user just logged
+ * out on purpose. Module-level so it survives the root-layout remount that
+ * happens when navigation jumps between route groups.
+ */
+let manualLogoutFlag = false;
+
+/** Called by the explicit logout flow before Firebase signs out. */
+export function noteManualLogout(): void {
+  manualLogoutFlag = true;
+}
+
+/** Clears the manual-logout suppression (next fresh sign-in). */
+export function clearManualLogoutFlag(): void {
+  manualLogoutFlag = false;
+}
+
+/**
+ * Settle-signal for the `SavedLoginWait` overlay (`loading_session.tsx`).
+ *
+ * `true` = the session restore fully settled this app run (gate finished and
+ * any redirect was issued, or the decision was "stay put"). Route changes
+ * unmount the loader anyway, so this flag only matters for the "stay put"
+ * outcomes (`verification` suppressed by "later", expired session, gate
+ * error) where the user REMAINS on the pre-login screen — without the signal
+ * the overlay would sit until the 25s timeout.
+ *
+ * Module-level (with subscribers) so it works even if the root layout
+ * remounts and so late-mounted loaders still see the settled state.
+ */
+let sessionSettledFlag = false;
+const sessionSettledListeners = new Set<() => void>();
+
+/** True when the session restore already settled this app run. */
+export function isSessionSettled(): boolean {
+  return sessionSettledFlag;
+}
+
+/** Marks the session restore as settled and wakes waiting loaders. */
+export function noteSessionSettled(): void {
+  sessionSettledFlag = true;
+  for (const listener of sessionSettledListeners) {
+    try {
+      listener();
+    } catch {
+      // A listener must never crash the setter.
+    }
+  }
+}
+
+/**
+ * Disarms the optimistic fast path (`@puredrop/session_ready`) WITHOUT
+ * touching the saved-login marker or the Firebase session.
+ *
+ * Called whenever a gate resolves to anything OTHER than `home`
+ * (rejected / pending / unverified / legacy / celebration): the account must
+ * re-prove itself next cold start instead of jumping straight to Home.
+ * The session itself is KEPT — rejectedverif / verificationmain need the live
+ * uid to load the record and resubmit. Never `signOut()` here.
+ */
+export async function clearSessionReady(): Promise<void> {
+  try {
+    await AsyncStorage.multiRemove([SESSION_READY_KEY, SESSION_READY_UID_KEY]);
+  } catch {
+    // Non-fatal — worst case is one stale fast-path attempt, which the
+    // background re-validation still corrects.
+  }
+}
+
+/**
+ * Subscribes to the settle signal. Returns an unsubscribe function.
+ * Crash-safe: never throws.
+ */
+export function subscribeSessionSettled(listener: () => void): () => void {
+  try {
+    sessionSettledListeners.add(listener);
+  } catch {
+    // Non-fatal — the loader falls back to its timeout.
+    return () => {};
+  }
+  return () => {
+    try {
+      sessionSettledListeners.delete(listener);
+    } catch {
+      // Non-fatal.
+    }
+  };
+}
 
 /**
  * Persists a lightweight "saved login" marker in AsyncStorage so that
@@ -112,15 +213,53 @@ export async function clearSavedLogin(): Promise<void> {
       SAVED_LOGIN_KEY,
       SAVED_LOGIN_EMAIL_KEY,
       SAVED_LOGIN_NAME_KEY,
+      SESSION_READY_KEY,
+      SESSION_READY_UID_KEY,
     ]);
   } catch {
     // Storage errors are non-fatal — never crash the app.
   }
 }
 
+/**
+ * True when a previous full session resolved to Home at least once
+ * (fast-path marker for instant optimistic restore on cold start).
+ */
+export async function hasReadySession(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(SESSION_READY_KEY)) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export async function getReadySessionUid(): Promise<string | null> {
+  try {
+    const v = await AsyncStorage.getItem(SESSION_READY_UID_KEY);
+    return typeof v === "string" && v.length > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Marks the session as fully resolved (only call when gate => home). */
+export async function markSessionReady(uid: string): Promise<void> {
+  try {
+    await AsyncStorage.multiSet([
+      [SESSION_READY_KEY, "true"],
+      [SESSION_READY_UID_KEY, uid],
+    ]);
+  } catch {
+    // Non-fatal.
+  }
+}
+
 export default function SaveLoginSync() {
   const router = useRouter();
   const pathname = usePathname();
+  // Guards the OPTIMISTIC redirect so it can only ever run once per app run.
+  // (`handledSessionRef` below still guards the verified/settled redirect.)
+  const fastPathDoneRef = useRef(false);
   // Guards the auto-redirect so it can only ever run once per app run.
   const handledSessionRef = useRef(false);
   // True only when the app opened with a previously saved login marker — i.e.
@@ -135,10 +274,224 @@ export default function SaveLoginSync() {
   // Re-entrancy guard, so an auth re-fire while a sync is still awaiting I/O
   // does not start a second overlapping sync (dedupes network reads).
   const syncingRef = useRef(false);
+  // Latest profile snapshot fetched during the auth sync. Reused by the
+  // settled redirect so the gate costs 0 extra Firestore reads.
+  const syncedProfileRef = useRef<{
+    uid: string;
+    data: Record<string, unknown> | null;
+  } | null>(null);
 
   useEffect(() => {
     let isMounted = true;
     let unsubscribe: (() => void) | null = null;
+
+    const navigate = (target: Href) => {
+      try {
+        router.replace(target);
+      } catch {
+        // Navigation must never crash the app.
+      }
+    };
+
+    const targetForGate = (loginTarget: string): Href => {
+      if (loginTarget === "rejected_notice") {
+        return "/login/validation/rejectedverif" as Href;
+      } else if (loginTarget === "legacy_notice") {
+        return "/login/validation/legacyverif" as Href;
+      } else if (loginTarget === "fully_verified_notice") {
+        return "/login/validation/fullyverif" as Href;
+      } else if (loginTarget === "verification") {
+        return "/verification/verificationmain" as Href;
+      }
+      return "/regular_user/home";
+    };
+
+    /**
+     * Resolves with the live Firebase uid, waiting up to `timeoutMs` for the
+     * persisted session to refresh. Resolves `null` on timeout (expired /
+     * revoked session). Poll-based — no extra auth listener needed.
+     */
+    const waitForAuthUid = (timeoutMs: number): Promise<string | null> =>
+      new Promise((resolve) => {
+        const existing = auth.currentUser?.uid ?? null;
+        if (existing) {
+          resolve(existing);
+          return;
+        }
+        const startedAt = Date.now();
+        const timer = setInterval(() => {
+          const uid = auth.currentUser?.uid ?? null;
+          if (uid) {
+            clearInterval(timer);
+            resolve(uid);
+            return;
+          }
+          if (Date.now() - startedAt >= timeoutMs) {
+            clearInterval(timer);
+            resolve(null);
+          }
+        }, 250);
+      });
+
+    /** Background re-validation for the optimistic fast path. */
+    const revalidateAfterFastPath = (uid: string) => {
+      void (async () => {
+        if (!isMounted) {
+          return;
+        }
+        try {
+          // The fast path fires while `auth.currentUser` is still null, and
+          // the gate returns "home" for a null user (fail-open). So WAIT for
+          // the live session first — otherwise this would "confirm" Home
+          // without ever reading Firestore.
+          const liveUid = await waitForAuthUid(25000);
+          if (!isMounted) {
+            return;
+          }
+          if (!liveUid) {
+            // No session actually restored (expired/revoked). Release the
+            // one-shot so the settled path can act if auth arrives late; the
+            // /regular_user grace window will bounce to /login if needed.
+            handledSessionRef.current = true;
+            noteSessionSettled();
+            return;
+          }
+          const freshTarget = await resolvePostLoginTarget();
+          // Fast path already put the user on Home. Correct only when the
+          // fresh read disagrees (e.g. admin rejected since last run).
+          // The session is KEPT (no sign-out): rejectedverif + verification
+          // need the live uid. Home access is revoked by navigating away,
+          // and the fast-path flag is disarmed so the NEXT cold start does
+          // not jump to Home again.
+          if (freshTarget !== "home") {
+            handledSessionRef.current = true;
+            const corrected = targetForGate(freshTarget);
+            navigate(corrected);
+            await recordGateOutcome(corrected, liveUid);
+            noteSessionSettled();
+            return;
+          }
+          handledSessionRef.current = true;
+          await markSessionReady(liveUid);
+          noteSessionSettled();
+        } catch {
+          handledSessionRef.current = true;
+          noteSessionSettled();
+        }
+      })();
+    };
+
+    /**
+     * Records the gate outcome for the fast-path flag: `home` re-arms it,
+     * anything else disarms it so the next cold start re-proves the account
+     * instead of jumping straight to Home. Session + saved-login marker are
+     * NEVER touched here (rejected users keep their uid for re-verify).
+     */
+    const recordGateOutcome = async (
+      target: Href,
+      uid: string | null
+    ): Promise<void> => {
+      try {
+        if (target === "/regular_user/home") {
+          if (uid) {
+            await markSessionReady(uid);
+          }
+        } else {
+          await clearSessionReady();
+        }
+      } catch {
+        // Non-fatal — worst case is one stale fast-path attempt, corrected
+        // by background re-validation.
+      }
+    };
+
+    /**
+     * Settles the one-shot redirect once a profile snapshot is available,
+     * reusing it for the gate (single Firestore read total).
+     */
+    const settleWithProfile = (
+      uid: string,
+      profileData: Record<string, unknown> | null
+    ) => {
+      if (
+        handledSessionRef.current ||
+        !restoreIntentRef.current ||
+        !isPreLoginRoute(pathname)
+      ) {
+        return;
+      }
+      // Claim the one-shot redirect immediately so overlapping auth events
+      // cannot trigger a second navigation while the gate check is awaited.
+      handledSessionRef.current = true;
+
+      void (async () => {
+        try {
+          if (await hasChosenVerificationLater()) {
+            try {
+              const laterTarget = await resolvePostLoginTarget({
+                uid,
+                data: profileData,
+              });
+              if (laterTarget === "rejected_notice") {
+                navigate("/login/validation/rejectedverif" as Href);
+                await recordGateOutcome(
+                  "/login/validation/rejectedverif" as Href,
+                  uid
+                );
+              } else if (laterTarget === "fully_verified_notice") {
+                navigate("/login/validation/fullyverif" as Href);
+                await recordGateOutcome(
+                  "/login/validation/fullyverif" as Href,
+                  uid
+                );
+              } else if (laterTarget === "home") {
+                navigate("/regular_user/home");
+                await markSessionReady(uid);
+              } else {
+                // "verification"/"legacy" → stay put: the user chose "later".
+                // Disarm the fast path: a non-home outcome must re-prove
+                // itself next cold start.
+                await recordGateOutcome(
+                  "/verification/verificationmain" as Href,
+                  uid
+                );
+              }
+              // "verification" → stay put: the user chose "later".
+            } catch {
+              // Stay put — navigation must never crash the app.
+            } finally {
+              // Always settle: on "stay put" the loader is still mounted on
+              // the pre-login screen and must hide now (not at the 25s
+              // timeout). On redirect the unmount hides it anyway.
+              noteSessionSettled();
+            }
+            return;
+          }
+
+          // Post-login gate — rejected => rejection notice, unverified =>
+          // verification flow, newly-approved => one-time celebration, else
+          // Home. Reuses the synced profile snapshot (0 extra reads).
+          let target: Href = "/regular_user/home";
+          try {
+            const loginTarget = await resolvePostLoginTarget({
+              uid,
+              data: profileData,
+            });
+            target = targetForGate(loginTarget);
+          } catch {
+            // Gate check failure is non-fatal — fall through to Home.
+          }
+
+          navigate(target);
+          await recordGateOutcome(target, uid);
+          noteSessionSettled();
+        } catch {
+          // Never crash.
+          noteSessionSettled();
+        }
+      })();
+    };
+
 
     const maybeRedirect = async () => {
       if (
@@ -149,40 +502,108 @@ export default function SaveLoginSync() {
         // A saved-login marker alone is NOT a session. Right after a
         // force-close + reopen, Firebase can take several seconds to refresh
         // the persisted session token, and during that window
-        // `auth.currentUser` is still null. Running the identity-verification
-        // gate now would read "no user" and wrongly send an UNVERIFIED user
-        // straight to Home (the one-shot flag would then swallow the corrected
-        // redirect once the session actually restores). So wait: the auth
-        // listener below calls this same function the moment the restored
-        // session (or its profile sync) completes, and only then does the
-        // gate decide between Home and the verification flow.
-        if (!auth.currentUser) {
+        // `auth.currentUser` is still null. The optimistic fast path below
+        // covers the wait; once auth + the synced profile arrive, the
+        // settled redirect reuses the snapshot so the gate never misfires.
+        const currentUid = auth.currentUser?.uid ?? null;
+        if (!currentUid) {
+          // No live auth yet — try the OPTIMISTIC fast path: a previous full
+          // session resolved to Home, so go there instantly and re-validate
+          // in the background. This is what kills the Vivo 10–20s stare at
+          // the Login screen (Firebase token refresh is the slow span).
+          // Suppressed right after an explicit manual logout (the flag is set
+          // before Firebase signs out, and cleared on the next fresh sign-in).
+          if (!fastPathDoneRef.current && !manualLogoutFlag) {
+            fastPathDoneRef.current = true;
+            void (async () => {
+              try {
+                const [ready, readyUid] = await Promise.all([
+                  hasReadySession(),
+                  getReadySessionUid(),
+                ]);
+                if (!isMounted || !ready) {
+                  return;
+                }
+                if (
+                  handledSessionRef.current ||
+                  !restoreIntentRef.current ||
+                  !isPreLoginRoute(pathname)
+                ) {
+                  return;
+                }
+                const alreadyLive = auth.currentUser;
+                if (alreadyLive) {
+                  return;
+                }
+                navigate("/regular_user/home");
+                // If the session is already back under a different uid, skip.
+                const liveNow: { uid?: string | null } | null =
+                  auth.currentUser;
+                if (liveNow && readyUid && liveNow.uid !== readyUid) {
+                  return;
+                }
+                revalidateAfterFastPath(readyUid ?? "unknown");
+              } catch {
+                // Fast path is best-effort — the settled redirect still runs.
+              }
+            })();
+          }
           return;
         }
 
-        // A persisted "later" choice (verificationmain → Cancel Verification
-        // → LATER) suppresses the auto-redirect for this account: leave the
-        // user on whatever pre-login screen they are on (index / start /
-        // login / register) instead of bouncing them into the verification
-        // flow. The gate still runs ONCE so an account the admin has since
-        // VERIFIED goes straight to Home, and a REJECTED account still gets
-        // its rejection notice — only the "verification" and "legacy_notice"
-        // outcomes are suppressed. One-shot for this app run.
+        const preloaded = syncedProfileRef.current;
+        const profileForGate =
+          preloaded && preloaded.uid === currentUid ? preloaded.data : null;
+        // The auth sync always fetches the profile before settling, so reuse
+        // it. On the rare path where auth is already live but the sync hasn't
+        // finished, fall back to a fresh single-read gate.
+        if (profileForGate !== null || preloaded?.uid === currentUid) {
+          settleWithProfile(currentUid, profileForGate);
+          return;
+        }
+
+        // Rare path: auth is live but the profile sync hasn't finished (e.g.
+        // maybeRedirect ran before the auth listener's fetch). Reuse the
+        // shared settle helper with a fresh single read.
         if (await hasChosenVerificationLater()) {
           handledSessionRef.current = true;
           void (async () => {
             try {
-              const target = await resolvePostLoginTarget();
-              if (target === "rejected_notice") {
-                router.replace("/login/validation/rejectedverif" as Href);
-              } else if (target === "fully_verified_notice") {
-                router.replace("/login/validation/fullyverif" as Href);
-              } else if (target === "home") {
-                router.replace("/regular_user/home");
+              const laterTarget = await resolvePostLoginTarget();
+              if (laterTarget === "rejected_notice") {
+                navigate("/login/validation/rejectedverif" as Href);
+                const rareUid = auth.currentUser?.uid ?? null;
+                await recordGateOutcome(
+                  "/login/validation/rejectedverif" as Href,
+                  rareUid
+                );
+              } else if (laterTarget === "fully_verified_notice") {
+                navigate("/login/validation/fullyverif" as Href);
+                const rareUid = auth.currentUser?.uid ?? null;
+                await recordGateOutcome(
+                  "/login/validation/fullyverif" as Href,
+                  rareUid
+                );
+              } else if (laterTarget === "home") {
+                navigate("/regular_user/home");
+                const readyUid = auth.currentUser?.uid;
+                if (readyUid) {
+                  await markSessionReady(readyUid);
+                }
+              } else {
+                // "verification"/"legacy" → stay put: the user chose "later".
+                // Disarm the fast path for the next cold start.
+                const rareUid = auth.currentUser?.uid ?? null;
+                await recordGateOutcome(
+                  "/verification/verificationmain" as Href,
+                  rareUid
+                );
               }
               // "verification" → stay put: the user chose "later".
             } catch {
               // Stay put — navigation must never crash the app.
+            } finally {
+              noteSessionSettled();
             }
           })();
           return;
@@ -203,24 +624,15 @@ export default function SaveLoginSync() {
             // flow, a newly-approved account to the one-time fully-verified
             // celebration, and a verified account to Home.
             const loginTarget = await resolvePostLoginTarget();
-            if (loginTarget === "rejected_notice") {
-              target = "/login/validation/rejectedverif" as Href;
-            } else if (loginTarget === "legacy_notice") {
-              target = "/login/validation/legacyverif" as Href;
-            } else if (loginTarget === "fully_verified_notice") {
-              target = "/login/validation/fullyverif" as Href;
-            } else if (loginTarget === "verification") {
-              target = "/verification/verificationmain" as Href;
-            }
+            target = targetForGate(loginTarget);
           } catch {
             // Gate check failure is non-fatal — fall through to Home.
           }
 
-          try {
-            router.replace(target);
-          } catch {
-            // Navigation must never crash the app.
-          }
+          navigate(target);
+          const rareUid = auth.currentUser?.uid ?? null;
+          await recordGateOutcome(target, rareUid);
+          noteSessionSettled();
         })();
       }
     };
@@ -235,18 +647,26 @@ export default function SaveLoginSync() {
       }
 
       unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-        if (!currentUser) {
+        if (currentUser == null) {
           // Explicit sign-out (or expired session). Allow the next sign-in to
           // re-synchronize so a profile/name change is not missed.
           syncedUidRef.current = null;
+          syncedProfileRef.current = null;
           return;
         }
 
+        const signedInUser = currentUser;
+
         // Same user as the last auth event — already synced this app run.
         // Skip the network profile read and the storage write entirely; only
-        // re-attempt the cheap (local) one-shot redirect.
-        if (syncedUidRef.current === currentUser.uid) {
-          maybeRedirect();
+        // re-attempt the cheap (local) one-shot redirect, reusing the snapshot.
+        if (syncedUidRef.current === signedInUser.uid) {
+          const again = syncedProfileRef.current;
+          if (again && again.uid === signedInUser.uid) {
+            settleWithProfile(signedInUser.uid, again.data);
+          } else {
+            void maybeRedirect();
+          }
           return;
         }
 
@@ -256,8 +676,12 @@ export default function SaveLoginSync() {
           return;
         }
         syncingRef.current = true;
+        const syncingUser = signedInUser;
 
         void (async () => {
+          // Hoisted so the `finally` below can settle the redirect with the
+          // just-fetched snapshot (zero extra Firestore reads).
+          let syncedProfileData: Record<string, unknown> | null = null;
           try {
             // 1) Resolve the display name cache-first (zero network I/O).
             let cached: SavedLoginState;
@@ -269,23 +693,28 @@ export default function SaveLoginSync() {
 
             let fullName = cached.fullName;
 
-            // 2) Only when the cache has no name do we hit the network. On a
-            //    typical app reopen the cached name already exists, so the
-            //    Firestore `getDoc` round-trip is skipped entirely — faster
-            //    auto-login, works offline, and saves a network request.
-            if (!fullName) {
-              try {
-                const profileRef = doc(db, "regular_user", currentUser.uid);
-                const profileSnap = await getDoc(profileRef);
-                const data = profileSnap.exists() ? profileSnap.data() : null;
-                fullName =
-                  data && typeof data.fullName === "string" && data.fullName.length > 0
-                    ? data.fullName
-                    : null;
-              } catch {
-                // If the profile fetch fails (e.g. offline restore), fall back
-                // to the cached value — never crash.
+            // 2) Fetch the profile ONCE. It serves BOTH the display-name cache
+            //    AND the identity gate below (passed as `preloaded`), so the
+            //    gate never issues a 2nd `getDoc`. On a fully-verified reopen
+            //    this + the celebration fast-path = exactly 1 Firestore read.
+            try {
+              const t0 = typeof __DEV__ !== "undefined" && __DEV__ ? Date.now() : 0;
+              const profileRef = doc(db, "regular_user", syncingUser.uid);
+              const profileSnap = await getDoc(profileRef);
+              if (typeof __DEV__ !== "undefined" && __DEV__) {
+                // eslint-disable-next-line no-console
+                console.log(`[gate] profile getDoc +${Date.now() - t0}ms`);
               }
+              syncedProfileData = profileSnap.exists()
+                ? (profileSnap.data() as Record<string, unknown>)
+                : null;
+              if (!fullName && syncedProfileData) {
+                const v = syncedProfileData.fullName;
+                fullName = typeof v === "string" && v.length > 0 ? v : null;
+              }
+            } catch {
+              // If the profile fetch fails (e.g. offline restore), fall back
+              // to the cached value — never crash.
             }
 
             // 3) Persist only what actually changed (diff against the cached
@@ -295,7 +724,7 @@ export default function SaveLoginSync() {
               if (!cached.saved) {
                 writes.push([SAVED_LOGIN_KEY, "true"]);
               }
-              const emailValue = currentUser.email ?? "";
+              const emailValue = syncingUser.email ?? "";
               if (cached.email !== emailValue) {
                 writes.push([SAVED_LOGIN_EMAIL_KEY, emailValue]);
               }
@@ -311,12 +740,18 @@ export default function SaveLoginSync() {
             }
 
             if (isMounted) {
-              syncedUidRef.current = currentUser.uid;
+              syncedUidRef.current = syncingUser.uid;
+              syncedProfileRef.current = {
+                uid: syncingUser.uid,
+                data: syncedProfileData,
+              };
             }
           } finally {
             syncingRef.current = false;
             if (isMounted) {
-              maybeRedirect();
+              // Pass the just-fetched profile straight into the redirect so
+              // the gate reuses it (zero extra Firestore reads).
+              settleWithProfile(syncingUser.uid, syncedProfileData);
             }
           }
         })();
