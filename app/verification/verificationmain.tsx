@@ -150,23 +150,15 @@ export default function VerificationMainScreen() {
   // choice there. Returns true because the press is always consumed (used
   // to consume Android hardware back events).
   //
-  // Rejected users: the lightbox with STAY / LATER only makes sense when
-  // "LATER" can actually leave the screen. For a rejected account,
-  // getVerificationLaterOutcome() refuses to write the marker (status is
-  // "rejected"), so "LATER" can never succeed — every press on "Later"
-  // just fires the "Re-verification required" alert and bounces back to
-  // the hub, creating a back → lightbox → Later → alert → back loop.
-  // For rejected users the rejection is already visible on the hub (red ✕
-  // marks on the cards + pending review banner), so the back press is
-  // consumed silently instead of opening the lightbox. The only way out is
-  // to resubmit via the Face Recognition / Verify your id cards.
+  // For rejected users, the lightbox still opens but both buttons explain why
+  // leaving is blocked: STAY returns to the hub, and LATER shows a "Re-verification
+  // required" alert since getVerificationLaterOutcome() refuses to write the marker
+  // for a rejected account. The only way out is to resubmit via the Face Recognition /
+  // Verify your id cards.
   const attemptBack = useCallback((): boolean => {
-    if (verificationStatus === "rejected") {
-      return true;
-    }
     setIsBackConfirmOpen(true);
     return true;
-  }, [verificationStatus]);
+  }, []);
   // Android hardware back opens the same lightbox; while it is open,
   // hardware back just dismisses it. Active only while this screen is
   // focused, so back navigation from nested screens keeps working.
@@ -340,12 +332,13 @@ export default function VerificationMainScreen() {
           >
             <Ionicons name="camera-outline" size={30} color="#0F172A" />
             <Text style={styles.optionText}>Face Recognition</Text>
-            {/* Submitted face scan: green check while it stands, red X while
-                the admin has REJECTED the face scan (or everything — see
-                rejectionTarget). A resubmission flips the status back to
-                "pending" and the check returns. */}
-            {hasFaceScan &&
-              (verificationStatus === "rejected" &&
+            {/* Submitted face scan: red ✕ while the admin has REJECTED the
+                face scan (or everything — see rejectionTarget).
+                A resubmission flips the status back to "pending" and the
+                check returns. When rejected but this component wasn't the
+                one rejected, no check is shown so the button doesn't appear
+                "completed/hidden" — it stays neutral until resubmission. */}
+            {hasFaceScan && (verificationStatus === "rejected" &&
               (rejectionTarget === "face_scan" || rejectionTarget === "both") ? (
                 <Ionicons
                   name="close-circle"
@@ -353,14 +346,14 @@ export default function VerificationMainScreen() {
                   color="#DC2626"
                   style={styles.optionCheck}
                 />
-              ) : (
+              ) : verificationStatus !== "rejected" ? (
                 <Ionicons
                   name="checkmark-circle"
                   size={24}
                   color="#16A34A"
                   style={styles.optionCheck}
                 />
-              ))}
+              ) : null)}
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -390,12 +383,13 @@ export default function VerificationMainScreen() {
                 </Text>
               )}
             </View>
-            {/* Submitted Valid ID: green check while it stands, red X while
-                the admin has REJECTED the Valid ID (or everything — see
-                rejectionTarget). A resubmission flips the status back to
-                "pending" and the check returns. */}
-            {hasValidId &&
-              (verificationStatus === "rejected" &&
+            {/* Submitted Valid ID: red ✕ while the admin has REJECTED the
+                Valid ID (or everything — see rejectionTarget).
+                A resubmission flips the status back to "pending" and the
+                check returns. When rejected but this component wasn't the
+                one rejected, no check is shown so the button doesn't appear
+                "completed/hidden" — it stays neutral until resubmission. */}
+            {hasValidId && (verificationStatus === "rejected" &&
               (rejectionTarget === "valid_id" || rejectionTarget === "both") ? (
                 <Ionicons
                   name="close-circle"
@@ -403,14 +397,14 @@ export default function VerificationMainScreen() {
                   color="#DC2626"
                   style={styles.optionCheck}
                 />
-              ) : (
+              ) : verificationStatus !== "rejected" ? (
                 <Ionicons
                   name="checkmark-circle"
                   size={24}
                   color="#16A34A"
                   style={styles.optionCheck}
                 />
-              ))}
+              ) : null)}
           </TouchableOpacity>
 
           {/* Review Submission — one read-only overview of everything the
