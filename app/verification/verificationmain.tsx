@@ -149,11 +149,24 @@ export default function VerificationMainScreen() {
   // A single back press opens the lightbox; the user makes an explicit
   // choice there. Returns true because the press is always consumed (used
   // to consume Android hardware back events).
+  //
+  // Rejected users: the lightbox with STAY / LATER only makes sense when
+  // "LATER" can actually leave the screen. For a rejected account,
+  // getVerificationLaterOutcome() refuses to write the marker (status is
+  // "rejected"), so "LATER" can never succeed — every press on "Later"
+  // just fires the "Re-verification required" alert and bounces back to
+  // the hub, creating a back → lightbox → Later → alert → back loop.
+  // For rejected users the rejection is already visible on the hub (red ✕
+  // marks on the cards + pending review banner), so the back press is
+  // consumed silently instead of opening the lightbox. The only way out is
+  // to resubmit via the Face Recognition / Verify your id cards.
   const attemptBack = useCallback((): boolean => {
+    if (verificationStatus === "rejected") {
+      return true;
+    }
     setIsBackConfirmOpen(true);
     return true;
-  }, []);
-
+  }, [verificationStatus]);
   // Android hardware back opens the same lightbox; while it is open,
   // hardware back just dismisses it. Active only while this screen is
   // focused, so back navigation from nested screens keeps working.
