@@ -102,14 +102,14 @@ const buildVerificationMessage = (
 /**
  * Per-decision fingerprint for a verification status snapshot. Mirrors the
  * seenKey built by mapUserDocToVerificationNotification in
- * components/notifications/notif_func.tsx (status + updatedAt/verifiedAt +
- * rejection count) — plus the rejectionTarget so a target-only correction
- * (both → valid_id) also counts as a new decision and re-fires once.
+ * components/notifications/notif_func.tsx (status + rejection count +
+ * rejectionTarget) — STABLE fields only. updatedAt/verifiedAt are
+ * deliberately excluded: they move on unrelated user-doc writes (push-token
+ * re-register, presence heartbeat, our own ack write), which would rotate
+ * the key and resurrect the badge after every reload.
  */
 export const buildVerificationSeenKey = (data: {
   verificationStatus?: unknown;
-  updatedAt?: unknown;
-  verifiedAt?: unknown;
   verificationRejectionCount?: unknown;
   rejectionTarget?: unknown;
 }): string | null => {
@@ -120,47 +120,6 @@ export const buildVerificationSeenKey = (data: {
   if (normalized !== "verified" && normalized !== "rejected") {
     return null;
   }
-  const toMs = (value: unknown): number => {
-    if (typeof value === "string") {
-      const parsed = new Date(value);
-      return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
-    }
-    if (
-      value !== null &&
-      typeof value === "object" &&
-      typeof (value as { toMillis?: unknown }).toMillis === "function"
-    ) {
-      try {
-        const ms = (value as { toMillis: () => unknown }).toMillis();
-        return typeof ms === "number" && Number.isFinite(ms) ? ms : 0;
-      } catch {
-        return 0;
-      }
-    }
-    if (
-      value !== null &&
-      typeof value === "object" &&
-      typeof (value as { toDate?: unknown }).toDate === "function"
-    ) {
-      try {
-        const date = (value as { toDate: () => unknown }).toDate();
-        return date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : 0;
-      } catch {
-        return 0;
-      }
-    }
-    if (
-      value !== null &&
-      typeof value === "object" &&
-      typeof (value as { seconds?: unknown }).seconds === "number"
-    ) {
-      const seconds = (value as { seconds: number }).seconds;
-      return Number.isFinite(seconds) ? seconds * 1000 : 0;
-    }
-    return 0;
-  };
-  const rawUpdatedAt = data?.updatedAt ?? data?.verifiedAt ?? null;
-  const updatedAtMs = toMs(rawUpdatedAt);
   const parsedCount = Number(data?.verificationRejectionCount);
   const rejectionCount =
     Number.isFinite(parsedCount) && parsedCount > 0 ? Math.floor(parsedCount) : 0;
@@ -170,12 +129,7 @@ export const buildVerificationSeenKey = (data: {
       : "";
   const target =
     rawTarget === "valid_id" || rawTarget === "face_scan" ? rawTarget : "both";
-  return [
-    normalized,
-    updatedAtMs > 0 ? String(updatedAtMs) : "no-ts",
-    String(rejectionCount),
-    target,
-  ].join(":");
+  return [normalized, String(rejectionCount), target].join(":");
 };
 
 /**

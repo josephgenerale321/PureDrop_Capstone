@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { useCallback, useEffect, useRef } from "react";
 import {
   ActivityIndicator,
   RefreshControl,
@@ -69,12 +70,14 @@ function NotificationCard({
   verificationSeenKey,
   verificationSeenLoaded,
   onOpenReport,
+  onVisible,
 }: {
   item: NotificationItem;
   lastSeenMs: number;
   verificationSeenKey: string | null;
   verificationSeenLoaded: boolean;
   onOpenReport: (item: NotificationItem) => void;
+  onVisible?: (item: NotificationItem) => void;
 }) {
   // Verification cards are informational only — the message already carries
   // the full decision text, and the celebration / rejection screens are
@@ -89,6 +92,42 @@ function NotificationCard({
     verificationSeenKey,
     verificationSeenLoaded,
   );
+
+  // Screen-view acknowledgement: the moment this card is actually RENDERED as
+  // visible-and-unread, the decision counts as seen — viewing IS reading.
+  // Debounced via onVisible so a navigation flash (notification screen briefly
+  // mounts while the router settles the home redirect) cannot mark an item
+  // read that the user never actually saw.
+  const visibleAckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (visibleAckTimer.current) {
+        clearTimeout(visibleAckTimer.current);
+        visibleAckTimer.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!onVisible || !unread) {
+      return;
+    }
+    if (visibleAckTimer.current) {
+      clearTimeout(visibleAckTimer.current);
+    }
+    visibleAckTimer.current = setTimeout(() => {
+      visibleAckTimer.current = null;
+      onVisible(item);
+    }, 800);
+    return () => {
+      if (visibleAckTimer.current) {
+        clearTimeout(visibleAckTimer.current);
+        visibleAckTimer.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.id, item.seenKey, unread]);
 
   if (isVerification) {
     return (
@@ -181,6 +220,7 @@ export default function NotificationScreen() {
     verificationSeenKey,
     verificationSeenLoaded,
     markAllAsRead,
+    markVerificationAsSeen,
     refresh,
   } = useReportNotifications();
 
@@ -193,6 +233,34 @@ export default function NotificationScreen() {
       // Silently fail - navigation errors should not crash the app
     }
   };
+
+  // Auto-ack verification on stable view: opening the bell and actually
+  // SEEING the verification card marks that decision seen (reports are
+  // untouched — same split as the floating-banner tap path). Debounced by
+  // the card (800ms mounted + still unread) so a routing flash that briefly
+  // mounts this screen on the way to home can never consume the decision
+  // before the user views it.
+  const verificationAckedRef = useRef<string | null>(null);
+  const handleVerificationVisible = useCallback(
+    (item: NotificationItem) => {
+      const key = item.seenKey ?? null;
+      if (key == null || verificationAckedRef.current === key) {
+        return;
+      }
+      verificationAckedRef.current = key;
+      void markVerificationAsSeen();
+    },
+    [markVerificationAsSeen],
+  );
+
+  // Reset the per-decision ack guard when a NEW decision arrives so the next
+  // decision can auto-ack on view.
+  useEffect(() => {
+    const current = items.find((entry) => entry.kind === "verification");
+    if (current?.seenKey !== verificationAckedRef.current) {
+      verificationAckedRef.current = null;
+    }
+  }, [items]);
 
   const handleOpenReport = (item: NotificationItem) => {
     try {
@@ -292,7 +360,7 @@ export default function NotificationScreen() {
             data={sections}
             keyExtractor={(section) => section.bucket}
             contentContainerStyle={styles.listContent}
-            extraData={lastSeenMs}
+            extraData={[lastSeenMs, verificationSeenKey, verificationSeenLoaded]}
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
@@ -312,6 +380,7 @@ export default function NotificationScreen() {
                     verificationSeenKey={verificationSeenKey}
                     verificationSeenLoaded={verificationSeenLoaded}
                     onOpenReport={handleOpenReport}
+                    onVisible={handleVerificationVisible}
                   />
                 ))}
               </View>

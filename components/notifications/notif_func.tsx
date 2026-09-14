@@ -77,10 +77,62 @@ const lastSeenStorageKey = (uid: string): string =>
  * Legacy installs (no stored value) treat the CURRENT decision as already
  * seen — the user lived with these decisions before this feature existed, so
  * upgrading must NOT replay a banner + system notification for a week-old
- * approval on first open.
+ * approval on first open. Stored legacy keys from the previous format
+ * (`status:updatedAtMs:count`, 3 parts, no target) are migrated forward to
+ * the current format (`status:count:target`) so one upgrade doesn't replay
+ * the banner once for users who already acknowledged.
  */
 const verificationSeenStorageKey = (uid: string): string =>
   `@puredrop/verification_seen/${uid}`;
+
+/**
+ * Normalizes a stored verification seen-key to the CURRENT format
+ * (`status:count:target`). The previous format (`status:updatedAtMs:count`)
+ * rotated on unrelated user-doc writes, so it can never equal a fresh key —
+ * but its (status, count) prefix still identifies the acknowledged decision.
+ * Returns null for values that match neither format.
+ */
+const normalizeVerificationSeenKey = (
+  stored: string | null,
+  current: { status: string; count: number; target: string } | null,
+): string | null => {
+  if (typeof stored !== "string" || stored.length === 0) {
+    return null;
+  }
+  const parts = stored.split(":");
+  // Current format already: status:count:target.
+  if (
+    parts.length === 3 &&
+    (parts[2] === "valid_id" || parts[2] === "face_scan" || parts[2] === "both")
+  ) {
+    return stored;
+  }
+  // Legacy format: status:updatedAtMs:count. Migrate when it acknowledges the
+  // same decision that is current now (same status + same count); the target
+  // comes from the live doc since the legacy key never stored it.
+  if (parts.length === 3 && current != null && /^\d+$/.test(parts[1])) {
+    if (parts[0] === current.status && parts[2] === String(current.count)) {
+      return [current.status, current.count, current.target].join(":");
+    }
+  }
+  return null;
+};
+
+const verificationDecisionParts = (
+  data: DocumentData,
+): { status: string; count: number; target: string } | null => {
+  const status = normalizeVerificationStatus(data?.verificationStatus);
+  if (status !== "Verified" && status !== "Rejected") {
+    return null;
+  }
+  const parsedCount = Number(data?.verificationRejectionCount);
+  return {
+    status: status.toLowerCase(),
+    count:
+      Number.isFinite(parsedCount) && parsedCount > 0 ? Math.floor(parsedCount) : 0,
+    target: normalizeRejectionTarget(data?.rejectionTarget),
+  };
+};
 
 export type NotificationItemKind = "report" | "verification";
 
@@ -283,6 +335,79 @@ const NOTIFICATION_TIME_FIELDS = [
   "createdAt",
 ] as const;
 
+const resolveVerificationDecisionTime = (data: DocumentData, status: string): unknown => {
+  // STABLE decision time only — NEVER updatedAt, NEVER the "latest history
+  // entry regardless of action" (anyMs/anyRaw). Those jump on unrelated
+  // user-doc writes and on admin re-snapshots that rewrite verificationHistory.
+  //
+  // BUG FIX (order flip): the verification card used to resolve its sort/group
+  // time via resolveNotificationTime(), whose fallback chain ends at
+  // `updatedAt`. The user doc's `updatedAt` moves on UNRELATED writes
+  // (presence heartbeat every 2 min, push-token re-register, our own
+  // verificationNoticeSeenAt / notificationsLastSeenAt ack writes), so the
+  // verification card's `createdAtMs` kept jumping to "now" — leaping above
+  // report cards (and between Today/Earlier buckets) on every heartbeat/ack.
+  // Reports keep resolveNotificationTime() (their `statusUpdatedAt` only moves
+  // on a genuine admin status change, which SHOULD reorder). Verification
+  // uses only decision-anchored fields below, which never move after the
+  // admin decides — so the list order stays put.
+  //
+  // Verified: `verifiedAt` is server-stamped on approve and untouched by
+  // anything else — most accurate, prefer it.
+  // Rejected: `verifiedAt` is cleared to null on reject, so the audit-trail
+  // `verificationHistory` entry (`at`, written once per decision) is the only
+  // true decision time. Submission/creation times are stable fallbacks for
+  // legacy docs without history (approximate but never jump).
+  //
+  // We deliberately DO NOT fall back to "the latest history entry regardless
+  // of action": if the admin service rewrites verificationHistory on every
+  // re-snapshot (even when the decision hasn't changed), that latest entry's
+  // `at` would jump to now and re-flip the list order. Only the EXACT matching
+  // decision entry (or, when absent, the stable submission/creation times) is
+  // used — never a "latest whatever" entry.
+  if (status === "Verified" && resolveTimestampMs(data?.verifiedAt) > 0) {
+    return data.verifiedAt;
+  }
+
+  const history = Array.isArray(data?.verificationHistory)
+    ? (data.verificationHistory as Record<string, unknown>[])
+    : [];
+  let matchMs = 0;
+  let matchRaw: unknown = null;
+  for (const entry of history) {
+    const action =
+      entry != null && typeof entry.action === "string"
+        ? entry.action.toLowerCase()
+        : "";
+    const entryStatus =
+      action === "approved" ? "Verified" : action === "rejected" ? "Rejected" : "";
+    if (entryStatus !== status) {
+      continue;
+    }
+    const ms = resolveTimestampMs(entry?.at);
+    if (ms > matchMs) {
+      matchMs = ms;
+      matchRaw = entry?.at;
+    }
+  }
+  if (matchMs > 0) {
+    return matchRaw;
+  }
+
+  // No matching decision entry in history (legacy doc / missing history).
+  // Use stable submission/creation times only — never a "latest history entry"
+  // which could be volatile.
+  const faceMs = resolveTimestampMs(data?.faceScanSubmittedAt);
+  const validMs = resolveTimestampMs(data?.validIdSubmittedAt);
+  if (faceMs > 0 || validMs > 0) {
+    return faceMs >= validMs ? data.faceScanSubmittedAt : data.validIdSubmittedAt;
+  }
+  if (resolveTimestampMs(data?.createdAt) > 0) {
+    return data.createdAt;
+  }
+  return null;
+};
+
 const resolveNotificationTime = (data: DocumentData): unknown => {
   for (const field of NOTIFICATION_TIME_FIELDS) {
     const value = data[field];
@@ -344,23 +469,28 @@ const mapUserDocToVerificationNotification = (
 
   const rejectionTarget = normalizeRejectionTarget(data?.rejectionTarget);
   const isVerified = status === "Verified";
-  const decidedAt = resolveNotificationTime(data);
+  // Stable decision time (verifiedAt / verificationHistory / submissions) —
+  // NEVER updatedAt, which jumps on heartbeats/acks and flipped the list order.
+  const decidedAt = resolveVerificationDecisionTime(data, status);
   const createdAtMs = resolveTimestampMs(decidedAt);
 
-  // Per-decision fingerprint: same decision across restarts = same key (no
-  // replay); a NEW decision (status flip, fresh updatedAt, bumped rejection
-  // count) = new key (fires exactly once). Fields chosen to mirror the
-  // admin writes in verificationService.decideVerificationInFirestore:
-  // approve rewrites verifiedAt+updatedAt, reject bumps the count+updatedAt.
-  const rawUpdatedAt = data?.updatedAt ?? data?.verifiedAt ?? null;
-  const updatedAtMs = resolveTimestampMs(rawUpdatedAt);
+  // Per-decision fingerprint — STABLE fields only. Same admin decision across
+  // restarts = same key (no replay); a NEW decision (status flip, bumped
+  // rejection count, or a target correction like both -> valid_id) = new key
+  // (fires exactly once).
+  //
+  // Deliberately EXCLUDES updatedAt/verifiedAt: those move on UNRELATED
+  // user-doc writes (push-token re-register on every foreground, presence
+  // heartbeat every 2 min, and — critically — our own
+  // verificationNoticeSeenAt ack write). Including them made the key rotate
+  // on every save/mark-as-read, so the badge resurrected after every reload.
   const parsedCount = Number(data?.verificationRejectionCount);
   const rejectionCount =
     Number.isFinite(parsedCount) && parsedCount > 0 ? Math.floor(parsedCount) : 0;
   const seenKey = [
     status.toLowerCase(),
-    updatedAtMs > 0 ? String(updatedAtMs) : "no-ts",
     String(rejectionCount),
+    rejectionTarget,
   ].join(":");
 
   return {
@@ -501,6 +631,18 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      // Same-user auth re-emit (Firebase re-fires onAuthStateChanged on token
+      // refresh / warm reload WITHOUT changing uid): listeners are already
+      // healthy and their snapshots still fresh — re-subscribing would briefly
+      // reset to empty snapshots and drop the merged read state, making the
+      // [1] badge flash after reopen. Only full subscribe on a DIFFERENT uid.
+      if (
+        currentUidRef.current === currentUser.uid &&
+        (unsubscribeReports || unsubscribeUser)
+      ) {
+        return;
+      }
+
       currentUidRef.current = currentUser.uid;
       setLoading(itemsRef.current.length === 0);
       setHasError(false);
@@ -524,6 +666,9 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
 
       // Restore the verification seen-key from local storage. Presenters gate
       // on verificationSeenLoaded so no banner fires before this resolves.
+      // Stored legacy keys (previous `status:updatedAtMs:count` format) can't
+      // be migrated yet — the live doc hasn't loaded — so keep the raw value
+      // for now; the user-snapshot handler below migrates it against the doc.
       void (async () => {
         try {
           const stored = await AsyncStorage.getItem(
@@ -577,6 +722,29 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
             userDocData,
           );
           setVerificationItem(nextVerification);
+
+          // Migrate a stored legacy seen-key (`status:updatedAtMs:count`) to
+          // the current format once the live doc is available, so users who
+          // already acknowledged don't replay the banner once after upgrade.
+          const decisionParts = verificationDecisionParts(userDocData);
+          const migratedSeenKey = normalizeVerificationSeenKey(
+            verificationSeenKeyRef.current,
+            decisionParts,
+          );
+          if (
+            migratedSeenKey != null &&
+            migratedSeenKey !== verificationSeenKeyRef.current
+          ) {
+            verificationSeenKeyRef.current = migratedSeenKey;
+            setVerificationSeenKey(migratedSeenKey);
+            noteVerificationDecisionSeen(migratedSeenKey);
+            void AsyncStorage.setItem(
+              verificationSeenStorageKey(currentUser.uid),
+              migratedSeenKey,
+            ).catch(() => {
+              // Non-fatal: local cache only.
+            });
+          }
 
           const serverSeenKey =
             typeof userDocData?.verificationNoticeSeenKey === "string" &&
@@ -805,10 +973,32 @@ function ReportNotificationsProvider({ children }: { children: ReactNode }) {
   // Merge: verification decision card on top (by decision time), then report
   // cards. Keeps the previous array reference when nothing changed so
   // downstream presenters don't re-fire.
+  //
+  // STALE-SOURCE GUARD: reportItems/verificationItem are snapshot-derived and
+  // briefly STALE (empty reportItems + null verificationItem) while listeners
+  // re-subscribe after auth restore. Blindly merging them here would rebuild
+  // `items` empty and DROP the fresh merged state — resurrecting an already-
+  // read verification card (and its [1] badge) right after reload. Skip the
+  // merge until at least one source has produced data, same as the report
+  // section subscribe does.
   useEffect(() => {
+    if (reportItems.length === 0 && verificationItem == null) {
+      return;
+    }
+    // Newest-first by stable decision/status time. Tie-break is deterministic
+    // (verification first, then id) so equal-second timestamps can never flip
+    // the visible order between snapshots.
     const merged = (
       verificationItem ? [verificationItem, ...reportItems] : [...reportItems]
-    ).sort((a, b) => b.createdAtMs - a.createdAtMs);
+    ).sort((a, b) => {
+      if (b.createdAtMs !== a.createdAtMs) {
+        return b.createdAtMs - a.createdAtMs;
+      }
+      if (a.kind !== b.kind) {
+        return a.kind === "verification" ? -1 : 1;
+      }
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
 
     setItems((prev) => {
       if (prev.length !== merged.length) {
