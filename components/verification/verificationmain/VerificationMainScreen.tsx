@@ -31,6 +31,7 @@ export default function VerificationMainScreen() {
     verificationStatus,
     rejectionTarget,
     validIdType,
+    wasPreviouslyVerified,
   } = useVerificationMainProgress();
   const { isBackConfirmOpen, handleBack, handleStayBack, handleConfirmBack } =
     useVerificationMainBack();
@@ -66,6 +67,16 @@ export default function VerificationMainScreen() {
     (rejectionTarget === "valid_id" || rejectionTarget === "both");
   const validIdChecked = hasValidId && verificationStatus !== "rejected";
 
+  // Targeted-rejection visibility — only the rejected part stays actionable:
+  // rejected + valid_id → Valid ID card only (Face hidden), rejected +
+  // face_scan → Face card only (Valid ID hidden), rejected + both/legacy →
+  // both. Non-rejected states (pending / awaiting_id / verified / new user)
+  // always show both — hiding the still-good part also prevents needlessly
+  // resubmitting it (which would re-pend the account).
+  const isRejected = verificationStatus === "rejected";
+  const showFaceCard = !isRejected || rejectionTarget !== "valid_id";
+  const showValidIdCard = !isRejected || rejectionTarget !== "face_scan";
+
   return (
     <>
       <SafeAreaView style={styles.container}>
@@ -80,25 +91,34 @@ export default function VerificationMainScreen() {
 
           <VerificationIdentityBanner userEmail={userEmail} />
 
-          <VerificationOptionCard
-            icon={<Ionicons name="camera-outline" size={30} color="#0F172A" />}
-            title="Face Recognition"
-            trailing={faceRejected ? "cross" : faceChecked ? "check" : null}
-            onPress={handleFaceRecognition}
-          />
+          {/* Only the admin-rejected part stays actionable: the still-good
+              card is hidden so it can't be needlessly resubmitted. */}
+          {showFaceCard && (
+            <VerificationOptionCard
+              icon={<Ionicons name="camera-outline" size={30} color="#0F172A" />}
+              title="Face Recognition"
+              trailing={faceRejected ? "cross" : faceChecked ? "check" : null}
+              onPress={handleFaceRecognition}
+            />
+          )}
 
-          <VerificationOptionCard
-            icon={<IdCardIcon />}
-            title="Verify your id"
-            subtitle={validIdType}
-            trailing={validIdRejected ? "cross" : validIdChecked ? "check" : null}
-            onPress={handleValidId}
-          />
+          {showValidIdCard && (
+            <VerificationOptionCard
+              icon={<IdCardIcon />}
+              title="Verify your id"
+              subtitle={validIdType}
+              trailing={validIdRejected ? "cross" : validIdChecked ? "check" : null}
+              onPress={handleValidId}
+            />
+          )}
 
-          {/* Review Submission — one read-only overview of everything the
-              user has submitted (face scan + Valid ID photos). Only shown
-              once at least one step has been submitted. */}
-          {(hasFaceScan || hasValidId) && (
+          {/* Review Submission — new never-verified users only. Existing
+              fully-verified users re-rejected later never see it: they
+              resubmit just the rejected part via its own card. Still gated
+              on a VISIBLE submitted step so it never links to a hidden part. */}
+          {!wasPreviouslyVerified &&
+            ((showFaceCard && hasFaceScan) ||
+              (showValidIdCard && hasValidId)) && (
             <VerificationOptionCard
               icon={<Ionicons name="document-text-outline" size={30} color="#0F172A" />}
               title="Review Submission"

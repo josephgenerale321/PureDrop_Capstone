@@ -17,6 +17,11 @@ export interface VerificationMainProgress {
   // The submitted ID category (e.g. "Philippine National ID (PhilID)") — shown
   // as a subtitle on the "Verify your id" card.
   validIdType: string | null;
+  // True once the account has celebrated full verification at least once
+  // (`fullyVerifiedNoticeSeenAt` present — the admin approve path never
+  // clears it). Used to hide the "Review Submission" card for existing
+  // fully-verified users re-rejected later; new never-verified users keep it.
+  wasPreviouslyVerified: boolean;
 }
 
 // Live verification progress — subscribes to the signed-in user's document
@@ -38,6 +43,7 @@ export default function useVerificationMainProgress(): VerificationMainProgress 
   const [verificationStatus, setVerificationStatus] = useState<string>("");
   const [rejectionTarget, setRejectionTarget] = useState<string>("both");
   const [validIdType, setValidIdType] = useState<string | null>(null);
+  const [wasPreviouslyVerified, setWasPreviouslyVerified] = useState(false);
 
   // Track the live Firebase session so the banner always shows the account
   // that is actually signed in on this device (and updates if it changes).
@@ -55,6 +61,7 @@ export default function useVerificationMainProgress(): VerificationMainProgress 
       setHasFaceScan(false);
       setHasValidId(false);
       setValidIdType(null);
+      setWasPreviouslyVerified(false);
       return undefined;
     }
 
@@ -73,6 +80,9 @@ export default function useVerificationMainProgress(): VerificationMainProgress 
         );
         const status = String(data?.verificationStatus ?? "");
         setVerificationStatus(status);
+        // Celebration marker — set once on first full verification, never
+        // cleared by later approve/reject cycles.
+        setWasPreviouslyVerified(data?.fullyVerifiedNoticeSeenAt != null);
 
         // Which part the admin rejected — only the rejected card(s) show the
         // red X (defaults to "both" for legacy rows without the field).
@@ -95,6 +105,7 @@ export default function useVerificationMainProgress(): VerificationMainProgress 
         setHasValidId(false);
         setValidIdType(null);
         setVerificationStatus("");
+        setWasPreviouslyVerified(false);
       },
     );
 
@@ -108,5 +119,6 @@ export default function useVerificationMainProgress(): VerificationMainProgress 
     verificationStatus,
     rejectionTarget,
     validIdType,
+    wasPreviouslyVerified,
   };
 }
