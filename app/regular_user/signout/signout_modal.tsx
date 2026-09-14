@@ -14,6 +14,7 @@ import { markCurrentUserInactive } from "../status/RegularUserPresenceSync";
 import { unregisterPushNotificationsAsync } from "../../../components/notifications/push_notificationfunc";
 import { resetFloatingNotificationState } from "../../../components/notifications/floating_notif";
 import { resetSystemNotificationState } from "../../../components/notifications/system_notif";
+import { resetVerificationPushSyncState } from "../../../components/verification/backend/verificationPushSync";
 
 const LOGIN_ROUTE = "/login" as Href;
 
@@ -72,6 +73,7 @@ export default function SignOutModal() {
     try {
       resetFloatingNotificationState(uid);
       resetSystemNotificationState();
+      resetVerificationPushSyncState();
     } catch {
       // Non-fatal.
     }

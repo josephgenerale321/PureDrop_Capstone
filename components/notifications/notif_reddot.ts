@@ -1,9 +1,29 @@
 import type { NotificationItem } from "./notif_func";
 
+/**
+ * Verification unread is per-decision, NOT wall-clock.
+ * The verification card's timestamps are frozen after the admin decides
+ * (verifiedAt/updatedAt never move again), so `createdAtMs > lastSeenMs`
+ * would stay unread FOREVER. Read state for verification = "this exact
+ * decision fingerprint (status:updatedAt:rejectionCount) was acknowledged",
+ * tracked by the provider. Reports keep the wall-clock comparison.
+ *
+ * Pass the provider's `verificationSeenKey` (+ loaded flag) for verification
+ * items; for report items they are ignored.
+ */
 export const isNotificationUnread = (
   item: NotificationItem,
   lastSeenMs: number,
+  verificationSeenKey?: string | null,
+  verificationSeenLoaded?: boolean,
 ): boolean => {
+  if (item.kind === "verification") {
+    if (!verificationSeenLoaded || item.seenKey == null) {
+      return false;
+    }
+    return item.seenKey !== verificationSeenKey;
+  }
+
   if (item.createdAtMs <= 0) {
     return false;
   }
@@ -18,7 +38,12 @@ export const isNotificationUnread = (
 export const hasUnreadNotifications = (
   items: NotificationItem[],
   lastSeenMs: number,
-): boolean => items.some((item) => isNotificationUnread(item, lastSeenMs));
+  verificationSeenKey?: string | null,
+  verificationSeenLoaded?: boolean,
+): boolean =>
+  items.some((item) =>
+    isNotificationUnread(item, lastSeenMs, verificationSeenKey, verificationSeenLoaded),
+  );
 
 export type NotificationBucket = "today" | "yesterday" | "earlier";
 

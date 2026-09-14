@@ -20,6 +20,9 @@ type SendReportPushPayload = {
   reportId?: string;
   status?: string;
   changedByAdmin?: boolean;
+  kind?: string;
+  verificationStatus?: string;
+  rejectionTarget?: string;
 };
 
 const jsonResponse = (body: Record<string, unknown>, status = 200) =>
@@ -236,6 +239,35 @@ if (changedByAdmin) {
   return `Your report #${id} is still pending.`;
 };
 
+const normalizeVerificationStatus = (value: unknown): "verified" | "rejected" | "" => {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "verified") return "verified";
+  if (normalized === "rejected") return "rejected";
+  return "";
+};
+
+const normalizeRejectionTarget = (value: unknown): "valid_id" | "face_scan" | "both" => {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "valid_id" || normalized === "face_scan") return normalized;
+  return "both";
+};
+
+const buildVerificationPushBody = (
+  status: "verified" | "rejected",
+  rejectionTarget: "valid_id" | "face_scan" | "both",
+): string => {
+  if (status === "verified") {
+    return "Your account has been verified. Welcome to PureDrop!";
+  }
+  if (rejectionTarget === "valid_id") {
+    return "Your Valid ID was rejected. Please resubmit it to continue.";
+  }
+  if (rejectionTarget === "face_scan") {
+    return "Your face scan was rejected. Please resubmit it to continue.";
+  }
+  return "Your verification was rejected. Please re-verify your ID to continue.";
+};
+
 Deno.serve(async (request: Request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -253,11 +285,23 @@ Deno.serve(async (request: Request) => {
   }
 
   const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+  const isVerificationPush =
+    typeof body.kind === "string" && body.kind.trim().toLowerCase() === "verification";
+  const verificationStatus = isVerificationPush
+    ? normalizeVerificationStatus(body.verificationStatus)
+    : "";
+  const rejectionTarget = isVerificationPush
+    ? normalizeRejectionTarget(body.rejectionTarget)
+    : "both";
   const reportId = typeof body.reportId === "string" ? body.reportId.trim() : "";
   const changedByAdmin = body.changedByAdmin !== false;
 
   if (!userId) {
     return jsonResponse({ error: "userId is required." }, 400);
+  }
+
+  if (isVerificationPush && !verificationStatus) {
+    return jsonResponse({ error: "verificationStatus must be verified or rejected." }, 400);
   }
 
   const serviceAccount = getServiceAccount();
@@ -303,7 +347,28 @@ Deno.serve(async (request: Request) => {
     }
 
     const status = normalizeStatus(body.status);
-    const bodyText = buildPushBody(status, reportId, changedByAdmin);
+    const isVerifiedPush = isVerificationPush && verificationStatus === "verified";
+    const pushTitle = isVerificationPush
+      ? isVerifiedPush
+        ? "Account verified"
+        : "Verification update"
+      : "Report update";
+    const bodyText = isVerificationPush
+      ? buildVerificationPushBody(verificationStatus as "verified" | "rejected", rejectionTarget)
+      : buildPushBody(status, reportId, changedByAdmin);
+    const pushData = isVerificationPush
+      ? {
+          kind: "verification",
+          verificationStatus,
+          rejectionTarget,
+          route: isVerifiedPush
+            ? "/login/validation/fullyverif"
+            : "/login/validation/rejectedverif",
+        }
+      : {
+          reportId,
+          route: "/regular_user/notifications",
+        };
 
 // Step 3: Send the push notification through Expo's free API.
     const expoResponse = await fetch(EXPO_PUSH_URL, {
@@ -311,7 +376,7 @@ Deno.serve(async (request: Request) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         to: token,
-        title: "Report update",
+        title: pushTitle,
         body: bodyText,
         sound: "default",
         // Android channel + high priority so the notification is shown
@@ -320,10 +385,7 @@ Deno.serve(async (request: Request) => {
         // (push_notificationfunc.tsx / system_notif.tsx).
         channelId: "report-updates",
         priority: "high",
-        data: {
-          reportId,
-          route: "/regular_user/notifications",
-        },
+        data: pushData,
       }),
     });
 
@@ -344,6 +406,10 @@ Deno.serve(async (request: Request) => {
         { error: expoPayload.data[0].message || "Expo push rejected the message." },
         422,
       );
+    }
+
+    if (isVerificationPush) {
+      return jsonResponse({ ok: true, kind: "verification", verificationStatus, rejectionTarget });
     }
 
     return jsonResponse({ ok: true, status, reportId });

@@ -103,9 +103,18 @@ const getLocalNotificationsModule = () => {
  * already-seen report invisible (the system notification never appears). So we
  * key on the triplet `reportId + createdAtMs + status`, which changes every
  * time the admin sets a new status.
+ *
+ * Verification cards are derived from the user doc (no own moving timestamp),
+ * so they key on the provider's per-decision `seenKey`
+ * (`status:updatedAt:rejectionCount`) — stable across restarts, new on every
+ * genuine new decision.
  */
-const getNotificationKey = (item: NotificationItem): string =>
-  `${item.id}:${item.createdAtMs}:${item.status}`;
+const getNotificationKey = (item: NotificationItem): string => {
+  if (item.kind === "verification") {
+    return `verification:${item.seenKey ?? `${item.status}:${item.createdAtMs}`}`;
+  }
+  return `${item.id}:${item.createdAtMs}:${item.status}`;
+};
 
 /**
  * Module-level "already seen / already presented" trackers.
@@ -153,6 +162,11 @@ export const resetSystemNotificationState = (): void => {
  * wording is consistent everywhere.
  */
 const buildLocalMessage = (item: NotificationItem): string => {
+  // Verification cards carry their own pre-built message (same wording as
+  // the outside push) — never run them through the report template.
+  if (item.kind === "verification") {
+    return item.message;
+  }
   if (item.changedByAdmin) {
     if (item.status === "Approved") {
       return `Admin approved your report #${item.reportId}.`;
@@ -212,16 +226,29 @@ const presentLocalNotification = async (
     }
 
     const projectId = Constants.easConfig?.projectId;
+    const isVerification = item.kind === "verification";
     const notificationId = await Notifications.scheduleNotificationAsync({
       content: {
-        title: "Report update",
+        title: isVerification
+          ? item.status === "Verified"
+            ? "Account verified"
+            : "Verification update"
+          : "Report update",
         body: buildLocalMessage(item),
         sound: "default",
-        data: {
-          reportId: item.reportId,
-          route: "/regular_user/notifications",
-          projectId,
-        },
+        data: isVerification
+          ? {
+              kind: "verification",
+              verificationStatus: item.status.toLowerCase(),
+              rejectionTarget: item.rejectionTarget ?? "both",
+              route: item.route ?? "/login/validation/rejectedverif",
+              projectId,
+            }
+          : {
+              reportId: item.reportId,
+              route: "/regular_user/notifications",
+              projectId,
+            },
       },
       trigger: null, // Present immediately — no remote push, no FCM.
     });
@@ -254,7 +281,14 @@ const presentLocalNotification = async (
  *   an `isMounted` flag.
  */
 export default function SystemNotificationSync() {
-  const { items, loading, lastSeenMs, lastSeenLoaded } = useReportNotifications();
+  const {
+    items,
+    loading,
+    lastSeenMs,
+    lastSeenLoaded,
+    verificationSeenKey,
+    verificationSeenLoaded,
+  } = useReportNotifications();
 
 const mountedRef = useRef(true);
   const appOpenResolvedRef = useRef(false);
@@ -283,12 +317,18 @@ const mountedRef = useRef(true);
   }, []);
 
   useEffect(() => {
-    // Wait until the read timestamp has been resolved. On a fresh app/phone
-    // restart, lastSeenMs is briefly 0 while AsyncStorage/Firestore load — if
-    // we presented now, every notification would look unread and a phantom
-    // system/push notification would appear. Gating on lastSeenLoaded prevents
-    // that.
-    if (loading || !lastSeenLoaded || items.length === 0) {
+    // Wait until BOTH read states are resolved. On a fresh app/phone restart
+    // they are briefly unresolved while AsyncStorage/Firestore load — if we
+    // presented now, everything would look unread and phantom system
+    // notifications would appear. The verification gate matters most: its
+    // card timestamps are frozen after the decision, so without it EVERY
+    // restart replays "Account verified" as a system notification.
+    if (
+      loading ||
+      !lastSeenLoaded ||
+      !verificationSeenLoaded ||
+      items.length === 0
+    ) {
       return;
     }
 
@@ -308,7 +348,9 @@ const mountedRef = useRef(true);
         // Seed the module-level known set so only genuinely new updates
         // notify after this. Module scope means it survives remounts.
         seededKeysRef.add(getNotificationKey(item));
-        if (isNotificationUnread(item, lastSeenMs)) {
+        if (
+          isNotificationUnread(item, lastSeenMs, verificationSeenKey, verificationSeenLoaded)
+        ) {
           if (!newestUnread || item.createdAtMs > newestUnread.createdAtMs) {
             newestUnread = item;
           }
@@ -328,6 +370,7 @@ const mountedRef = useRef(true);
     // Subsequent snapshots: only notify for genuinely NEW unread updates.
     // The key includes status + statusUpdatedAt, so an admin re-setting the
     // status on an EXISTING report is treated as new and shown.
+    // Verification unread is per-decision (seenKey), never wall-clock.
     let newestNew: NotificationItem | null = null;
     for (const item of items) {
       const key = getNotificationKey(item);
@@ -335,7 +378,9 @@ const mountedRef = useRef(true);
         continue;
       }
       seededKeysRef.add(key);
-      if (isNotificationUnread(item, lastSeenMs)) {
+      if (
+        isNotificationUnread(item, lastSeenMs, verificationSeenKey, verificationSeenLoaded)
+      ) {
         if (!newestNew || item.createdAtMs > newestNew.createdAtMs) {
           newestNew = item;
         }
@@ -359,7 +404,14 @@ if (newestNew) {
         }
       }
     }
-  }, [items, lastSeenMs, lastSeenLoaded, loading]);
+  }, [
+    items,
+    lastSeenMs,
+    lastSeenLoaded,
+    verificationSeenKey,
+    verificationSeenLoaded,
+    loading,
+  ]);
 
   return null;
 }

@@ -20,6 +20,19 @@ const REACHABILITY_URL = "https://clients3.google.com/generate_204";
 const PROBE_TIMEOUT_MS = 5000;
 const PROBE_INTERVAL_MS = 3000;
 
+/**
+ * Cold-start hardening (no rebuild required — pure JS).
+ * - A single failed probe must NEVER show the overlay: on cold start the
+ *   first fetch often fails while DNS/radio warms up and Firebase hammers
+ *   the connection for token refresh + Firestore reads. Require this many
+ *   CONSECUTIVE failures before declaring offline.
+ * - Even consecutive failures are ignored during the startup grace window
+ *   after mount, for the same reason. Manual "Try Again" bypasses both
+ *   (user-initiated = show the real result immediately).
+ */
+const CONSECUTIVE_FAILURES_TO_SHOW_OFFLINE = 2;
+const STARTUP_GRACE_MS = 8000;
+
 // Animation durations (ms).
 const FADE_IN_MS = 450;
 const FADE_OUT_MS = 350;
@@ -111,6 +124,11 @@ export default function NoInternetStart({ children }: { children: ReactNode }) {
   const mountedRef = useRef(true);
   // Reference to the active probe timer.
   const probeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Consecutive failed probes (interval probes only). Reset on any success.
+  const consecutiveFailuresRef = useRef(0);
+  // Mount timestamp — interval probes inside the grace window can never
+  // flip the overlay on (cold-start radio/DNS warmup, Firebase token storm).
+  const mountedAtRef = useRef(Date.now());
   // Show/Hide opacity of the offline overlay.
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   // Gentle up/down float of the illustration.
@@ -128,15 +146,44 @@ const blocking = isPreLoginRoute(pathname);
     // avoid any interference with offline (cached) usage.
     if (!blocking) {
       setOffline(false);
+      consecutiveFailuresRef.current = 0;
       return;
     }
+    // Fresh stay on pre-login (cold start → route swap before save_login
+    // gate settles). Reset the failure streak so a single stale fail from
+    // the previous route can't stack with a fresh one into a phantom flash.
+    consecutiveFailuresRef.current = 0;
+
+    // Report an interval probe result. Any success clears the streak and
+    // hides the overlay immediately. A failure only shows the overlay after
+    // CONSECUTIVE_FAILURES_TO_SHOW_OFFLINE in a row AND outside the startup
+    // grace window — a lone cold-start timeout can never flash it.
+    const handleProbeResult = (ok: boolean, manual: boolean) => {
+      if (!mountedRef.current) {
+        return;
+      }
+      if (ok) {
+        consecutiveFailuresRef.current = 0;
+        setOffline(false);
+        return;
+      }
+      if (manual) {
+        consecutiveFailuresRef.current = 0;
+        setOffline(true);
+        return;
+      }
+      if (Date.now() - mountedAtRef.current < STARTUP_GRACE_MS) {
+        return;
+      }
+      consecutiveFailuresRef.current += 1;
+      if (consecutiveFailuresRef.current >= CONSECUTIVE_FAILURES_TO_SHOW_OFFLINE) {
+        setOffline(true);
+      }
+    };
 
     const runProbe = () => {
       void probeReachable().then((ok) => {
-        if (!mountedRef.current) {
-          return;
-        }
-        setOffline(!ok);
+        handleProbeResult(ok, false);
       });
     };
 
@@ -222,6 +269,9 @@ const blocking = isPreLoginRoute(pathname);
       if (!mountedRef.current) {
         return;
       }
+      // Manual retry is user-initiated: report the real result immediately,
+      // bypassing the grace window / consecutive-failure debounce.
+      consecutiveFailuresRef.current = 0;
       setOffline(!ok);
       setChecking(false);
     });

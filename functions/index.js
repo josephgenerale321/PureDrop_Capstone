@@ -359,6 +359,36 @@ export const directPasswordReset = onRequest(
   },
 );
 
+const normalizeVerificationStatusForPush = (value) => {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "verified") return "verified";
+  if (normalized === "rejected") return "rejected";
+  if (normalized === "pending") return "pending";
+  return normalized || "";
+};
+
+const buildVerificationPushBody = (status, rejectionTarget) => {
+  if (status === "verified") {
+    return "Your account has been verified. Welcome to PureDrop!";
+  }
+
+  if (status === "rejected") {
+    if (rejectionTarget === "valid_id") {
+      return "Your Valid ID was rejected. Please resubmit it to continue.";
+    }
+    if (rejectionTarget === "face_scan") {
+      return "Your face scan was rejected. Please resubmit it to continue.";
+    }
+    return "Your verification was rejected. Please re-verify your ID to continue.";
+  }
+
+  return "Your verification status has been updated. Please open the app to review it.";
+};
+
 /**
  * Normalizes a report status value to the canonical form used by the app.
  * Mirrors the mobile client's normalizeStatus so the push message title
@@ -491,6 +521,118 @@ export const sendReportStatusPush = onDocumentUpdated(
       const message = error instanceof Error ? error.message : String(error);
       // Pushes are best-effort; failures must never break report updates.
       logger.warn("sendReportStatusPush failed", { userId, reportId, message });
+    }
+  },
+);
+
+/**
+ * Sends an Expo push notification to a user when the admin decides on their
+ * identity verification (`regular_user/{uid}.verificationStatus` changes to
+ * "verified" or "rejected"). This is the ONLY outside-app signal for the
+ * verification flow — the in-app realtime watcher
+ * (components/verification/backend/useVerificationDecisionWatcher.ts) only
+ * fires while the app is open on a verification screen.
+ *
+ * Mirrors sendReportStatusPush: reads the same `expoPushToken` /
+ * `pushNotificationEnabled` fields on the same user doc and POSTs to the
+ * same Expo push service on the same `report-updates` Android channel so no
+ * app rebuild is required.
+ */
+export const sendVerificationStatusPush = onDocumentUpdated(
+  {
+    document: "regular_user/{userId}",
+    region: REGION,
+    memory: "256MiB",
+  },
+  async (event) => {
+    const before = event.data?.before?.data?.();
+    const after = event.data?.after?.data?.();
+
+    if (!before || !after) {
+      return;
+    }
+
+    const beforeStatus = normalizeVerificationStatusForPush(before.verificationStatus);
+    const afterStatus = normalizeVerificationStatusForPush(after.verificationStatus);
+    if (!afterStatus || afterStatus === beforeStatus) {
+      return;
+    }
+
+    // Only the terminal admin decisions produce an outside notification.
+    // Intermediate states (pending / awaiting_id / incomplete) are covered
+    // by the in-app hub UI and watcher.
+    if (afterStatus !== "verified" && afterStatus !== "rejected") {
+      return;
+    }
+
+    const userId = event.params.userId;
+
+    try {
+      const userData = after || {};
+      const token = typeof userData.expoPushToken === "string" ? userData.expoPushToken : "";
+      const pushEnabled = userData.pushNotificationEnabled;
+
+      if (!token) {
+        return;
+      }
+
+      if (pushEnabled === false) {
+        return;
+      }
+
+      const rawTarget = after.rejectionTarget;
+      const rejectionTarget =
+        rawTarget === "valid_id" || rawTarget === "face_scan" || rawTarget === "both"
+          ? rawTarget
+          : "both";
+
+      const body = buildVerificationPushBody(afterStatus, rejectionTarget);
+      const isVerified = afterStatus === "verified";
+
+      const response = await fetch(EXPO_PUSH_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: token,
+          title: isVerified ? "Account verified" : "Verification update",
+          body,
+          sound: "default",
+          // Reuse the existing channel so devices on the current build show
+          // the banner / lock-screen notification without an app update.
+          channelId: "report-updates",
+          priority: "high",
+          data: {
+            kind: "verification",
+            verificationStatus: afterStatus,
+            rejectionTarget,
+            route: isVerified ? "/login/validation/fullyverif" : "/login/validation/rejectedverif",
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        logger.warn("sendVerificationStatusPush non-OK response", {
+          userId,
+          status: response.status,
+          verificationStatus: afterStatus,
+        });
+        return;
+      }
+
+      const payload = await response.json();
+      if (payload?.data?.[0]?.status === "error") {
+        logger.warn("Expo verification push rejected", {
+          userId,
+          message: payload.data[0].message,
+        });
+        return;
+      }
+
+      logger.info("sendVerificationStatusPush delivered", { userId, verificationStatus: afterStatus });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Pushes are best-effort; failures must never break verification updates.
+      logger.warn("sendVerificationStatusPush failed", { userId, message });
     }
   },
 );

@@ -22,58 +22,121 @@ import {
 import { styles } from "../../../components/notifications/notif_styles";
 
 const getStatusColor = (status: string) => {
-  if (status === "Approved") return "#166534";
+  if (status === "Approved" || status === "Verified") return "#166534";
   if (status === "Resolving") return "#1d4ed8";
   if (status === "Rejected") return "#b91c1c";
   return "#1f2937";
 };
 
 const getStatusIcon = (status: string): keyof typeof Ionicons.glyphMap => {
-  if (status === "Approved") return "checkmark-circle";
+  if (status === "Approved" || status === "Verified") return "checkmark-circle";
   if (status === "Resolving") return "construct";
   if (status === "Rejected") return "close-circle";
   return "time";
 };
 
 const getStatusIconColor = (status: string) => {
-  if (status === "Approved") return "#16A34A";
+  if (status === "Approved" || status === "Verified") return "#16A34A";
   if (status === "Resolving") return "#2563EB";
   if (status === "Rejected") return "#DC2626";
   return "#94A3B8";
 };
 
 const getStatusWrapStyle = (status: string) => {
-  if (status === "Approved") return styles.statusWrapApproved;
+  if (status === "Approved" || status === "Verified") return styles.statusWrapApproved;
   if (status === "Resolving") return styles.statusWrapResolving;
   if (status === "Rejected") return styles.statusWrapRejected;
   return styles.statusWrapPending;
 };
 
+const getCardTitle = (item: NotificationItem) => {
+  if (item.kind === "verification") {
+    return "Account Verification";
+  }
+  return `Report #${item.reportId}`;
+};
+
+const getCardAccessibilityLabel = (item: NotificationItem) => {
+  if (item.kind === "verification") {
+    return `Open account verification notification, status ${item.status}`;
+  }
+  return `Open report ${item.reportId} notification`;
+};
+
 function NotificationCard({
   item,
   lastSeenMs,
+  verificationSeenKey,
+  verificationSeenLoaded,
   onOpenReport,
 }: {
   item: NotificationItem;
   lastSeenMs: number;
+  verificationSeenKey: string | null;
+  verificationSeenLoaded: boolean;
   onOpenReport: (item: NotificationItem) => void;
 }) {
+  // Verification cards are informational only — the message already carries
+  // the full decision text, and the celebration / rejection screens are
+  // login-gate one-timers that bounce straight Home on revisit. Making the
+  // card tappable would push there and instantly bounce back (ping-pong),
+  // so only report cards navigate. Verification unread is per-decision
+  // (seenKey), never wall-clock — its timestamps are frozen post-decision.
+  const isVerification = item.kind === "verification";
+  const unread = isNotificationUnread(
+    item,
+    lastSeenMs,
+    verificationSeenKey,
+    verificationSeenLoaded,
+  );
+
+  if (isVerification) {
+    return (
+      <View
+        style={[
+          styles.card,
+          unread && styles.unreadCard,
+        ]}
+        accessibilityRole="text"
+        accessibilityLabel={`Account verification notification, status ${item.status}`}
+      >
+        {unread ? <View style={styles.unreadAccent} /> : null}
+        <View style={styles.rowBetween}>
+          <View style={styles.reportTitleWrap}>
+            {unread ? <View style={styles.inPageRedDot} /> : null}
+            <Text style={styles.reportId}>{getCardTitle(item)}</Text>
+          </View>
+          <View style={[styles.statusWrap, getStatusWrapStyle(item.status)]}>
+            <Ionicons name={getStatusIcon(item.status)} size={13} color={getStatusIconColor(item.status)} />
+            <Text style={[styles.status, { color: getStatusColor(item.status) }]}>{item.status}</Text>
+          </View>
+        </View>
+
+        <Text style={styles.message}>{item.message}</Text>
+
+        <View style={styles.footerRow}>
+          <Text style={styles.date}>{formatRelativeTime(item.createdAtMs)}</Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <TouchableOpacity
       style={[
         styles.card,
-        isNotificationUnread(item, lastSeenMs) && styles.unreadCard,
+        unread && styles.unreadCard,
       ]}
       onPress={() => onOpenReport(item)}
       activeOpacity={0.82}
       accessibilityRole="button"
-      accessibilityLabel={`Open report ${item.reportId} notification`}
+      accessibilityLabel={getCardAccessibilityLabel(item)}
     >
-      {isNotificationUnread(item, lastSeenMs) ? <View style={styles.unreadAccent} /> : null}
+      {unread ? <View style={styles.unreadAccent} /> : null}
       <View style={styles.rowBetween}>
         <View style={styles.reportTitleWrap}>
-          {isNotificationUnread(item, lastSeenMs) ? <View style={styles.inPageRedDot} /> : null}
-          <Text style={styles.reportId}>Report #{item.reportId}</Text>
+          {unread ? <View style={styles.inPageRedDot} /> : null}
+          <Text style={styles.reportId}>{getCardTitle(item)}</Text>
         </View>
         <View style={[styles.statusWrap, getStatusWrapStyle(item.status)]}>
           <Ionicons name={getStatusIcon(item.status)} size={13} color={getStatusIconColor(item.status)} />
@@ -115,6 +178,8 @@ export default function NotificationScreen() {
     refreshing,
     unreadCount,
     lastSeenMs,
+    verificationSeenKey,
+    verificationSeenLoaded,
     markAllAsRead,
     refresh,
   } = useReportNotifications();
@@ -131,7 +196,10 @@ export default function NotificationScreen() {
 
   const handleOpenReport = (item: NotificationItem) => {
     try {
-      if (!item || !item.reportId) {
+      // Report cards open the report. Verification cards are NOT tappable
+      // (rendered as a plain View above), so this only ever sees reports —
+      // the guard below is just a type-level safety net.
+      if (!item || item.kind === "verification" || !item.reportId) {
         return;
       }
 
@@ -207,7 +275,8 @@ export default function NotificationScreen() {
             </View>
             <Text style={styles.emptyTitle}>No notifications yet</Text>
             <Text style={styles.emptySub}>
-              You will receive updates here when the status of your submitted reports changes.
+              You will receive updates here when the status of your submitted reports
+              or your account verification changes.
             </Text>
             <TouchableOpacity
               style={styles.emptyCta}
@@ -240,6 +309,8 @@ export default function NotificationScreen() {
                     key={notification.id}
                     item={notification}
                     lastSeenMs={lastSeenMs}
+                    verificationSeenKey={verificationSeenKey}
+                    verificationSeenLoaded={verificationSeenLoaded}
                     onOpenReport={handleOpenReport}
                   />
                 ))}

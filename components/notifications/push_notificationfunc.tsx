@@ -1,6 +1,7 @@
 import Constants from "expo-constants";
 import { requireOptionalNativeModule } from "expo-modules-core";
-import { useRouter } from "expo-router";
+import type { NotificationResponse } from "expo-notifications";
+import { type Href, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { useEffect, useRef } from "react";
@@ -357,13 +358,26 @@ export default function PushNotificationSync() {
     const Notifications = getNotificationsModule();
     if (Notifications) {
       responseSubscriptionRef.current =
-        Notifications.addNotificationResponseReceivedListener(() => {
-          try {
-            router.push("/regular_user/notifications");
-          } catch {
-            // Notification taps should never crash navigation.
-          }
-        });
+        Notifications.addNotificationResponseReceivedListener(
+          (response: NotificationResponse) => {
+            try {
+              // Verification pushes carry `data.route` (fullyverif / rejectedverif)
+              // from sendVerificationStatusPush / the admin dashboard. Report
+              // pushes carry the notifications list route. Fall back to the list
+              // for legacy payloads without a route.
+              const rawRoute = (response?.notification?.request?.content?.data as
+                | { route?: unknown }
+                | undefined)?.route;
+              const route =
+                typeof rawRoute === "string" && rawRoute.startsWith("/")
+                  ? (rawRoute as Href)
+                  : ("/regular_user/notifications" as Href);
+              router.push(route);
+            } catch {
+              // Notification taps should never crash navigation.
+            }
+          },
+        );
     }
 
     return () => {

@@ -45,9 +45,18 @@ const isNotificationsRoute = (pathname: string): boolean => {
  * status — only `statusUpdatedAt` (and therefore `createdAtMs`) and `status`
  * change. So we key on the triplet `reportId + createdAtMs + status`, which
  * changes every time the admin sets a new status.
+ *
+ * Verification cards are derived from the user doc (no own timestamp that
+ * moves), so they key on the provider's per-decision `seenKey`
+ * (`status:updatedAt:rejectionCount`) — stable across restarts, new on every
+ * genuine new decision.
  */
-const getNotificationKey = (item: NotificationItem): string =>
-  `${item.id}:${item.createdAtMs}:${item.status}`;
+const getNotificationKey = (item: NotificationItem): string => {
+  if (item.kind === "verification") {
+    return `verification:${item.seenKey ?? `${item.status}:${item.createdAtMs}`}`;
+  }
+  return `${item.id}:${item.createdAtMs}:${item.status}`;
+};
 
 /**
  * Module-level "already seen / already presented" trackers.
@@ -173,8 +182,16 @@ export default function FloatingNotification() {
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
 
-  const { items, loading, lastSeenMs, lastSeenLoaded, markAllAsRead } =
-    useReportNotifications();
+  const {
+    items,
+    loading,
+    lastSeenMs,
+    lastSeenLoaded,
+    verificationSeenKey,
+    verificationSeenLoaded,
+    markAllAsRead,
+    markVerificationAsSeen,
+  } = useReportNotifications();
 
   const [toast, setToast] = useState<NotificationItem | null>(null);
   const [visible, setVisible] = useState(false);
@@ -299,11 +316,19 @@ const mountedRef = useRef(true);
    * same notification is never re-presented as a floating banner.
    */
   useEffect(() => {
-    // Wait until the read timestamp and the persisted presented-key set have
-    // been resolved. On a fresh app/phone restart, lastSeenMs is briefly 0
-    // while AsyncStorage/Firestore load — if we presented now, every
-    // notification would look unread and a phantom banner would appear.
-    if (loading || !lastSeenLoaded || !presentedLoaded || items.length === 0) {
+    // Wait until the read states and the persisted presented-key set have
+    // been resolved. On a fresh app/phone restart these are briefly
+    // unresolved while AsyncStorage/Firestore load — presenting now would
+    // treat everything as new and a phantom banner would appear. The
+    // verification gate matters most: its card timestamps are frozen after
+    // the decision, so without it EVERY restart replays "Account verified".
+    if (
+      loading ||
+      !lastSeenLoaded ||
+      !verificationSeenLoaded ||
+      !presentedLoaded ||
+      items.length === 0
+    ) {
       return;
     }
 
@@ -321,6 +346,7 @@ const mountedRef = useRef(true);
     // Look for a genuinely new unread notification we have not seen before.
     // The key includes status + statusUpdatedAt, so an admin re-setting the
     // status on an EXISTING report produces a new key and is treated as new.
+    // Verification unread is per-decision (seenKey), never wall-clock.
     let newestNew: NotificationItem | null = null;
     for (const item of items) {
       const key = getNotificationKey(item);
@@ -328,7 +354,9 @@ const mountedRef = useRef(true);
         continue;
       }
       seededKeysRef.add(key);
-      if (isNotificationUnread(item, lastSeenMs)) {
+      if (
+        isNotificationUnread(item, lastSeenMs, verificationSeenKey, verificationSeenLoaded)
+      ) {
         if (!newestNew || item.createdAtMs > newestNew.createdAtMs) {
           newestNew = item;
         }
@@ -342,7 +370,16 @@ const mountedRef = useRef(true);
         present(newestNew);
       }
     }
-  }, [items, lastSeenMs, lastSeenLoaded, presentedLoaded, loading, present]);
+  }, [
+    items,
+    lastSeenMs,
+    lastSeenLoaded,
+    verificationSeenKey,
+    verificationSeenLoaded,
+    presentedLoaded,
+    loading,
+    present,
+  ]);
 
   /**
    * Hide the banner when the user navigates to the notifications screen.
@@ -370,6 +407,7 @@ const mountedRef = useRef(true);
       return;
     }
 
+    const openedKind = toast.kind;
     dismiss();
     try {
       router.push("/regular_user/notifications");
@@ -377,7 +415,14 @@ const mountedRef = useRef(true);
       // Navigation must never crash the app.
     }
     try {
-      markAllAsRead();
+      // Verification toasts acknowledge ONLY the verification decision —
+      // never bump the report wall-clock. Report toasts keep the existing
+      // mark-all behavior.
+      if (openedKind === "verification") {
+        void markVerificationAsSeen();
+      } else {
+        void markAllAsRead();
+      }
     } catch {
       // Firestore write errors are non-fatal.
     }
@@ -424,14 +469,26 @@ const mountedRef = useRef(true);
           onPress={handleOpen}
           activeOpacity={0.85}
           accessibilityRole="button"
-          accessibilityLabel={`New notification for report ${toast.reportId}`}
+          accessibilityLabel={
+            toast.kind === "verification"
+              ? `Account verification ${toast.status} notification`
+              : `New notification for report ${toast.reportId}`
+          }
         >
           <View style={styles.iconWrap}>
-            <Ionicons name="notifications" size={20} color="#FFFFFF" />
+            <Ionicons
+              name={toast.kind === "verification" ? "shield-checkmark" : "notifications"}
+              size={20}
+              color="#FFFFFF"
+            />
           </View>
           <View style={styles.textWrap}>
             <Text style={styles.title} numberOfLines={1}>
-              Report #{toast.reportId}
+              {toast.kind === "verification"
+                ? toast.status === "Verified"
+                  ? "Account verified"
+                  : "Verification update"
+                : `Report #${toast.reportId}`}
             </Text>
             <Text style={styles.message} numberOfLines={1}>
               {toast.message}
