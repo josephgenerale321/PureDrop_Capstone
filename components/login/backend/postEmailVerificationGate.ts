@@ -164,7 +164,7 @@ const GATE_DEBUG = __DEV__;
 /** Timestamped diagnostic line used to find the slow span on cold start. */
 const gateLog = (label: string, t0: number): void => {
   if (GATE_DEBUG) {
-    // eslint-disable-next-line no-console
+     
     console.log(`[gate] ${label} +${Date.now() - t0}ms`);
   }
 };

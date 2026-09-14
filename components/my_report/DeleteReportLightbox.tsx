@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
   deleteDoc,

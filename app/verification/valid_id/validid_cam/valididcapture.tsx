@@ -138,7 +138,6 @@ function NativeIdCapture({
   side: IdPhotoSide;
 }) {
   const {
-    isFocused,
     device,
     hasPermission,
     canRequestPermission,

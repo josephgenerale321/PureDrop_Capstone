@@ -3,7 +3,6 @@ import EditProfileLightbox from "../../../components/profile/editprofile_lightbo
 import ProfileComponent from "../../../components/profile/profilecomponent";
 import {
   useProfileBackend,
-  type EditableProfileValues,
 } from "../../../components/profile/useProfileBackend";
 
 export default function ProfileViewScreen() {

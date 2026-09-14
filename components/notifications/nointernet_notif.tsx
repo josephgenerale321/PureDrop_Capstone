@@ -208,7 +208,7 @@ return (
           </View>
         </View>
         <Text style={styles.message}>
-          Check your Wi-Fi or mobile data. You'll be back online as soon as
+          Check your Wi-Fi or mobile data. You&apos;ll be back online as soon as
           connectivity returns.
         </Text>
         <View style={styles.footerRow}>

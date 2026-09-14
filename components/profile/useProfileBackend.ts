@@ -350,7 +350,7 @@ export function useProfileBackend() {
           FIRESTORE_TIMEOUT_MS,
           "Profile save"
         );
-      } catch (firstError) {
+      } catch {
         // First attempt timed out (cold start). Retry once — the connection is
         // now warm. But still let the retry surface a real failure if any.
         await withTimeout(

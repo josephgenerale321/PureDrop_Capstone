@@ -1,4 +1,4 @@
-﻿import { deleteField, doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { deleteField, doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "../../../../firebaseConfig";
 import {
   removeVerificationPhoto,

@@ -248,9 +248,9 @@ const blocking = isPreLoginRoute(pathname);
         />
       </Animated.View>
 
-      <Text style={styles.title}>You're offline</Text>
+      <Text style={styles.title}>You&apos;re offline</Text>
       <Text style={styles.message}>
-        Looks like you've lost your internet connection. Turn your Wi-Fi or
+        Looks like you&apos;ve lost your internet connection. Turn your Wi-Fi or
         mobile data back on, then try again.
       </Text>
 
@@ -273,7 +273,7 @@ const blocking = isPreLoginRoute(pathname);
         )}
       </TouchableOpacity>
 
-      <Text style={styles.autoNote}>We'll reconnect you automatically</Text>
+      <Text style={styles.autoNote}>We&apos;ll reconnect you automatically</Text>
     </Animated.View>
   );
 }

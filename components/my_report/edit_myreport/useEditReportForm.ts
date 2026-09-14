@@ -603,7 +603,7 @@ export function useEditReportForm(reportId: string) {
     return () => {
       stopFollowing();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   const launchPicker = async (source: "camera" | "gallery") => {

@@ -257,6 +257,7 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apply/clamp are per-render closures over refs; adding them would refetch the bitmap size every render
   }, [uri]);
   useEffect(() => {
     const s = state.current;
@@ -532,16 +533,16 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
   // frame — that restart is the flicker. So start/move frames only ADD/UPDATE
   // points; only an end frame may REMOVE them.
   const collectTouches = (raw: unknown) => {
-    const out: Array<{ id: number; x: number; y: number; lx: number | null; ly: number | null }> = [];
+    const out: { id: number; x: number; y: number; lx: number | null; ly: number | null }[] = [];
     try {
       if (Array.isArray(raw)) {
-        for (const t of raw as Array<{
+        for (const t of raw as {
           identifier?: unknown;
           pageX?: unknown;
           pageY?: unknown;
           locationX?: unknown;
           locationY?: unknown;
-        }>) {
+        }[]) {
           if (
             t &&
             typeof t.identifier === "number" &&
@@ -666,9 +667,9 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
   // Reused across move frames — filled by livePointsInto, never allocated
   // per frame (old-phone GC win: a 120Hz touch stream used to allocate 2-3
   // arrays + a Map snapshot on EVERY frame).
-  const liveScratch: Array<{ id: number; x: number; y: number; lx: number | null; ly: number | null }> = [];
+  const liveScratch: { id: number; x: number; y: number; lx: number | null; ly: number | null }[] = [];
   const livePointsInto = (
-    out: Array<{ id: number; x: number; y: number; lx: number | null; ly: number | null }>,
+    out: { id: number; x: number; y: number; lx: number | null; ly: number | null }[],
     pruneStale: boolean,
   ) => {
     out.length = 0;
@@ -700,7 +701,7 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
   };
   const livePoints = () => livePointsInto(liveScratch, false);
 
-  const pinchDistance = (pts: Array<{ x: number; y: number }>) => {
+  const pinchDistance = (pts: { x: number; y: number }[]) => {
     try {
       if (pts.length < 2) return 0;
       const dx = pts[0].x - pts[1].x;
@@ -712,7 +713,7 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
     }
   };
 
-  const pinchCentroid = (pts: Array<{ x: number; y: number; lx: number | null; ly: number | null }>) => {
+  const pinchCentroid = (pts: { x: number; y: number; lx: number | null; ly: number | null }[]) => {
     try {
       if (pts.length < 2) return null;
       const cx = (pts[0].x + pts[1].x) / 2;
@@ -1155,7 +1156,6 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
                     const m1 = Math.hypot(v1.x, v1.y);
                     if (Number.isFinite(m0) && Number.isFinite(m1)) {
                       const minM = Math.min(m0, m1);
-                      const maxM = Math.max(m0, m1);
                       // BOTH fingers must actually be moving: anchoring one
                       // finger while dragging the other IS a real pinch
                       // (distance-driven zoom), not a slide.
@@ -1695,6 +1695,7 @@ export default function ZoomablePhoto({ uri, accessibilityLabel, containerStyle,
           }
         },
       }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- PanResponder must be created once; helpers are stable ref-based closures, re-creating per render would drop in-flight gestures
     [],
   );
 

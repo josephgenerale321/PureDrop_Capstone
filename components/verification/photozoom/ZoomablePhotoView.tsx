@@ -13,7 +13,7 @@
  * no JS listener overhead.
  */
 import { useEffect, useRef } from "react";
-import { Image, StyleSheet } from "react-native";
+import { StyleSheet } from "react-native";
 import Animated, {
   cancelAnimation,
   useAnimatedStyle,

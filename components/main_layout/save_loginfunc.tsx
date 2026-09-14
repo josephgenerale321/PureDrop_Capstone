@@ -702,7 +702,7 @@ export default function SaveLoginSync() {
               const profileRef = doc(db, "regular_user", syncingUser.uid);
               const profileSnap = await getDoc(profileRef);
               if (typeof __DEV__ !== "undefined" && __DEV__) {
-                // eslint-disable-next-line no-console
+                 
                 console.log(`[gate] profile getDoc +${Date.now() - t0}ms`);
               }
               syncedProfileData = profileSnap.exists()

@@ -306,7 +306,9 @@ export function loadNativeModules(): { modules: NativeModules | null; error: unk
 
   try {
     cachedModules = {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy native-module load: static import would crash web / dev clients missing the native code
       visionCamera: require("react-native-vision-camera") as VisionCameraModule,
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- see above
       faceDetector: require("react-native-vision-camera-face-detector") as FaceDetectorModule,
     };
   } catch (error) {

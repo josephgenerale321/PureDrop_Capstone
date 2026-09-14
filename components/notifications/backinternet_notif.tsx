@@ -206,7 +206,7 @@ const mountedRef = useRef(true);
                 color="#86EFAC"
               />
             </View>
-            <Text style={styles.title}>You're back online</Text>
+            <Text style={styles.title}>You&apos;re back online</Text>
           </View>
           <View style={[styles.statusWrap, styles.statusWrapOnline]}>
             <Text style={[styles.status, styles.statusOnline]}>Online</Text>
