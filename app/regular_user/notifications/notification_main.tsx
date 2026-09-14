@@ -359,7 +359,15 @@ export default function NotificationScreen() {
 <FlashList
             data={sections}
             keyExtractor={(section) => section.bucket}
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={[
+              styles.listContent,
+              // The tab bar is absolutely positioned (70pt) and overlays this
+              // screen, so the list needs matching bottom clearance — otherwise
+              // the last card (e.g. Report #15) slides under the tab bar and
+              // looks cut off. Extra 24pt keeps breathing room above it, plus
+              // the bottom safe-area inset on devices with a home indicator.
+              { paddingBottom: 70 + Math.max(0, insets.bottom) + 24 },
+            ]}
             extraData={[lastSeenMs, verificationSeenKey, verificationSeenLoaded]}
             refreshControl={
               <RefreshControl

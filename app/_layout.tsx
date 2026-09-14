@@ -3,6 +3,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import SaveLoginSync from "../components/main_layout/save_loginfunc";
 import NoInternetStart from "../components/internet_error/startup/no_internetstart";
 import VerificationPushSync from "../components/verification/backend/verificationPushSync";
+import ImmersiveNavBar from "../components/system/immersiveNavBar";
 
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   return (
@@ -21,6 +22,7 @@ export default function RootLayout() {
     <NoInternetStart>
       <SaveLoginSync />
       <VerificationPushSync />
+      <ImmersiveNavBar />
       <Stack
         screenOptions={{
           headerShown: false,
