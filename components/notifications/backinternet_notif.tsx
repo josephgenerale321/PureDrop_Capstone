@@ -20,6 +20,14 @@ const REACHABILITY_URL = "https://clients3.google.com/generate_204";
 const PROBE_TIMEOUT_MS = 5000;
 const PROBE_INTERVAL_MS = 3000;
 
+// How many CONSECUTIVE failed probes it takes to believe we are really
+// offline. A single failed probe is usually just a slow fetch (cold
+// Firestore re-handshake saturating the radio for 5s+ right after a
+// reject -> approve remount of this component) — not a real disconnect.
+// Requiring 2 in a row filters those blips so the "You're back online"
+// banner only fires on a genuine offline -> online transition.
+const OFFLINE_CONFIRM_COUNT = 2;
+
 // Animation duration for sliding the banner in/out.
 const ANIM_DURATION_MS = 280;
 // How long the "back online" banner stays visible before auto-dismissing.
@@ -86,10 +94,15 @@ const mountedRef = useRef(true);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // `false` on mount so the banner NEVER shows on the very first probe when
   // the app is already online (e.g. reopening/refreshing with Wi-Fi on). It is
-  // only set to `true` after we actually observe an offline state, so the
-  // banner appears exclusively on a GENUINE offline → online transition that
-  // happens while the app is running.
+  // only set to `true` after we CONFIRM an offline state (see
+  // OFFLINE_CONFIRM_COUNT), so the banner appears exclusively on a GENUINE
+  // offline → online transition that happens while the app is running — never
+  // on a single slow probe during a reject → approve remount.
   const wasOfflineRef = useRef(false);
+  // Counts consecutive failed probes; reset on any success. Guards against a
+  // lone 5s-timeout blip (radio saturated by the Firestore re-handshake)
+  // being mistaken for a real disconnect.
+  const offlineStrikesRef = useRef(0);
   const anim = useRef(new Animated.Value(0)).current;
 
   const clearHideTimer = () => {
@@ -147,15 +160,21 @@ const mountedRef = useRef(true);
           return;
         }
         if (ok) {
-          // Now online — if we were previously offline, this is a genuine
+          // Any success resets the strike counter.
+          offlineStrikesRef.current = 0;
+          // Now online — if we CONFIRMED offline before, this is a genuine
           // "connection restored" transition, so show the banner.
           if (wasOfflineRef.current) {
             wasOfflineRef.current = false;
             show();
           }
         } else {
-          // Offline — remember it so the next online probe triggers the banner.
-          wasOfflineRef.current = true;
+          // One failure proves nothing (slow probe during a remount) —
+          // only treat as offline after OFFLINE_CONFIRM_COUNT in a row.
+          offlineStrikesRef.current += 1;
+          if (offlineStrikesRef.current >= OFFLINE_CONFIRM_COUNT) {
+            wasOfflineRef.current = true;
+          }
         }
       });
     };

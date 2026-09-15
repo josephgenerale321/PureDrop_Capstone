@@ -13,6 +13,7 @@ import {
   getProfileFast,
   revalidateProfileInBackground,
   saveProfileCache,
+  type ProfileFastSource,
 } from "./offline_profile_cache";
 
 /**
@@ -281,10 +282,13 @@ export default function SaveLoginSync() {
   // does not start a second overlapping sync (dedupes network reads).
   const syncingRef = useRef(false);
   // Latest profile snapshot fetched during the auth sync. Reused by the
-  // settled redirect so the gate costs 0 extra Firestore reads.
+  // settled redirect so the gate costs 0 extra Firestore reads. `source` is
+  // carried through to the gate, which must not treat an `"async-cache"`
+  // snapshot without verification fields as routing-grade.
   const syncedProfileRef = useRef<{
     uid: string;
     data: Record<string, unknown> | null;
+    source?: ProfileFastSource;
   } | null>(null);
 
   useEffect(() => {
@@ -417,7 +421,8 @@ export default function SaveLoginSync() {
      */
     const settleWithProfile = (
       uid: string,
-      profileData: Record<string, unknown> | null
+      profileData: Record<string, unknown> | null,
+      profileSource?: ProfileFastSource
     ) => {
       if (
         handledSessionRef.current ||
@@ -437,6 +442,7 @@ export default function SaveLoginSync() {
               const laterTarget = await resolvePostLoginTarget({
                 uid,
                 data: profileData,
+                source: profileSource,
               });
               if (laterTarget === "rejected_notice") {
                 navigate("/login/validation/rejectedverif" as Href);
@@ -482,6 +488,7 @@ export default function SaveLoginSync() {
             const loginTarget = await resolvePostLoginTarget({
               uid,
               data: profileData,
+              source: profileSource,
             });
             target = targetForGate(loginTarget);
           } catch {
@@ -564,7 +571,7 @@ export default function SaveLoginSync() {
         // it. On the rare path where auth is already live but the sync hasn't
         // finished, fall back to a fresh single-read gate.
         if (profileForGate !== null || preloaded?.uid === currentUid) {
-          settleWithProfile(currentUid, profileForGate);
+          settleWithProfile(currentUid, profileForGate, preloaded?.source);
           return;
         }
 
@@ -669,7 +676,7 @@ export default function SaveLoginSync() {
         if (syncedUidRef.current === signedInUser.uid) {
           const again = syncedProfileRef.current;
           if (again && again.uid === signedInUser.uid) {
-            settleWithProfile(signedInUser.uid, again.data);
+            settleWithProfile(signedInUser.uid, again.data, again.source);
           } else {
             void maybeRedirect();
           }
@@ -686,8 +693,12 @@ export default function SaveLoginSync() {
 
         void (async () => {
           // Hoisted so the `finally` below can settle the redirect with the
-          // just-fetched snapshot (zero extra Firestore reads).
+          // just-fetched snapshot (zero extra Firestore reads). `source`
+          // travels with it: the gate must know whether the snapshot came from
+          // the ms-fast cache (which may lack verification fields) or the
+          // server (always authoritative).
           let syncedProfileData: Record<string, unknown> | null = null;
+          let syncedProfileSource: ProfileFastSource | undefined;
           try {
             // 1) Resolve the display name cache-first (zero network I/O).
             let cached: SavedLoginState;
@@ -708,6 +719,8 @@ export default function SaveLoginSync() {
             //    exactly 1 deduplicated server read worst-case.
             try {
               const profileRef = doc(db, "regular_user", syncingUser.uid);
+              // Foreground read (cache-first fast path + cold-boot server
+              // fallback). Logs, because this one CAN block navigation.
               const readServerDoc = async (): Promise<Record<string, unknown> | null> => {
                 const t0 = typeof __DEV__ !== "undefined" && __DEV__ ? Date.now() : 0;
                 try {
@@ -716,6 +729,20 @@ export default function SaveLoginSync() {
                 } finally {
                   if (typeof __DEV__ !== "undefined" && __DEV__) {
                     console.log(`[gate] profile getDocFromServer +${Date.now() - t0}ms`);
+                  }
+                }
+              };
+              // Background refresh AFTER navigation. Deliberately silent: it
+              // lands seconds later (cold handshake) and must never look like
+              // a blocking read in the log.
+              const readServerDocQuiet = async (): Promise<Record<string, unknown> | null> => {
+                const t0 = typeof __DEV__ !== "undefined" && __DEV__ ? Date.now() : 0;
+                try {
+                  const snap = await getDocFromServer(profileRef);
+                  return snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+                } finally {
+                  if (typeof __DEV__ !== "undefined" && __DEV__) {
+                    console.log(`[gate] profile revalidate (background) +${Date.now() - t0}ms`);
                   }
                 }
               };
@@ -736,7 +763,11 @@ export default function SaveLoginSync() {
                 });
                 if (isMounted) {
                   syncedUidRef.current = syncingUser.uid;
-                  syncedProfileRef.current = { uid: syncingUser.uid, data: fresh };
+                  syncedProfileRef.current = {
+                    uid: syncingUser.uid,
+                    data: fresh,
+                    source: "server",
+                  };
                 }
               };
               const fast = await getProfileFast({
@@ -757,12 +788,14 @@ export default function SaveLoginSync() {
                 console.log(`[gate] profile getDoc +${fast.elapsedMs}ms (${fast.source})`);
               }
               syncedProfileData = fast.data;
+              syncedProfileSource = fast.source;
               if (fast.source !== "server" && fast.data) {
                 // Served instantly from cache — refresh the server copy + all
-                // caches in the background (deduped with other callers).
+                // caches in the background (deduped with other callers). Uses
+                // the QUIET reader so the log can't be mistaken for a block.
                 revalidateProfileInBackground({
                   uid: syncingUser.uid,
-                  getServerSnapshot: readServerDoc,
+                  getServerSnapshot: readServerDocQuiet,
                   refreshCaches: refreshAllCaches,
                 });
               }
@@ -813,14 +846,19 @@ export default function SaveLoginSync() {
               syncedProfileRef.current = {
                 uid: syncingUser.uid,
                 data: syncedProfileData,
+                source: syncedProfileSource,
               };
             }
           } finally {
             syncingRef.current = false;
             if (isMounted) {
-              // Pass the just-fetched profile straight into the redirect so
-              // the gate reuses it (zero extra Firestore reads).
-              settleWithProfile(syncingUser.uid, syncedProfileData);
+              // Pass the just-fetched profile + its origin straight into the
+              // redirect so the gate reuses it (zero extra Firestore reads).
+              settleWithProfile(
+                syncingUser.uid,
+                syncedProfileData,
+                syncedProfileSource
+              );
             }
           }
         })();

@@ -83,8 +83,14 @@ const normalizeTarget = (value: unknown): "valid_id" | "face_scan" | "both" => {
 const buildVerificationMessage = (
   status: string,
   rejectionTarget: "valid_id" | "face_scan" | "both",
+  wasReapproved = false,
 ): string => {
   if (status === "verified") {
+    // Mirrors notif_func: explicit admin `wasReapproved` flag selects the
+    // "verified again / welcome back" wording; first approvals keep Welcome text.
+    if (wasReapproved) {
+      return "Your account has been verified again. Welcome back to PureDrop!";
+    }
     return "Your account has been verified. Welcome to PureDrop!";
   }
   if (status === "rejected") {
@@ -112,6 +118,8 @@ export const buildVerificationSeenKey = (data: {
   verificationStatus?: unknown;
   verificationRejectionCount?: unknown;
   rejectionTarget?: unknown;
+  wasReapproved?: unknown;
+  reapprovalCycle?: unknown;
 }): string | null => {
   const normalized =
     typeof data?.verificationStatus === "string"
@@ -129,7 +137,22 @@ export const buildVerificationSeenKey = (data: {
       : "";
   const target =
     rawTarget === "valid_id" || rawTarget === "face_scan" ? rawTarget : "both";
-  return [normalized, String(rejectionCount), target].join(":");
+  // Re-approval needs a NEW key: the admin approve resets
+  // verificationRejectionCount to 0, so `verified:0:both` would otherwise
+  // collide with the first approval (and consecutive re-approvals with each
+  // other) and the "verified again" notice would never fire. The trailing
+  // cycle segment mirrors mapUserDocToVerificationNotification in
+  // notif_func.tsx byte-for-byte. First approvals keep the legacy 3-part shape.
+  const parts = [normalized, String(rejectionCount), target];
+  if (data?.wasReapproved === true) {
+    const parsedReapprovalCycle = Number(data?.reapprovalCycle);
+    const reapprovalCycle =
+      Number.isFinite(parsedReapprovalCycle) && parsedReapprovalCycle > 0
+        ? Math.floor(parsedReapprovalCycle)
+        : 0;
+    parts.push("reapproved", String(reapprovalCycle));
+  }
+  return parts.join(":");
 };
 
 /**
@@ -159,6 +182,7 @@ const presentVerificationNotification = async (
   Notifications: any,
   status: string,
   rejectionTarget: "valid_id" | "face_scan" | "both",
+  wasReapproved = false,
 ): Promise<void> => {
   try {
     if (Platform.OS === "android") {
@@ -176,12 +200,13 @@ const presentVerificationNotification = async (
     await Notifications.scheduleNotificationAsync({
       content: {
         title: status === "verified" ? "Account verified" : "Verification update",
-        body: buildVerificationMessage(status, rejectionTarget),
+        body: buildVerificationMessage(status, rejectionTarget, wasReapproved),
         sound: "default",
         data: {
           kind: "verification",
           verificationStatus: status,
           rejectionTarget,
+          wasReapproved,
           route:
             status === "verified"
               ? "/login/validation/fullyverif"
@@ -307,7 +332,12 @@ export default function VerificationPushSync() {
           if (appStateRef.current) {
             return;
           }
-          void presentVerificationNotification(Notifications, status, rejectionTarget);
+          void presentVerificationNotification(
+            Notifications,
+            status,
+            rejectionTarget,
+            data?.wasReapproved === true,
+          );
         },
         () => {
           // Read failed (offline / permissions) — safe to ignore.

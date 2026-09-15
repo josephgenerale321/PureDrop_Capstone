@@ -23,6 +23,7 @@ type SendReportPushPayload = {
   kind?: string;
   verificationStatus?: string;
   rejectionTarget?: string;
+  wasReapproved?: boolean;
 };
 
 const jsonResponse = (body: Record<string, unknown>, status = 200) =>
@@ -255,8 +256,17 @@ const normalizeRejectionTarget = (value: unknown): "valid_id" | "face_scan" | "b
 const buildVerificationPushBody = (
   status: "verified" | "rejected",
   rejectionTarget: "valid_id" | "face_scan" | "both",
+  wasReapproved = false,
 ): string => {
   if (status === "verified") {
+    // Re-approved existing user (explicit `wasReapproved` flag written by the
+    // admin panel at approve time) gets the "verified again" wording;
+    // first-time approvals keep the original Welcome text. Mirrors the mobile
+    // client (notif_func.tsx / verificationPushSync.tsx) and the Cloud
+    // Function sendVerificationStatusPush word-for-word.
+    if (wasReapproved) {
+      return "Your account has been verified again. Welcome back to PureDrop!";
+    }
     return "Your account has been verified. Welcome to PureDrop!";
   }
   if (rejectionTarget === "valid_id") {
@@ -293,6 +303,7 @@ Deno.serve(async (request: Request) => {
   const rejectionTarget = isVerificationPush
     ? normalizeRejectionTarget(body.rejectionTarget)
     : "both";
+  const wasReapproved = isVerificationPush && body.wasReapproved === true;
   const reportId = typeof body.reportId === "string" ? body.reportId.trim() : "";
   const changedByAdmin = body.changedByAdmin !== false;
 
@@ -354,13 +365,18 @@ Deno.serve(async (request: Request) => {
         : "Verification update"
       : "Report update";
     const bodyText = isVerificationPush
-      ? buildVerificationPushBody(verificationStatus as "verified" | "rejected", rejectionTarget)
+      ? buildVerificationPushBody(
+          verificationStatus as "verified" | "rejected",
+          rejectionTarget,
+          wasReapproved,
+        )
       : buildPushBody(status, reportId, changedByAdmin);
     const pushData = isVerificationPush
       ? {
           kind: "verification",
           verificationStatus,
           rejectionTarget,
+          wasReapproved,
           route: isVerifiedPush
             ? "/login/validation/fullyverif"
             : "/login/validation/rejectedverif",

@@ -56,6 +56,113 @@ const CACHE_PREFIX = "@puredrop/profile_cache";
 // Sub-folder inside the FileSystem cache directory.
 const PROFILE_PHOTO_DIR = "profile-photos";
 
+// ---------------------------------------------------------------------------
+// Verification snapshot cache (gate-relevant fields)
+// ---------------------------------------------------------------------------
+//
+// WHY THIS EXISTS — the display cache above (`CachedProfile`) deliberately
+// holds ONLY name / address / email / water meter / photo. It carries NO
+// `verificationStatus`, and feeding that shape to the login gate
+// (`resolvePostLoginTarget`) made every cached boot look "not verified":
+// `data.verificationStatus === "verified"` was false, so the gate fell through
+// to its last branch and routed FULLY VERIFIED users back into
+// `/verification/verificationmain` (the "it still loops to verification"
+// bug — visible in the log as `gate: -> verification +1ms` with NO
+// `gate: verified+docs, checking celebration` line).
+//
+// This snapshot caches exactly the fields the gate needs so the fast path can
+// stay at ms AND route correctly. An explicit allowlist (not a whole-doc dump)
+// keeps AsyncStorage small and avoids persisting anything sensitive beyond
+// what the gate already reads.
+const VERIFICATION_CACHE_PREFIX = "@puredrop/verification_cache";
+
+/** Fields copied into the verification snapshot — keep in sync with the
+ * consumers: `resolvePostLoginTarget` (status / submission markers /
+ * counters / celebration) and the realtime decision watcher. */
+const VERIFICATION_FIELDS = [
+  "verificationStatus",
+  "rejectionTarget",
+  "verificationRejectionCount",
+  "rejectedNoticeSeenCount",
+  "rejectionReason",
+  "fullyVerifiedNoticeSeenAt",
+  "verifiedAt",
+  "wasReapproved",
+  "reapprovalCycle",
+  "faceScanUrl",
+  "faceScanPath",
+  "faceScanSubmittedAt",
+  "validIdFrontUrl",
+  "validIdFrontPath",
+  "validIdSubmittedAt",
+  "validIdType",
+] as const;
+
+/** `regular_user:{uid}` — verification snapshot key for a user. */
+const verificationKeyFor = (uid: string): string => `${VERIFICATION_CACHE_PREFIX}:${uid}`;
+
+/**
+ * Persists the gate-relevant slice of a fresh `regular_user` doc. Never
+ * throws; a storage failure only costs an extra server read on the next boot.
+ */
+export async function saveVerificationCache(
+  uid: string,
+  data: Record<string, unknown> | null | undefined,
+): Promise<void> {
+  if (!uid || !data) {
+    return;
+  }
+  try {
+    const payload: Record<string, unknown> = {};
+    for (const key of VERIFICATION_FIELDS) {
+      if (data[key] !== undefined) {
+        payload[key] = data[key];
+      }
+    }
+    await AsyncStorage.setItem(verificationKeyFor(uid), JSON.stringify(payload));
+  } catch {
+    // Non-fatal.
+  }
+}
+
+/**
+ * Reads the cached verification snapshot. Returns null when nothing is cached
+ * or the payload is unusable — callers then treat the account as "unknown"
+ * and fall back to an authoritative read.
+ */
+export async function getVerificationCache(
+  uid: string,
+): Promise<Record<string, unknown> | null> {
+  if (!uid) {
+    return null;
+  }
+  try {
+    const raw = await AsyncStorage.getItem(verificationKeyFor(uid));
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** Clears the verification snapshot (logout / account switch). Never throws. */
+export async function clearVerificationCache(uid: string): Promise<void> {
+  if (!uid) {
+    return;
+  }
+  try {
+    await AsyncStorage.removeItem(verificationKeyFor(uid));
+  } catch {
+    // Non-fatal.
+  }
+}
+
 export type CachedProfile = {
   fullName: string;
   address: string;
@@ -237,6 +344,10 @@ export async function clearProfileCache(uid: string): Promise<void> {
       await removeLocalPhoto(cached.profileImageLocalUri);
     }
     await AsyncStorage.removeItem(cacheKeyFor(uid));
+    // The gate-relevant snapshot must not outlive the display cache: a later
+    // account on this device must never inherit the previous user's
+    // verificationStatus.
+    await clearVerificationCache(uid);
   } catch {
     // Non-fatal.
   }
@@ -353,21 +464,25 @@ export async function getProfileFast(args: {
   }
 
   // 2) AsyncStorage text cache — instant greeting/avatar while the server
-  //    revalidates in the background.
+  //    revalidates in the background. NOTE: the background refresh lives
+  //    ONLY in the explicit caller (`revalidateProfileInBackground`) — not
+  //    here — so a cache hit never spawns a duplicate server read / log.
+  //
+  //    The display cache has no verification fields, so the gate-relevant
+  //    snapshot is merged in here. Without it every cached boot looked "not
+  //    verified" and the login gate routed fully-verified users back into the
+  //    verification flow. Callers that need to know whether the gate fields
+  //    are trustworthy must check for them explicitly (see
+  //    `resolvePostLoginTarget`), because the snapshot is absent on the first
+  //    boot after install / upgrade.
   try {
     const cached = await getProfileCache(uid);
     const asDoc = cachedProfileToDocData(cached, emailFallback);
     if (asDoc) {
-      // Best-effort background refresh so the next open hits tier 1.
-      void readServerProfileOnce(uid, getServerSnapshot).then((fresh) => {
-        if (fresh) {
-          try {
-            refreshCaches?.(fresh);
-          } catch {
-            // Non-fatal.
-          }
-        }
-      });
+      const verification = await getVerificationCache(uid);
+      if (verification) {
+        Object.assign(asDoc, verification);
+      }
       return { data: asDoc, source: "async-cache", elapsedMs: Date.now() - t0 };
     }
   } catch {
@@ -383,6 +498,9 @@ export async function getProfileFast(args: {
     } catch {
       // Non-fatal.
     }
+    // Prime the gate-relevant snapshot so the NEXT boot can route correctly
+    // from cache instead of paying this server read again.
+    void saveVerificationCache(uid, fresh);
     return { data: fresh, source: "server", elapsedMs: Date.now() - t0 };
   }
   return { data: null, source: "none", elapsedMs: Date.now() - t0 };
@@ -415,6 +533,9 @@ export function revalidateProfileInBackground(args: {
         } catch {
           // Non-fatal.
         }
+        // Keep the gate-relevant snapshot in step with the revalidated doc so
+        // the next boot's ms-fast path routes to the right screen.
+        void saveVerificationCache(uid, fresh);
       }
     } catch {
       // Non-fatal — the cached UI is already on screen.

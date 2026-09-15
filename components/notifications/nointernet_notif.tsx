@@ -20,6 +20,13 @@ const REACHABILITY_URL = "https://clients3.google.com/generate_204";
 const PROBE_TIMEOUT_MS = 5000;
 const PROBE_INTERVAL_MS = 3000;
 
+// Same debounce as BackInternetNotification: a single failed probe is usually
+// just a slow fetch (cold Firestore re-handshake saturating the radio for 5s+
+// right after a reject -> approve remount) — not a real disconnect. Requiring
+// 2 consecutive failures filters those blips so the offline banner only
+// shows on a genuine outage.
+const OFFLINE_CONFIRM_COUNT = 2;
+
 // Animation duration for sliding the banner in/out.
 const ANIM_DURATION_MS = 280;
 // How long the banner stays visible before auto-dismissing (when still offline
@@ -85,6 +92,9 @@ export default function NoInternetNotification() {
   const mountedRef = useRef(true);
   const probeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Consecutive-failure counter (see OFFLINE_CONFIRM_COUNT): a lone slow
+  // probe must not flip `offline` and cascade into the back-online banner.
+  const offlineStrikesRef = useRef(0);
   const anim = useRef(new Animated.Value(0)).current;
 
   const clearHideTimer = () => {
@@ -141,7 +151,16 @@ export default function NoInternetNotification() {
         if (!mountedRef.current) {
           return;
         }
-        setOffline(!ok);
+        if (ok) {
+          offlineStrikesRef.current = 0;
+          setOffline(false);
+        } else {
+          // Debounced: only flip to offline after consecutive failures.
+          offlineStrikesRef.current += 1;
+          if (offlineStrikesRef.current >= OFFLINE_CONFIRM_COUNT) {
+            setOffline(true);
+          }
+        }
       });
     };
 

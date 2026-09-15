@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { auth, db } from "../../../firebaseConfig";
+import { saveVerificationCache } from "../../main_layout/offline_profile_cache";
 
 /**
  * Post-email-verification gate for the email verification success screen
@@ -408,6 +409,21 @@ export async function markFullyVerifiedNoticeSeen(uid?: string | null): Promise<
 export type PreloadedUserDoc = {
   uid: string;
   data: Record<string, unknown> | null;
+  /**
+   * Where `data` came from. An `"async-cache"` snapshot is the AsyncStorage
+   * fast path built by `getProfileFast`: it merges the display cache with the
+   * separate verification snapshot. That snapshot is only primed by a server
+   * read, so an `"async-cache"` doc can be STALE or carry NO verification
+   * fields at all (first boot after install/upgrade, or a snapshot cleared on
+   * logout). `resolvePostLoginTarget` therefore trusts a cached doc ONLY when
+   * it is a complete `verified` snapshot (status `verified` AND submission
+   * markers present); EVERY other cached state forces one authoritative read.
+   * Routing a re-approved user back into `/verification/verificationmain` was
+   * the "it still loops after reject-again -> approve-again" bug (log
+   * signature: `gate: reused preloaded profile (0 reads)` + `gate: ->
+   * verification` with no `gate: verified+docs, checking celebration` line).
+   */
+  source?: "firestore-cache" | "async-cache" | "server" | "none";
 } | null;
 
 export async function resolvePostLoginTarget(
@@ -422,19 +438,102 @@ export async function resolvePostLoginTarget(
   try {
     // ONE read total: reuse the caller's snapshot when available (SaveLoginSync
     // profile sync already fetched it), otherwise a single `getDoc` here.
+    //
+    // A cached snapshot only replaces the authoritative read when it actually
+    // CARRIES the gate fields. The AsyncStorage fast path merges a separate
+    // verification snapshot that is primed by a server read, so a cache written
+    // before that prime exists has no `verificationStatus` — trusting it made
+    // every fully-verified account look unverified and looped them back into
+    // the verification flow. Missing gate fields = read the server once (which
+    // also primes the cache below, so it self-heals after a single boot).
     let data: Record<string, unknown> | null = null;
+    let needsAuthoritativeRead = true;
+    // Where `data` ACTUALLY came from: upgraded to "server" when the
+    // authoritative read below runs, so the DEV diagnostic can never claim a
+    // stale cache was trusted when it was not.
+    let effectiveSource: "firestore-cache" | "async-cache" | "server" | "none" | undefined =
+      preloaded?.source;
     if (preloaded && preloaded.uid === user.uid) {
-      data = preloaded.data;
-      gateLog("gate: reused preloaded profile (0 reads)", t0);
-    } else {
+      // `preloaded.data` is skipped ONLY when a CACHED copy cannot be trusted
+      // to answer "is this account verified?".
+      const cachedStatus =
+        typeof preloaded.data?.verificationStatus === "string"
+          ? (preloaded.data.verificationStatus as string)
+          : null;
+      // A cached snapshot is trusted for the routing decision ONLY when it is
+      // a COMPLETE "verified" snapshot. EVERY other cached state — missing
+      // status, "rejected", "pending", "awaiting_id", or "verified" without
+      // the submission markers — forces one authoritative read, because those
+      // are exactly the states an admin reverses.
+      //
+      // The previous heuristic (distrust null / "rejected" / a status that had
+      // a durable "approved before" hint) still let a stale cached
+      // `pending`/`awaiting_id` through whenever the account carried no hint
+      // yet: `fullyVerifiedNoticeSeenAt` is only written when the user
+      // ACKNOWLEDGES the celebration, `reapprovalCycle` only exists once the
+      // updated admin panel is deployed, and `verifiedAt` is deliberately
+      // cleared by the admin reject path. That combination re-routed a
+      // re-approved user into /verification/verificationmain on every boot —
+      // the "reject again -> approve again still loops" bug (log signature:
+      // `gate: reused preloaded profile (0 reads)` + `gate: -> verification`,
+      // with no `gate: verified+docs, checking celebration` line).
+      //
+      // `verified` WITHOUT the submission markers is not trusted either: it
+      // would take the legacyverif branch, so an old snapshot predating those
+      // fields must never fake a legacy account.
+      //
+      // The authoritative read below also re-primes the snapshot, so the NEXT
+      // boot is a fast AND correct cache hit (verified users keep the ms path —
+      // this only costs a read while the account genuinely is not verified, and
+      // those users are heading into the verification flow anyway).
+      const cachedHasSubmissionMarkers =
+        (typeof preloaded.data?.faceScanPath === "string" &&
+          preloaded.data.faceScanPath.length > 0) ||
+        (typeof preloaded.data?.validIdFrontPath === "string" &&
+          preloaded.data.validIdFrontPath.length > 0) ||
+        preloaded.data?.faceScanSubmittedAt != null ||
+        preloaded.data?.validIdSubmittedAt != null;
+      const cacheNeedsAuthoritativeRead =
+        preloaded.source === "async-cache" &&
+        (cachedStatus !== VERIFIED_STATUS || !cachedHasSubmissionMarkers);
+      if (!cacheNeedsAuthoritativeRead) {
+        data = preloaded.data;
+        needsAuthoritativeRead = false;
+        gateLog("gate: reused preloaded profile (0 reads)", t0);
+      } else {
+        gateLog(
+          cachedStatus === null
+            ? "gate: cache lacks verification fields, authoritative read"
+            : cachedStatus !== VERIFIED_STATUS
+              ? `gate: cached '${cachedStatus}' not trusted, authoritative read`
+              : "gate: cached 'verified' lacks submission markers, authoritative read",
+          t0
+        );
+      }
+    }
+    if (needsAuthoritativeRead) {
       gateLog("gate: getDoc start", t0);
       const userSnap = await getDoc(doc(db, "regular_user", user.uid));
       gateLog("gate: getDoc done", t0);
       data = userSnap.exists()
         ? (userSnap.data() as Record<string, unknown>)
         : null;
+      // Prime the gate-relevant snapshot so the NEXT boot can route correctly
+      // from the ms-fast cache instead of paying this server read again.
+      void saveVerificationCache(user.uid, data);
+      effectiveSource = "server";
     }
     if (data) {
+      // DEV diagnostic — prints the exact inputs behind the routing decision so
+      // a "why is it STILL sending me to verification?" report can be answered
+      // from the log alone, without reading Firestore by hand. If `status` here
+      // is not `verified`, the app is CORRECT to keep the user in the flow and
+      // the disagreement is on the admin panel / document side.
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.log(
+          `[gate] decide: status=${String(data.verificationStatus ?? "(none)")} src=${effectiveSource ?? "read"} rejCount=${asCount(data.verificationRejectionCount)} seenCount=${asSeenCount(data.rejectedNoticeSeenCount)} faceScan=${data.faceScanPath != null || data.faceScanSubmittedAt != null} validId=${data.validIdFrontPath != null || data.validIdSubmittedAt != null} celebrated=${data.fullyVerifiedNoticeSeenAt != null} reapproved=${data.wasReapproved === true} cycle=${asCount(data.reapprovalCycle)}`
+        );
+      }
 
       // Rejected accounts: show the rejection notice once per rejection,
       // then send the user straight into re-verification on later logins.

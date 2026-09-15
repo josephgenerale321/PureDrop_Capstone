@@ -100,10 +100,20 @@ const normalizeVerificationSeenKey = (
     return null;
   }
   const parts = stored.split(":");
-  // Current format already: status:count:target.
+  const hasValidTarget =
+    parts[2] === "valid_id" || parts[2] === "face_scan" || parts[2] === "both";
+  // Current format already: status:count:target (first approval).
+  if (parts.length === 3 && hasValidTarget) {
+    return stored;
+  }
+  // Current format already: status:count:target:reapproved:cycle (re-approval).
+  // The trailing cycle segment keeps successive re-approvals distinct even
+  // though each approve resets verificationRejectionCount back to 0.
   if (
-    parts.length === 3 &&
-    (parts[2] === "valid_id" || parts[2] === "face_scan" || parts[2] === "both")
+    parts.length === 5 &&
+    hasValidTarget &&
+    parts[3] === "reapproved" &&
+    /^\d+$/.test(parts[4])
   ) {
     return stored;
   }
@@ -303,8 +313,15 @@ const normalizeRejectionTarget = (
 const buildVerificationMessage = (
   status: "Verified" | "Rejected",
   rejectionTarget: "valid_id" | "face_scan" | "both",
+  wasReapproved = false,
 ): string => {
   if (status === "Verified") {
+    // Re-approved existing user (admin set the explicit `wasReapproved` flag
+    // at approve time) gets the "verified again / welcome back" wording;
+    // first-time approvals keep the original Welcome text.
+    if (wasReapproved) {
+      return "Your account has been verified again. Welcome back to PureDrop!";
+    }
     return "Your account has been verified. Welcome to PureDrop!";
   }
   if (rejectionTarget === "valid_id") {
@@ -469,6 +486,11 @@ const mapUserDocToVerificationNotification = (
 
   const rejectionTarget = normalizeRejectionTarget(data?.rejectionTarget);
   const isVerified = status === "Verified";
+  // Explicit re-approval marker written by the admin at approve time. Drives
+  // the "restored / welcome back" wording (vs the first-approval Welcome
+  // text) and is part of the seenKey below so a re-approval always fires
+  // exactly once even though the approve resets the rejection count to 0.
+  const wasReapproved = data?.wasReapproved === true;
   // Stable decision time (verifiedAt / verificationHistory / submissions) —
   // NEVER updatedAt, which jumps on heartbeats/acks and flipped the list order.
   const decidedAt = resolveVerificationDecisionTime(data, status);
@@ -487,10 +509,21 @@ const mapUserDocToVerificationNotification = (
   const parsedCount = Number(data?.verificationRejectionCount);
   const rejectionCount =
     Number.isFinite(parsedCount) && parsedCount > 0 ? Math.floor(parsedCount) : 0;
+  // Re-approval cycle written by the admin at approve time. Each approve resets
+  // verificationRejectionCount to 0, so a re-approval needs this extra segment
+  // to be a NEW key (otherwise `verified:0:both` would collide with the first
+  // approval, and consecutive re-approvals with each other). First approvals
+  // stay on the legacy 3-part shape so acknowledged keys keep matching.
+  const parsedReapprovalCycle = Number(data?.reapprovalCycle);
+  const reapprovalCycle =
+    Number.isFinite(parsedReapprovalCycle) && parsedReapprovalCycle > 0
+      ? Math.floor(parsedReapprovalCycle)
+      : 0;
   const seenKey = [
     status.toLowerCase(),
     String(rejectionCount),
     rejectionTarget,
+    ...(wasReapproved ? ["reapproved", String(reapprovalCycle)] : []),
   ].join(":");
 
   return {
@@ -499,7 +532,7 @@ const mapUserDocToVerificationNotification = (
     reportId: "",
     status,
     changedByAdmin: true,
-    message: buildVerificationMessage(status, rejectionTarget),
+    message: buildVerificationMessage(status, rejectionTarget, wasReapproved),
     createdLabel: formatTimestampLabel(decidedAt),
     createdAtMs,
     rejectionTarget,

@@ -59,9 +59,11 @@ let handledRejectionKey: string | null = null;
  *     flow screen survives underneath). The one-time fullyverif marker is
  *     consumed at the same time, so the next login also goes directly Home
  *     instead of replaying the celebration for an already-acknowledged
- *     approval. Existing fully-verified users (re-approved after an
- *     accidental rejection) get an EMPTY alert message (''), while
- *     brand-new users still get the full "Welcome to PureDrop!" text.
+ *     approval. Re-approved users (`wasReapproved` flag written by the admin
+ *     panel) get the restored-verification wording, while brand-new users get
+ *     the full "Welcome to PureDrop!" text. The empty string is kept only as a
+ *     fallback for a previously-verified user whose approval carries no
+ *     re-approval flag (e.g. a doc written by an older admin build).
  *   - Rejected ("rejected" with an unacknowledged rejection count): redirects
  *     to the rejection notice screen (same gate as the login flow — the
  *     notice only fires for a rejection the user has NOT acknowledged yet).
@@ -128,18 +130,23 @@ export default function useVerificationDecisionWatcher() {
             const approvalKey = `${uid}:${stamp}`;
             if (handledApprovalKey !== approvalKey) {
               handledApprovalKey = approvalKey;
-              // Existing fully-verified user (accidental reject → re-approve):
-              // they already celebrated once (fullyVerifiedNoticeSeenAt is set
-              // by the first approval and never cleared on approve — see
-              // verificationService.js), so suppress the welcome text to ''.
-              // Brand-new users (field absent) still get the full welcome.
+              // Re-approved existing user (explicit `wasReapproved` flag written
+              // by the admin panel at approve time): they already celebrated
+              // once, so they get the restrained "verified again" wording
+              // instead of the first-approval welcome. A previously-verified
+              // user approved by an OLDER admin build (no flag) keeps the
+              // legacy empty body, and brand-new users still get the full
+              // welcome text.
               const isExistingFullyVerifiedUser =
                 data.fullyVerifiedNoticeSeenAt != null;
+              const wasReapproved = data.wasReapproved === true;
               Alert.alert(
                 "Account Verified",
-                isExistingFullyVerifiedUser
-                  ? ""
-                  : "An admin has approved your verification. Welcome to PureDrop!",
+                wasReapproved
+                  ? "Your account has been verified again. Welcome back to PureDrop!"
+                  : isExistingFullyVerifiedUser
+                    ? ""
+                    : "An admin has approved your verification. Welcome to PureDrop!",
                 [
                   {
                     text: "OK",

@@ -371,8 +371,16 @@ const normalizeVerificationStatusForPush = (value) => {
   return normalized || "";
 };
 
-const buildVerificationPushBody = (status, rejectionTarget) => {
+const buildVerificationPushBody = (status, rejectionTarget, wasReapproved = false) => {
   if (status === "verified") {
+    // Re-approved existing user (explicit `wasReapproved` flag written by the
+    // admin panel at approve time) gets the "verified again" wording;
+    // first-time approvals keep the original Welcome text. Mirrors the mobile
+    // client (notif_func.tsx / verificationPushSync.tsx) and the Supabase
+    // send-report-push edge function word-for-word.
+    if (wasReapproved) {
+      return "Your account has been verified again. Welcome back to PureDrop!";
+    }
     return "Your account has been verified. Welcome to PureDrop!";
   }
 
@@ -586,7 +594,11 @@ export const sendVerificationStatusPush = onDocumentUpdated(
           ? rawTarget
           : "both";
 
-      const body = buildVerificationPushBody(afterStatus, rejectionTarget);
+      const body = buildVerificationPushBody(
+        afterStatus,
+        rejectionTarget,
+        after.wasReapproved === true,
+      );
       const isVerified = afterStatus === "verified";
 
       const response = await fetch(EXPO_PUSH_URL, {
@@ -605,6 +617,7 @@ export const sendVerificationStatusPush = onDocumentUpdated(
             kind: "verification",
             verificationStatus: afterStatus,
             rejectionTarget,
+            wasReapproved: after.wasReapproved === true,
             route: isVerified ? "/login/validation/fullyverif" : "/login/validation/rejectedverif",
           },
         }),

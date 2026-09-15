@@ -3,9 +3,12 @@ import { type Href, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { BackHandler, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDocFromServer } from "firebase/firestore";
 import { auth, db } from "../../../firebaseConfig";
 import { markRejectedNoticeSeen } from "../../../components/login/backend/postEmailVerificationGate";
+import {
+  getProfileFast,
+} from "../../../components/main_layout/offline_profile_cache";
 
 // After acknowledging the rejection the user MUST re-verify their identity —
 // the button goes straight back into the verification flow (face selfie +
@@ -43,6 +46,9 @@ export default function RejectedVerificationScreen() {
   useEffect(() => {
     let cancelled = false;
 
+    // Rejection details are read cache-first (AsyncStorage, ms) so the reason
+    // text paints instantly on warm opens; a cold 1st open still pays one
+    // server read but the screen itself (title + button) never waits on it.
     const loadRejectionState = async () => {
       try {
         const uid = auth.currentUser?.uid;
@@ -50,32 +56,49 @@ export default function RejectedVerificationScreen() {
           return;
         }
 
-        const snapshot = await getDoc(doc(db, "regular_user", uid));
-        if (!snapshot.exists() || cancelled) {
+        const applyData = (data: Record<string, unknown> | null): void => {
+          if (!data || cancelled) {
+            return;
+          }
+          const parsedCount = Number(
+            (data as { verificationRejectionCount?: unknown }).verificationRejectionCount,
+          );
+          if (Number.isFinite(parsedCount) && parsedCount > 0 && !cancelled) {
+            setRejectionCount(Math.floor(parsedCount));
+          }
+
+          const reason = (data as { rejectionReason?: unknown }).rejectionReason;
+          if (typeof reason === "string" && reason.length > 0 && !cancelled) {
+            setRejectionReason(reason);
+          }
+
+          const target = (data as { rejectionTarget?: unknown }).rejectionTarget;
+          if (
+            (target === "valid_id" ||
+              target === "face_scan" ||
+              target === "both") &&
+            !cancelled
+          ) {
+            setRejectionTarget(target);
+          }
+        };
+
+        const profileRef = doc(db, "regular_user", uid);
+        const fast = await getProfileFast({
+          uid,
+          emailFallback: auth.currentUser?.email ?? null,
+          getCacheSnapshot: async () => null,
+          getServerSnapshot: async () => {
+            const snapshot = await getDocFromServer(profileRef);
+            return snapshot.exists()
+              ? (snapshot.data() as Record<string, unknown>)
+              : null;
+          },
+        });
+        if (cancelled) {
           return;
         }
-
-        const data = snapshot.data();
-
-        const parsedCount = Number(data.verificationRejectionCount);
-        if (Number.isFinite(parsedCount) && parsedCount > 0 && !cancelled) {
-          setRejectionCount(Math.floor(parsedCount));
-        }
-
-        const reason = data.rejectionReason;
-        if (typeof reason === "string" && reason.length > 0 && !cancelled) {
-          setRejectionReason(reason);
-        }
-
-        const target = data.rejectionTarget;
-        if (
-          (target === "valid_id" ||
-            target === "face_scan" ||
-            target === "both") &&
-          !cancelled
-        ) {
-          setRejectionTarget(target);
-        }
+        applyData(fast.data);
       } catch {
         // Non-fatal — the screen already renders with the default texts, so
         // an offline device or a Firestore hiccup can never crash it.
@@ -109,28 +132,37 @@ export default function RejectedVerificationScreen() {
     };
   }, []);
 
-  const handleReverify = async () => {
+  const handleReverify = () => {
     if (isSubmitting) {
       return;
     }
+    // Mark the button so double-taps can't push the route twice, then go
+    // IMMEDIATELY — the "seen" write is non-fatal (worst case: the notice
+    // shows one more time) so it must never block navigation with a 6s
+    // "Please wait...". The write lands silently in the background.
     setIsSubmitting(true);
-
-    // Mark this rejection's notice as seen so it pops up only ONCE per
-    // rejection (a new admin rejection shows it again). Non-fatal.
-    await markRejectedNoticeSeen(rejectionCount);
 
     // Into the re-verification flow — SINGLE replace() (never
     // dismissAll()+replace back-to-back: dismissAll() unmounts this screen
     // mid-flight, so the replace() never runs). Wrapped so an Expo Router
-    // hiccup can never crash the app; the finally block always re-enables
-    // the button if the replace did not unmount the screen.
+    // hiccup can never crash the app.
     try {
       router.replace(REVERIFY_ROUTE);
     } catch {
       // Navigation must never crash the app.
-    } finally {
       setIsSubmitting(false);
     }
+
+    // Mark this rejection's notice as seen so it pops up only ONCE per
+    // rejection (a new admin rejection shows it again). Fire-and-forget:
+    // never awaited, never blocks the navigation above.
+    void (async () => {
+      try {
+        await markRejectedNoticeSeen(rejectionCount);
+      } catch {
+        // Non-fatal — navigation already happened.
+      }
+    })();
   };
 
   return (
