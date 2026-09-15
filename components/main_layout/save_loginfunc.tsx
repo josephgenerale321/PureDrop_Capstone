@@ -1,13 +1,19 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { usePathname, useRouter, type Href } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDocFromCache, getDocFromServer } from "firebase/firestore";
 import { useEffect, useRef } from "react";
 import { auth, db } from "../../firebaseConfig";
 import {
   hasChosenVerificationLater,
   resolvePostLoginTarget,
 } from "../login/backend/postEmailVerificationGate";
+import {
+  getProfileCache,
+  getProfileFast,
+  revalidateProfileInBackground,
+  saveProfileCache,
+} from "./offline_profile_cache";
 
 /**
  * Storage keys + helpers for the lightweight "saved login" marker.
@@ -693,30 +699,93 @@ export default function SaveLoginSync() {
 
             let fullName = cached.fullName;
 
-            // 2) Fetch the profile ONCE. It serves BOTH the display-name cache
-            //    AND the identity gate below (passed as `preloaded`), so the
-            //    gate never issues a 2nd `getDoc`. On a fully-verified reopen
-            //    this + the celebration fast-path = exactly 1 Firestore read.
+            // 2) Fetch the profile ONCE (cache-first, single-flight). It serves
+            //    BOTH the display-name cache AND the identity gate below
+            //    (passed as `preloaded`), so the gate never issues a 2nd read.
+            //    On 2nd boot / offline reopen this resolves from AsyncStorage
+            //    in ms (measured 27ms) instead of the 10-13s server handshake.
+            //    On a fully-verified reopen this + the celebration fast-path =
+            //    exactly 1 deduplicated server read worst-case.
             try {
-              const t0 = typeof __DEV__ !== "undefined" && __DEV__ ? Date.now() : 0;
               const profileRef = doc(db, "regular_user", syncingUser.uid);
-              const profileSnap = await getDoc(profileRef);
+              const readServerDoc = async (): Promise<Record<string, unknown> | null> => {
+                const t0 = typeof __DEV__ !== "undefined" && __DEV__ ? Date.now() : 0;
+                try {
+                  const snap = await getDocFromServer(profileRef);
+                  return snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+                } finally {
+                  if (typeof __DEV__ !== "undefined" && __DEV__) {
+                    console.log(`[gate] profile getDocFromServer +${Date.now() - t0}ms`);
+                  }
+                }
+              };
+              const refreshAllCaches = (fresh: Record<string, unknown>): void => {
+                const v = fresh.fullName;
+                const addr = fresh.address;
+                const mail = fresh.email;
+                const img = fresh.profileImageUrl;
+                void saveProfileCache(syncingUser.uid, {
+                  fullName: typeof v === "string" ? v : "",
+                  address: typeof addr === "string" ? addr : "",
+                  email: typeof mail === "string" ? mail : (syncingUser.email ?? ""),
+                  waterMeter:
+                    typeof fresh.waterMeter === "number" || typeof fresh.waterMeter === "string"
+                      ? (fresh.waterMeter as number | string)
+                      : null,
+                  profileImageUrl: typeof img === "string" ? img : null,
+                });
+                if (isMounted) {
+                  syncedUidRef.current = syncingUser.uid;
+                  syncedProfileRef.current = { uid: syncingUser.uid, data: fresh };
+                }
+              };
+              const fast = await getProfileFast({
+                uid: syncingUser.uid,
+                emailFallback: syncingUser.email ?? null,
+                getCacheSnapshot: async () => {
+                  try {
+                    const snap = await getDocFromCache(profileRef);
+                    return snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+                  } catch {
+                    return null;
+                  }
+                },
+                getServerSnapshot: readServerDoc,
+                refreshCaches: refreshAllCaches,
+              });
               if (typeof __DEV__ !== "undefined" && __DEV__) {
-                 
-                console.log(`[gate] profile getDoc +${Date.now() - t0}ms`);
+                console.log(`[gate] profile getDoc +${fast.elapsedMs}ms (${fast.source})`);
               }
-              syncedProfileData = profileSnap.exists()
-                ? (profileSnap.data() as Record<string, unknown>)
-                : null;
+              syncedProfileData = fast.data;
+              if (fast.source !== "server" && fast.data) {
+                // Served instantly from cache — refresh the server copy + all
+                // caches in the background (deduped with other callers).
+                revalidateProfileInBackground({
+                  uid: syncingUser.uid,
+                  getServerSnapshot: readServerDoc,
+                  refreshCaches: refreshAllCaches,
+                });
+              }
               if (!fullName && syncedProfileData) {
                 const v = syncedProfileData.fullName;
                 fullName = typeof v === "string" && v.length > 0 ? v : null;
+              }
+              if (!syncedProfileData) {
+                // Total miss (never cached + server unreachable): fall back to
+                // the AsyncStorage text cache so the greeting never goes blank.
+                try {
+                  const fallback = await getProfileCache(syncingUser.uid);
+                  if (fallback?.fullName && !fullName) {
+                    fullName = fallback.fullName;
+                  }
+                } catch {
+                  // Non-fatal.
+                }
               }
             } catch {
               // If the profile fetch fails (e.g. offline restore), fall back
               // to the cached value — never crash.
             }
-
             // 3) Persist only what actually changed (diff against the cached
             //    values) — no redundant AsyncStorage writes on every signal.
             try {

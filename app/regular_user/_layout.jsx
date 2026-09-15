@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, onSnapshot } from "firebase/firestore";
+import { doc, getDocFromCache, getDocFromServer, onSnapshot } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
 import HomeMainLoading from "../../components/loading/homepage/homemain_loading";
@@ -20,6 +20,7 @@ import {
 } from "../../components/main_layout/save_loginfunc";
 import {
   getProfileCache,
+  getProfileFast,
   saveProfileCache,
 } from "../../components/main_layout/offline_profile_cache";
 
@@ -122,10 +123,15 @@ function RegularUserTabs() {
     };
 
     // Fail-closed verification gate for the whole `/regular_user` area.
-    // Runs once a live session exists: a single `getDoc` decides whether
-    // this account may see Home. Rejected  -> bounced out immediately
-    // (session kept). Missing record / read error -> allowed (fail-open,
-    // preserves the old offline behaviour — never trap a valid user).
+    // Runs once a live session exists. The status read is cache-first
+    // (deduped with the startup gate's read via `getProfileFast`), so 2nd
+    // boot / offline reopen resolves in ms instead of 10-13s. SECURITY:
+    // when only a CACHED copy is available we do NOT open Home yet — the
+    // fail-closed loader (AUTH_RESTORE_GRACE_MS) stays up while the server
+    // re-check runs in the foreground and the live listener below enforces
+    // any newer rejection. Rejected -> bounced out immediately (session
+    // kept). Missing record / read error -> allowed (fail-open, preserves
+    // the old offline behaviour — never trap a valid user).
     // `watchRejections` also arms a live listener so a mid-session admin
     // rejection kicks the user out without waiting for a reopen.
     const runAccessCheck = (uid, { watchRejections = false } = {}) => {
@@ -133,38 +139,12 @@ function RegularUserTabs() {
         if (!isMounted) {
           return;
         }
-        try {
-          const snap = await getDoc(doc(db, "regular_user", uid));
-          if (!isMounted) {
+        // Arms the live rejection listener WITHOUT opening Home first, so a
+        // cached "verified" copy can never flash Home for a rejected account.
+        const armRejectionWatch = () => {
+          if (!watchRejections || !isMounted) {
             return;
           }
-          if (snap.exists()) {
-            const data = snap.data() || {};
-            if (data.verificationStatus === "rejected") {
-              setAccessAllowed(false);
-              setAccessChecked(true);
-              setAuthChecked(true);
-              redirectForRejected(data);
-              return;
-            }
-          }
-          // Verified / pending / missing record — Home stays reachable.
-          setAccessAllowed(true);
-          setAccessChecked(true);
-        } catch {
-          // Read error (offline etc.) — fail OPEN, not closed: keep the old
-          // behaviour so a valid user is never trapped on a loader.
-          // NOTE: a rejected user on a fully-offline device can therefore
-          // still see cached Home until the network returns. That is an
-          // accepted tradeoff (Firestore has no signed offline ACL); the
-          // online check above is what enforces the rule.
-          if (isMounted) {
-            setAccessAllowed(true);
-            setAccessChecked(true);
-          }
-        }
-
-        if (watchRejections && isMounted) {
           try {
             if (unsubscribeAccess) {
               unsubscribeAccess();
@@ -190,6 +170,117 @@ function RegularUserTabs() {
             );
           } catch {
             // Non-fatal.
+          }
+        };
+        try {
+          const profileRef = doc(db, "regular_user", uid);
+          const fast = await getProfileFast({
+            uid,
+            emailFallback: auth.currentUser?.email ?? null,
+            getCacheSnapshot: async () => {
+              try {
+                const snap = await getDocFromCache(profileRef);
+                return snap.exists() ? snap.data() || {} : null;
+              } catch {
+                return null;
+              }
+            },
+            getServerSnapshot: async () => {
+              const snap = await getDocFromServer(profileRef);
+              return snap.exists() ? snap.data() || {} : null;
+            },
+          });
+          const data = fast.data;
+          if (!isMounted) {
+            return;
+          }
+          if (data) {
+            if (data.verificationStatus === "rejected") {
+              setAccessAllowed(false);
+              setAccessChecked(true);
+              setAuthChecked(true);
+              redirectForRejected(data);
+              return;
+            }
+          }
+          if (fast.source !== "server" && fast.data) {
+            // Cache hit only: stay fail-CLOSED (loader keeps showing) while
+            // the authoritative server re-check runs in the FOREGROUND.
+            // `watchRejections` listener is armed first so even a slow
+            // re-check cannot flash Home for a rejected account.
+            armRejectionWatch();
+            try {
+              const serverSnap = await getDocFromServer(profileRef);
+              if (!isMounted) {
+                return;
+              }
+              const serverData = serverSnap.exists() ? serverSnap.data() || {} : null;
+              if (serverData?.verificationStatus === "rejected") {
+                setAccessAllowed(false);
+                setAccessChecked(true);
+                setAuthChecked(true);
+                redirectForRejected(serverData);
+                return;
+              }
+              // Verified / pending / missing record — Home stays reachable.
+              setAccessAllowed(true);
+              setAccessChecked(true);
+            } catch {
+              // Server unreachable — fail OPEN (old offline behaviour): a
+              // valid user is never trapped on a loader. NOTE: a rejected
+              // user on a fully-offline device can therefore still see cached
+              // Home until the network returns — accepted tradeoff (Firestore
+              // has no signed offline ACL); the online path above enforces it.
+              if (isMounted) {
+                setAccessAllowed(true);
+                setAccessChecked(true);
+              }
+            }
+            return;
+          }
+          // Verified / pending / missing record — Home stays reachable.
+          setAccessAllowed(true);
+          setAccessChecked(true);
+        } catch {
+          // Read error (offline etc.) — fail OPEN, not closed: keep the old
+          // behaviour so a valid user is never trapped on a loader.
+          // NOTE: a rejected user on a fully-offline device can therefore
+          // still see cached Home until the network returns. That is an
+          // accepted tradeoff (Firestore has no signed offline ACL); the
+          // online check above is what enforces the rule.
+          if (isMounted) {
+            setAccessAllowed(true);
+            setAccessChecked(true);
+          }
+        }
+
+        if (watchRejections && isMounted) {
+          // Already armed on the cache-hit path above; arm here for the
+          // server/miss path (guarded so it is never attached twice).
+          if (!unsubscribeAccess) {
+          try {
+            unsubscribeAccess = onSnapshot(
+              doc(db, "regular_user", uid),
+              (liveSnap) => {
+                if (!isMounted || !liveSnap.exists()) {
+                  return;
+                }
+                try {
+                  if (liveSnap.data()?.verificationStatus === "rejected") {
+                    setAccessAllowed(false);
+                    redirectForRejected(liveSnap.data() || {});
+                  }
+                } catch {
+                  // Never crash on a live update.
+                }
+              },
+              () => {
+                // Listener error — ignore, the one-shot check already ran.
+              }
+            );
+          } catch {
+            // Non-fatal.
+          }
           }
         }
       })();

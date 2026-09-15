@@ -2,7 +2,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { type Href, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, doc, getDocs, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
+import { doc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { Alert } from "react-native";
 import { getPublicFileUrl, removeFile, uploadFile } from "../../api/storage";
@@ -49,30 +49,6 @@ const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, label: string):
   });
 };
 
-/**
- * Computes the sequential display ID (1, 2, 3...) for a user, matching the
- * admin panel's logic: sort all users by UID alphabetically, then assign
- * index + 1. This ensures the mobile app shows the SAME ID as the admin.
- */
-const getSequentialDisplayId = async (uid: string): Promise<string> => {
-  try {
-    const usersSnap = await getDocs(collection(db, "regular_user"));
-    const allUids = usersSnap.docs
-      .map((docSnap) => {
-        const data = docSnap.data() as { uid?: string };
-        return data.uid || docSnap.id;
-      })
-      .sort((a, b) => String(a).localeCompare(String(b)));
-    const position = allUids.indexOf(uid);
-    if (position >= 0) {
-      return String(position + 1);
-    }
-  } catch {
-    // Fall back to hash-based ID if the lookup fails (offline, permissions, etc.)
-  }
-  return uidToNumber(uid);
-};
-
 interface RegularUserDoc {
   fullName?: string;
   address?: string;
@@ -81,6 +57,18 @@ interface RegularUserDoc {
   profileImageUrl?: string;
   profileImagePath?: string;
 }
+
+const resolveDisplayId = (uid: string, data?: RegularUserDoc): string => {
+  const stored = (data as { sequentialId?: unknown; displayId?: unknown } | undefined);
+  const fromDoc = stored?.sequentialId ?? stored?.displayId;
+  if (typeof fromDoc === "number" && Number.isFinite(fromDoc)) {
+    return String(Math.trunc(fromDoc));
+  }
+  if (typeof fromDoc === "string" && fromDoc.trim().length > 0) {
+    return fromDoc.trim();
+  }
+  return uidToNumber(uid);
+};
 
 export type EditableProfileValues = {
   fullName: string;
@@ -179,19 +167,15 @@ export function useProfileBackend() {
             typeof data.profileImageUrl === "string" && data.profileImageUrl.length > 0
               ? data.profileImageUrl
               : null;
-          // Compute the sequential display ID (1, 2, 3...) matching the admin.
-          void getSequentialDisplayId(currentUser.uid).then((displayId) => {
-            if (!isMounted) {
-              return;
-            }
-            setProfile({
-              fullName: data.fullName || "User",
-              address: data.address || "",
-              email: data.email || currentUser.email || "No email",
-              waterMeter: data.waterMeter ?? null,
-              profileImageUrl: imgUrl,
-              uid: displayId,
-            });
+          // Display ID comes from the doc itself (or stable hash fallback) —
+          // zero extra Firestore reads (the old full-collection scan is gone).
+          setProfile({
+            fullName: data.fullName || "User",
+            address: data.address || "",
+            email: data.email || currentUser.email || "No email",
+            waterMeter: data.waterMeter ?? null,
+            profileImageUrl: imgUrl,
+            uid: resolveDisplayId(currentUser.uid, data),
           });
           // Persist the profile locally (name + downloaded photo) so the
           // Profile screen can render offline too.
@@ -218,19 +202,13 @@ export function useProfileBackend() {
               return;
             }
             if (cached) {
-              // Compute the sequential display ID (1, 2, 3...) matching the admin.
-              void getSequentialDisplayId(currentUser.uid).then((displayId) => {
-                if (!isMounted) {
-                  return;
-                }
-                setProfile({
-                  fullName: cached.fullName || "User",
-                  address: cached.address || "",
-                  email: cached.email || currentUser.email || "No email",
-                  waterMeter: cached.waterMeter ?? null,
-                  profileImageUrl: cached.profileImageLocalUri || cached.profileImageUrl,
-                  uid: displayId,
-                });
+              setProfile({
+                fullName: cached.fullName || "User",
+                address: cached.address || "",
+                email: cached.email || currentUser.email || "No email",
+                waterMeter: cached.waterMeter ?? null,
+                profileImageUrl: cached.profileImageLocalUri || cached.profileImageUrl,
+                uid: uidToNumber(currentUser.uid),
               });
               setError(null);
             } else {

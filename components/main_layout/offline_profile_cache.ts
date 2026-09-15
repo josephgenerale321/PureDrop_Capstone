@@ -3,6 +3,30 @@ import * as FileSystem from "expo-file-system/legacy";
 import { Platform } from "react-native";
 
 /**
+ * Fast, cache-first read of the signed-in user's `regular_user` profile doc.
+ *
+ * WHY: a plain `getDoc()` goes to the server and pays the full cold-connect
+ * cost (auth token refresh + WebChannel/long-poll handshake = 10-13s on
+ * Vivo-class devices / emulator on 1st boot, because the connection is torn
+ * down on every kill). This helper instead:
+ *
+ *   1. Returns the AsyncStorage text cache instantly (ms — measured 27ms on
+ *      2nd boot; also covers offline reopens). On web, the Firestore
+ *      persistent cache (`getDocFromCache`) is tried first when available.
+ *   2. Revalidates from the server in the background and refreshes all caches.
+ *   3. Dedupes concurrent callers (startup gate + tab layout + profile
+ *      screen) onto ONE in-flight server read so the first open no longer
+ *      issues 2-3 parallel `getDoc`s against the same cold connection.
+ *
+ * PLATFORM NOTE: the Firestore JS SDK has no IndexedDB on React Native /
+ * Hermes, so `persistentLocalCache()` always falls back to memory cache on
+ * native (warns "missing IndexedDB") — AsyncStorage is the real persistent
+ * tier on Android/iOS. `getCacheSnapshot` is therefore best-effort: on
+ * native it cheaply misses and tier 2 serves the UI.
+ *
+ * NEVER throws: on total failure it resolves `{ data: null, source: "none" }`
+ * so callers fall back to cached/anonymous UI instead of trapping the user.
+ *
  * Offline profile cache helpers for PureDrop.
  *
  * PureDrop stores the currently-signed-in user's profile (name, address,
@@ -23,6 +47,9 @@ import { Platform } from "react-native";
  *   still keeping the text fields (name, address, email).
  * - The cache is keyed per user (`regular_user:{uid}`) so switching accounts
  *   never leaks one user's profile into another's.
+ *
+ * Cache-first single-flight profile reader is appended at the bottom of this
+ * file (`getProfileFast`).
  */
 
 const CACHE_PREFIX = "@puredrop/profile_cache";
@@ -213,4 +240,184 @@ export async function clearProfileCache(uid: string): Promise<void> {
   } catch {
     // Non-fatal.
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cache-first single-flight profile reader
+// ---------------------------------------------------------------------------
+
+export type ProfileFastSource = "firestore-cache" | "async-cache" | "server" | "none";
+
+export type ProfileFastResult = {
+  /** Raw `regular_user/{uid}` fields, or null when unreadable. */
+  data: Record<string, unknown> | null;
+  /** Where the returned snapshot came from (for __DEV__ timing logs). */
+  source: ProfileFastSource;
+  /** Milliseconds the fast path took (cache hit or server fallback). */
+  elapsedMs: number;
+};
+
+// One in-flight server read per uid. Concurrent callers (startup gate + tab
+// layout + profile screen) share the same promise instead of issuing 2-3
+// parallel `getDoc`s against the same cold connection.
+const inflightServerReads = new Map<string, Promise<Record<string, unknown> | null>>();
+
+const cachedProfileToDocData = (
+  cached: CachedProfile | null,
+  emailFallback: string | null,
+): Record<string, unknown> | null => {
+  if (!cached) {
+    return null;
+  }
+  if (!cached.fullName && !cached.address && !cached.email && cached.profileImageUrl == null) {
+    return null;
+  }
+  return {
+    fullName: cached.fullName,
+    address: cached.address,
+    email: cached.email || emailFallback || "",
+    waterMeter: cached.waterMeter ?? null,
+    profileImageUrl: cached.profileImageUrl,
+  };
+};
+
+const readServerProfileOnce = (
+  uid: string,
+  getServerSnapshot: () => Promise<Record<string, unknown> | null>,
+): Promise<Record<string, unknown> | null> => {
+  const pending = inflightServerReads.get(uid);
+  if (pending) {
+    return pending;
+  }
+  // NOTE: cleanup runs in a chained `.finally` (not inside the executor) so
+  // `task` is definitely assigned by the time it is referenced.
+  const task: Promise<Record<string, unknown> | null> = (async () => {
+    try {
+      return await getServerSnapshot();
+    } catch {
+      return null;
+    }
+  })();
+  inflightServerReads.set(uid, task);
+  void task.finally(() => {
+    if (inflightServerReads.get(uid) === task) {
+      inflightServerReads.delete(uid);
+    }
+  });
+  return task;
+};
+
+/**
+ * Cache-first read of `regular_user/{uid}`.
+ *
+ * Order: (1) Firestore cache (`getDocFromCache` — web-only in practice; on
+ * native it cheaply misses because there is no IndexedDB) ->
+ * (2) AsyncStorage text cache (`getProfileCache`, ms — the real persistent
+ * tier on Android/iOS) -> (3) server (`getDocFromServer`, slow on cold boot,
+ * deduped across callers).
+ *
+ * On native, tier 1 is skipped outright (no IndexedDB exists, so the call
+ * can only warn/miss) and tier 2 serves the UI instantly.
+ *
+ * Pass Firestore accessors in so this module stays decoupled from
+ * `firebaseConfig` (avoids an import cycle with the startup gate).
+ *
+ * Never throws; resolves `{ data: null, source: "none" }` when everything
+ * fails so callers degrade to cached/anonymous UI.
+ */
+export async function getProfileFast(args: {
+  uid: string;
+  emailFallback?: string | null;
+  getCacheSnapshot: () => Promise<Record<string, unknown> | null>;
+  getServerSnapshot: () => Promise<Record<string, unknown> | null>;
+  refreshCaches?: (data: Record<string, unknown>) => void;
+}): Promise<ProfileFastResult> {
+  const t0 = Date.now();
+  const { uid, emailFallback = null, getCacheSnapshot, getServerSnapshot, refreshCaches } = args;
+  if (!uid) {
+    return { data: null, source: "none", elapsedMs: 0 };
+  }
+
+  // 1) Firestore cache — web-only in practice. On native (Android/iOS) the
+  //    JS SDK has no IndexedDB, so this tier can only miss; skip it outright
+  //    to avoid the "missing IndexedDB" warning path entirely.
+  if (Platform.OS === "web") {
+    try {
+      const cachedDoc = await getCacheSnapshot();
+      if (cachedDoc) {
+        return { data: cachedDoc, source: "firestore-cache", elapsedMs: Date.now() - t0 };
+      }
+    } catch {
+      // Fall through to the next tier.
+    }
+  }
+
+  // 2) AsyncStorage text cache — instant greeting/avatar while the server
+  //    revalidates in the background.
+  try {
+    const cached = await getProfileCache(uid);
+    const asDoc = cachedProfileToDocData(cached, emailFallback);
+    if (asDoc) {
+      // Best-effort background refresh so the next open hits tier 1.
+      void readServerProfileOnce(uid, getServerSnapshot).then((fresh) => {
+        if (fresh) {
+          try {
+            refreshCaches?.(fresh);
+          } catch {
+            // Non-fatal.
+          }
+        }
+      });
+      return { data: asDoc, source: "async-cache", elapsedMs: Date.now() - t0 };
+    }
+  } catch {
+    // Fall through to the server.
+  }
+
+  // 3) Server — slow on cold boot (10-13s), but deduped: concurrent callers
+  //    share one in-flight read.
+  const fresh = await readServerProfileOnce(uid, getServerSnapshot);
+  if (fresh) {
+    try {
+      refreshCaches?.(fresh);
+    } catch {
+      // Non-fatal.
+    }
+    return { data: fresh, source: "server", elapsedMs: Date.now() - t0 };
+  }
+  return { data: null, source: "none", elapsedMs: Date.now() - t0 };
+}
+
+/**
+ * Fire-and-forget server revalidation for a profile that was served from
+ * cache. Refreshes the AsyncStorage tier (the persistent tier on native)
+ * without blocking the UI. Never throws.
+ */
+export function revalidateProfileInBackground(args: {
+  uid: string;
+  getServerSnapshot: () => Promise<Record<string, unknown> | null>;
+  refreshCaches?: (data: Record<string, unknown>) => void;
+  timeoutMs?: number;
+}): void {
+  const { uid, getServerSnapshot, refreshCaches, timeoutMs = 45_000 } = args;
+  if (!uid) {
+    return;
+  }
+  void (async () => {
+    try {
+      const fresh = await Promise.race([
+        readServerProfileOnce(uid, getServerSnapshot),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+      ]);
+      if (fresh) {
+        try {
+          refreshCaches?.(fresh);
+        } catch {
+          // Non-fatal.
+        }
+      }
+    } catch {
+      // Non-fatal — the cached UI is already on screen.
+    }
+  })();
 }

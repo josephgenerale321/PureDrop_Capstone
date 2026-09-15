@@ -30,6 +30,15 @@ export const auth = (() => {
 
 export const db = (() => {
   try {
+    // NOTE: the Firestore JS SDK has NO IndexedDB on React Native / Hermes,
+    // so `persistentLocalCache()` always warns ("missing IndexedDB ... falling
+    // back to memory cache") and buys nothing on native. It is deliberately
+    // NOT used here. Offline fast-path lives in the AsyncStorage tier
+    // (`components/main_layout/offline_profile_cache.ts` -> `getProfileFast`
+    // `async-cache`, measured 27ms on 2nd boot): the 1st-boot 10-13s server
+    // handshake is unavoidable, but every later boot resolves from disk.
+    // `experimentalAutoDetectLongPolling` is kept: it shortens the cold
+    // WebChannel handshake on emulator / Vivo-class networks.
     return initializeFirestore(app, {
       experimentalAutoDetectLongPolling: true,
     });
