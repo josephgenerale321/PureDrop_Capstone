@@ -3,5 +3,12 @@
     "source.fixAll": "explicit",
     "source.organizeImports": "explicit",
     "source.sortMembers": "explicit"
-  }
+  },
+  // Use the TypeScript version pinned in package.json (5.9.x) instead of the
+  // editor's bundled TypeScript. The editor's version may be newer (6.x) and
+  // reports errors for this project that do not exist, e.g. the
+  // "'rootDir' setting must be explicitly set" diagnostic raised against the
+  // tsconfig.json files that expo-* packages ship inside node_modules.
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true
 }

@@ -1,75 +1,33 @@
 /**
- * ImmersiveNavBar — temporarily hides the Android system navigation bar
- * (◁ ○ □) app-wide so it never overlaps the floating tab bar on old phones
- * with 3-button navigation. Slide-up from the bottom edge reveals the bar
- * transiently (OS-enforced `SHOW_TRANSIENT_BARS_BY_SWIPE`); it auto-hides again.
+ * ImmersiveNavBar — hides the Android system navigation bar (◁ ○ □) app-wide so
+ * it never overlaps the floating tab bar on phones that use 3-button navigation.
  *
- * Android only: on iOS/web this renders nothing. The hidden state is
- * runtime-only (does not survive restarts), so this component lives in the
- * root layout which stays mounted across all navigations and re-applies the
- * hide on every launch.
+ * Mount it once in the root layout (`app/_layout.tsx`): that layout stays
+ * mounted across every navigation, so the hidden state survives route changes.
  *
- * Requires `expo-navigation-bar` (native module) — needs a dev-client/native
- * rebuild after install. Import is guarded so environments without the native
- * module (Expo Go edge cases) never crash.
+ * BEHAVIOUR (full policy lives in useImmersiveNavBar)
+ * - Hidden from the first frame: `app.json` configures the expo-navigation-bar
+ *   config plugin with `visibility: "hidden"`, which the native module applies
+ *   while the Activity is created — before the JS engine starts.
+ * - AUTO HIDE: when the user swipes the bar up (Android reveals it transiently
+ *   for 3-button navigation) or the ROM restores it, it hides itself again after
+ *   ~2.5s. If the device keeps forcing the bar back up the delay grows (5s, 10s)
+ *   and the hook finally gives up instead of flicker-fighting — tune that with
+ *   `escalateAfter`, `backoffFactor` and `maxAutoHides`.
+ * - Re-applied whenever the app returns to the foreground.
+ *
+ * SAFETY: Android only. The native module is loaded lazily inside try/catch, so
+ * iOS, web, Expo Go builds without the module, and Jest never crash — worst case
+ * the bar simply stays visible.
  */
-import { useEffect } from "react";
-import { Platform } from "react-native";
+import {
+  useImmersiveNavBar,
+  type UseImmersiveNavBarOptions,
+} from "./useImmersiveNavBar";
 
-const getNavigationBarModule = () => {
-  if (Platform.OS !== "android") {
-    return null;
-  }
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const module = require("expo-navigation-bar");
-    if (
-      module?.NavigationBar == null ||
-      typeof module.NavigationBar.setHidden !== "function"
-    ) {
-      return null;
-    }
-    return module.NavigationBar as {
-      setHidden: (hidden: boolean) => void;
-    };
-  } catch {
-    return null;
-  }
-};
+export type ImmersiveNavBarProps = UseImmersiveNavBarOptions;
 
-const NavigationBarComponent = (() => {
-  if (Platform.OS !== "android") {
-    return null;
-  }
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const module = require("expo-navigation-bar");
-    return (module?.NavigationBar ?? null) as ((props: {
-      hidden?: boolean;
-    }) => null) | null;
-  } catch {
-    return null;
-  }
-})();
-
-export default function ImmersiveNavBar() {
-  useEffect(() => {
-    const NavigationBar = getNavigationBarModule();
-    if (!NavigationBar) {
-      return;
-    }
-    try {
-      // Belt-and-braces alongside the declarative <NavigationBar hidden />
-      // below: covers prop-merge ordering when several screens mount their
-      // own NavigationBar components.
-      NavigationBar.setHidden(true);
-    } catch {
-      // Hiding must never crash the app — worst case the bar stays visible.
-    }
-  }, []);
-
-  if (NavigationBarComponent == null) {
-    return null;
-  }
-  return <NavigationBarComponent hidden />;
+export default function ImmersiveNavBar(props: ImmersiveNavBarProps) {
+  useImmersiveNavBar(props);
+  return null;
 }

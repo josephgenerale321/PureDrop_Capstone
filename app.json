@@ -32,6 +32,13 @@
       "expo-router",
       "expo-build-properties",
       "./plugins/withMlKit16KB",
+      "./plugins/withAndroidConfigChanges",
+      [
+        "expo-navigation-bar",
+        {
+          "visibility": "hidden"
+        }
+      ],
       [
         "expo-splash-screen",
         {

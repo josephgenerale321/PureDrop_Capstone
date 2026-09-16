@@ -4,6 +4,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDocFromCache, getDocFromServer, onSnapshot } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import HomeMainLoading from "../../components/loading/homepage/homemain_loading";
 import FloatingNotification from "../../components/notifications/floating_notif";
 import { ReportNotificationsProvider, useReportNotifications } from "../../components/notifications/notif_func";
@@ -38,6 +39,15 @@ import {
 // for coherent behavior (Vivo-class devices measured at 10–20s on cold start).
 const AUTH_RESTORE_GRACE_MS = 25000;
 
+// Floating tab bar geometry. The bar is `position: absolute`, so it must add the
+// bottom safe-area inset to its own height and padding — otherwise the Android
+// system navigation bar (3-button or gesture pill; edge-to-edge is enabled)
+// draws over it. `TAB_BAR_HEIGHT` matches the space screens reserve for the bar
+// (`TAB_BAR_HEIGHT + insets.bottom + gap`), so list content never hides behind
+// it and nothing is double-padded when the bar is hidden (inset = 0).
+const TAB_BAR_HEIGHT = 70;
+const TAB_BAR_PADDING_BOTTOM = 12;
+
 export default function RegularUserLayout() {
   return (
     <ReportNotificationsProvider>
@@ -47,6 +57,9 @@ export default function RegularUserLayout() {
 }
 
 function RegularUserTabs() {
+  // The floating tab bar must clear the Android system navigation bar, so it
+  // grows by the bottom inset — which is 0 while ImmersiveNavBar has it hidden.
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -458,7 +471,13 @@ function RegularUserTabs() {
         screenOptions={{
           headerShown: false,
           tabBarShowLabel: false,
-          tabBarStyle: styles.tabBar,
+          tabBarStyle: [
+            styles.tabBar,
+            {
+              height: TAB_BAR_HEIGHT + insets.bottom,
+              paddingBottom: TAB_BAR_PADDING_BOTTOM + insets.bottom,
+            },
+          ],
           tabBarItemStyle: styles.tabItem,
           lazy: true,
         }}
@@ -572,13 +591,13 @@ listeners={{
 
 const styles = StyleSheet.create({
   tabBar: {
-    height: 70,
+    height: TAB_BAR_HEIGHT,
     backgroundColor: "#FFFFFF",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderTopWidth: 0,
     position: "absolute",
-    paddingBottom: 12,
+    paddingBottom: TAB_BAR_PADDING_BOTTOM,
     paddingTop: 12,
     paddingHorizontal: 16,
     shadowColor: "#0F172A",
