@@ -1,7 +1,7 @@
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Location from "expo-location";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Platform } from "react-native";
 import {
   collection,
@@ -131,6 +131,20 @@ const isPermissionGrantedForFollow = async (): Promise<boolean> => {
   }
 };
 
+// Snapshot of the report exactly as it was loaded from Firestore (or last
+// saved). Compared against the live form state to derive `isDirty`, which
+// powers the unsaved-changes confirmation when the user leaves the Edit
+// screen (see `beforeRemove` in `app/regular_user/my_report/edit_myreport.tsx`).
+type ReportFormSnapshot = {
+  category: string;
+  address: string;
+  location: string;
+  gpsLocation: string;
+  issue: string;
+  waterMeter: string;
+  attachmentUris: string[];
+};
+
 /**
  * Form state for editing an existing report. Loads the existing report from
  * Firestore on mount, populates the form fields, and saves changes back with
@@ -167,6 +181,10 @@ export function useEditReportForm(reportId: string) {
   const watchSubscriptionRef = useRef<{ remove: () => void } | null>(null);
   const submittingRef = useRef(false);
   const isMountedRef = useRef(true);
+  // Values as loaded from Firestore (re-baselined after each successful
+  // save). Null until the initial load completes, so the unsaved-changes
+  // guard never fires while the report is still loading.
+  const formBaselineRef = useRef<ReportFormSnapshot | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -215,22 +233,25 @@ export function useEditReportForm(reportId: string) {
           : [];
 
         if (!cancelled) {
-          setCategory(typeof data.category === "string" ? data.category : "");
-          setIssue(typeof data.issue === "string" ? data.issue : "");
-          setAddress(typeof data.address === "string" ? data.address : "");
-          setLocation(
+          const loadedCategory = typeof data.category === "string" ? data.category : "";
+          const loadedIssue = typeof data.issue === "string" ? data.issue : "";
+          const loadedAddress = typeof data.address === "string" ? data.address : "";
+          const loadedLocation =
             typeof data.locationDetails === "string"
               ? data.locationDetails
               : typeof data.location === "string"
                 ? data.location
-                : "",
-          );
+                : "";
           const rawGpsLocation =
             typeof data.gpsLocation === "string" ? data.gpsLocation : "";
+          const loadedWaterMeter = typeof data.waterMeter === "string" ? data.waterMeter : "";
+
+          setCategory(loadedCategory);
+          setIssue(loadedIssue);
+          setAddress(loadedAddress);
+          setLocation(loadedLocation);
           setGpsLocation(rawGpsLocation);
-          setWaterMeter(
-            typeof data.waterMeter === "string" ? data.waterMeter : "",
-          );
+          setWaterMeter(loadedWaterMeter);
           // Parse coordinates from the stored GPS location string so the
           // mini-map preview and the full map modal open at the report's
           // original pinned location instead of the default Toledo center.
@@ -252,6 +273,17 @@ export function useEditReportForm(reportId: string) {
           setAttachments(
             rawAttachments.map((url) => ({ uri: url })),
           );
+          // Baseline for the unsaved-changes guard: the form is "clean" as
+          // long as every field matches what was just loaded.
+          formBaselineRef.current = {
+            category: loadedCategory,
+            address: loadedAddress,
+            location: loadedLocation,
+            gpsLocation: rawGpsLocation,
+            issue: loadedIssue,
+            waterMeter: loadedWaterMeter,
+            attachmentUris: rawAttachments,
+          };
           setLoading(false);
         }
       } catch {
@@ -280,6 +312,44 @@ export function useEditReportForm(reportId: string) {
       unsubscribeAuth();
     };
   }, [reportId]);
+
+  // True when any editable value differs from the snapshot loaded from
+  // Firestore (or from the last successful save). Compared against trimmed
+  // values because that is what `handleSave` writes. Attachment changes are
+  // detected by comparing the URI list in order (removals and additions both
+  // change it; new local picks carry a `file:`/`content:` URI that differs
+  // from the stored remote URL).
+  const isDirty = useMemo(() => {
+    const baseline = formBaselineRef.current;
+    if (!baseline) {
+      return false;
+    }
+    return (
+      category.trim() !== baseline.category.trim() ||
+      address.trim() !== baseline.address.trim() ||
+      location.trim() !== baseline.location.trim() ||
+      gpsLocation.trim() !== baseline.gpsLocation.trim() ||
+      issue.trim() !== baseline.issue.trim() ||
+      waterMeter.trim() !== baseline.waterMeter.trim() ||
+      attachments.map((attachment) => attachment.uri).join("\n") !==
+        baseline.attachmentUris.join("\n")
+    );
+  }, [category, address, location, gpsLocation, issue, waterMeter, attachments]);
+
+  // Re-baselines the form to the current values so `isDirty` turns false.
+  // Called right after a successful save, before navigating back, so the
+  // unsaved-changes guard lets the post-save navigation through.
+  const markFormClean = useCallback(() => {
+    formBaselineRef.current = {
+      category,
+      address,
+      location,
+      gpsLocation,
+      issue,
+      waterMeter,
+      attachmentUris: attachments.map((attachment) => attachment.uri),
+    };
+  }, [category, address, location, gpsLocation, issue, waterMeter, attachments]);
 
   const getFileExtension = (attachment: Attachment) => {
     const cleanUri = attachment.uri.split("?")[0];
@@ -808,6 +878,7 @@ export function useEditReportForm(reportId: string) {
     gpsAccuracy,
     gpsLoading,
     gpsLocation,
+    isDirty,
     issue,
     loading,
     loadError,
@@ -828,6 +899,7 @@ export function useEditReportForm(reportId: string) {
     handleSave,
     handleToggleFollow,
     handleUseGps,
+    markFormClean,
     setAddress,
     setCategory,
     setIssue,

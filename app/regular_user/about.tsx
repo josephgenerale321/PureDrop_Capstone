@@ -23,7 +23,17 @@ export default function AboutScreen() {
         <View style={styles.headerSpacer} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          // The floating tab bar in `regular_user/_layout.jsx` is position:
+          // "absolute", so it overlays the bottom of this screen. Reserve its
+          // height (70) plus the device bottom inset plus a gap, so the card's
+          // last line is never clipped behind the bar (same pattern as
+          // `my_report/index.tsx` and `notification_main.tsx`).
+          { paddingBottom: 70 + Math.max(0, insets.bottom) + 24 },
+        ]}
+      >
         <View style={styles.card}>
           <Text style={styles.body}>
             PureDrop is a community-based reporting platform created to help residents
@@ -107,7 +117,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     alignItems: "center",
     paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingTop: 32,
     paddingBottom: 40,
   },
 
