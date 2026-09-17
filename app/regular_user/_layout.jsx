@@ -2,14 +2,15 @@ import { Ionicons } from "@expo/vector-icons";
 import { Tabs, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDocFromCache, getDocFromServer, onSnapshot } from "firebase/firestore";
-import { useEffect, useRef, useState } from "react";
-import { Image, StyleSheet, Text, View } from "react-native";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Image, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import HomeMainLoading from "../../components/loading/homepage/homemain_loading";
 import FloatingNotification from "../../components/notifications/floating_notif";
 import { ReportNotificationsProvider, useReportNotifications } from "../../components/notifications/notif_func";
 import PushNotificationSync from "../../components/notifications/push_notificationfunc";
 import SystemNotificationSync from "../../components/notifications/system_notif";
+import TabUnreadBadge from "../../components/notifications/tabUnreadBadge";
 import NoInternetNotification from "../../components/notifications/nointernet_notif";
 import BackInternetNotification from "../../components/notifications/backinternet_notif";
 import { auth, db } from "../../firebaseConfig";
@@ -58,7 +59,8 @@ export default function RegularUserLayout() {
 
 function RegularUserTabs() {
   // The floating tab bar must clear the Android system navigation bar, so it
-  // grows by the bottom inset — which is 0 while ImmersiveNavBar has it hidden.
+  // grows by the bottom inset — read via `useSafeAreaInsets()` at the render
+  // site below (0 while ImmersiveNavBar has the system bar hidden).
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [authChecked, setAuthChecked] = useState(false);
@@ -79,7 +81,14 @@ function RegularUserTabs() {
   // event that races ahead of the read doesn't cause a premature redirect.
   const markerPendingRef = useRef(true);
   const graceTimerRef = useRef(null);
-  const { unreadCount, markAllAsRead } = useReportNotifications();
+  const { markAllAsRead } = useReportNotifications();
+  // `markAllAsRead` is read through a ref so the memoized navigator below does
+  // not depend on the notification context value — that value is a fresh object
+  // on every snapshot delivery, so depending on it would rebuild the navigator.
+  const markAllAsReadRef = useRef(markAllAsRead);
+  useEffect(() => {
+    markAllAsReadRef.current = markAllAsRead;
+  }, [markAllAsRead]);
 
   useEffect(() => {
     let unsubscribeProfile = null;
@@ -448,9 +457,9 @@ function RegularUserTabs() {
     };
   }, [router]);
 
-  const tabAvatarSource = profileImageUrl
-    ? { uri: profileImageUrl }
-    : require("../../assets/images/default_account.png");
+  // The tab avatar (and the whole navigator subtree) lives in
+  // `RegularUserNavigator` below, so notification updates that re-render this
+  // layout can never re-render the tab bar or rebuild its screen options.
 
   // Fail-closed: Home tabs render ONLY when auth is live AND the access
   // check proved this account is not rejected. Until then (or when bounced)
@@ -460,6 +469,140 @@ function RegularUserTabs() {
   }
 
   return (
+    <RegularUserNavigator
+      profileImageUrl={profileImageUrl}
+      bottomInset={insets.bottom}
+      markAllAsReadRef={markAllAsReadRef}
+    />
+  );
+}
+
+// Stable tab-icon components, hoisted to module scope so the memoized navigator
+// below can reference them WITHOUT creating fresh `tabBarIcon` closures (and
+// fresh option objects) on every render. The unread dot subscribes to the
+// notification context inside `TabUnreadBadge` itself, so badge updates only
+// re-render that leaf view — never the tab bar during a tap.
+function HomeTabIcon({ focused }) {
+  return (
+    <View style={styles.iconContainer}>
+      <Ionicons
+        name={focused ? "home" : "home-outline"}
+        size={24}
+        color={focused ? "#0EA5E9" : "#94A3B8"}
+      />
+      {focused && <View style={styles.activeIndicator} />}
+    </View>
+  );
+}
+
+function NotificationsTabIcon({ focused }) {
+  return (
+    <View style={styles.iconContainer}>
+      <Ionicons
+        name={focused ? "notifications" : "notifications-outline"}
+        size={24}
+        color={focused ? "#0EA5E9" : "#94A3B8"}
+      />
+      <TabUnreadBadge focused={focused} />
+      {focused && <View style={styles.activeIndicator} />}
+    </View>
+  );
+}
+
+function ProfileTabIcon({ focused, source }) {
+  return (
+    <View style={styles.iconContainer}>
+      <Image
+        source={source}
+        style={[styles.avatar, focused && styles.activeAvatar]}
+      />
+      {focused && <View style={styles.activeIndicator} />}
+    </View>
+  );
+}
+
+const HOME_TAB_OPTIONS = {
+  href: "/regular_user/home",
+  tabBarIcon: HomeTabIcon,
+};
+
+const NOTIFICATIONS_TAB_OPTIONS = {
+  href: "/regular_user/notifications",
+  tabBarIcon: NotificationsTabIcon,
+};
+
+// Memoized navigator subtree: re-renders only when the avatar URL or the bottom
+// safe-area inset changes. This is what keeps a notification/report snapshot —
+// which re-renders `RegularUserTabs` through the notification context — from
+// rebuilding the ~25 screen option objects and re-rendering the tab bar while
+// the user is tapping a tab (felt as ~0.5s input latency on slower phones).
+const RegularUserNavigator = memo(function RegularUserNavigator({
+  profileImageUrl,
+  bottomInset,
+  markAllAsReadRef,
+}) {
+  const avatarSource = useMemo(
+    () =>
+      profileImageUrl
+        ? { uri: profileImageUrl }
+        : require("../../assets/images/default_account.png"),
+    [profileImageUrl],
+  );
+
+  // `screenOptions` is the same object identity across renders unless the
+  // bottom inset changes — otherwise React Navigation recomputes options for
+  // every screen on each parent render (felt as tap latency).
+  const screenOptions = useMemo(
+    () => ({
+      headerShown: false,
+      tabBarShowLabel: false,
+      tabBarStyle: [
+        styles.tabBar,
+        {
+          height: TAB_BAR_HEIGHT + bottomInset,
+          paddingBottom: TAB_BAR_PADDING_BOTTOM + bottomInset,
+        },
+      ],
+      tabBarItemStyle: styles.tabItem,
+      lazy: true,
+      // Keep the (already mounted) tab screens from re-rendering while they
+      // are not focused — their data hooks still fire, but React skips the
+      // render pass, which keeps the JS thread free for tab switches.
+      freezeOnBlur: true,
+    }),
+    [bottomInset],
+  );
+
+  // The avatar image depends on the profile URL, so the profile tab's options
+  // object is memoized per avatar — not rebuilt inline on every render.
+  const profileTabOptions = useMemo(
+    () => ({
+      href: "/regular_user/profile",
+      tabBarIcon: ({ focused }) => (
+        <ProfileTabIcon focused={focused} source={avatarSource} />
+      ),
+    }),
+    [avatarSource],
+  );
+
+  // `listeners` must be a stable reference too, or the navigator re-subscribes
+  // on every render. The ref indirection keeps it independent of the
+  // notification context value (a fresh object on each snapshot delivery).
+  const notificationsListeners = useMemo(
+    () => ({
+      // Mark notifications as read only when the user LEAVES the
+      // notifications tab (blur), not when they open it. This way the
+      // unread highlights in the list stay visible while the user is
+      // viewing them, and only clear once they navigate away (e.g. to
+      // Home) and come back — matching YouTube-style read behavior.
+      blur: () => {
+        markAllAsReadRef.current?.();
+      },
+    }),
+    [markAllAsReadRef],
+  );
+
+  return (
     <>
 <RegularUserPresenceSync />
 <PushNotificationSync />
@@ -467,86 +610,17 @@ function RegularUserTabs() {
 <FloatingNotification />
       <NoInternetNotification />
       <BackInternetNotification />
-      <Tabs
-        screenOptions={{
-          headerShown: false,
-          tabBarShowLabel: false,
-          tabBarStyle: [
-            styles.tabBar,
-            {
-              height: TAB_BAR_HEIGHT + insets.bottom,
-              paddingBottom: TAB_BAR_PADDING_BOTTOM + insets.bottom,
-            },
-          ],
-          tabBarItemStyle: styles.tabItem,
-          lazy: true,
-        }}
-      >
-        <Tabs.Screen
-          name="home"
-          options={{
-            href: "/regular_user/home",
-            tabBarIcon: ({ focused }) => (
-              <View style={styles.iconContainer}>
-                <Ionicons
-                  name={focused ? "home" : "home-outline"}
-                  size={24}
-                  color={focused ? "#0EA5E9" : "#94A3B8"}
-                />
-                {focused && <View style={styles.activeIndicator} />}
-              </View>
-            ),
-          }}
-        />
+      <Tabs screenOptions={screenOptions}>
+        <Tabs.Screen name="home" options={HOME_TAB_OPTIONS} />
 
       <Tabs.Screen
         name="notifications"
-        options={{
-          href: "/regular_user/notifications",
-          tabBarIcon: ({ focused }) => (
-            <View style={styles.iconContainer}>
-              <Ionicons
-                name={focused ? "notifications" : "notifications-outline"}
-                size={24}
-                color={focused ? "#0EA5E9" : "#94A3B8"}
-              />
-{unreadCount > 0 && !focused ? (
-                <View style={styles.notifDot}>
-                  <Text style={styles.notifDotText}>{unreadCount > 9 ? "9+" : String(unreadCount)}</Text>
-                </View>
-              ) : null}
-              {focused && <View style={styles.activeIndicator} />}
-            </View>
-          ),
-        }}
-listeners={{
-          // Mark notifications as read only when the user LEAVES the
-          // notifications tab (blur), not when they open it. This way the
-          // unread highlights in the list stay visible while the user is
-          // viewing them, and only clear once they navigate away (e.g. to
-          // Home) and come back — matching YouTube-style read behavior.
-          blur: () => {
-            markAllAsRead();
-          },
-        }}
+        options={NOTIFICATIONS_TAB_OPTIONS}
+        listeners={notificationsListeners}
       />
 
 
-      <Tabs.Screen
-        name="profile"
-        options={{
-          href: "/regular_user/profile",
-          tabBarIcon: ({ focused }) => (
-            <View style={styles.iconContainer}>
-              <Image
-                source={tabAvatarSource}
-                style={[styles.avatar, focused && styles.activeAvatar]}
-              />
-              {focused && <View style={styles.activeIndicator} />}
-            </View>
-          ),
-        }}
-      />
+      <Tabs.Screen name="profile" options={profileTabOptions} />
 
       {/* Hidden routes (still navigable) */}
       <Tabs.Screen name="report" options={{ href: null }} />
@@ -587,7 +661,7 @@ listeners={{
       </Tabs>
     </>
   );
-}
+});
 
 const styles = StyleSheet.create({
   tabBar: {
@@ -635,28 +709,6 @@ const styles = StyleSheet.create({
 
   activeAvatar: {
     borderColor: "#0EA5E9",
-  },
-
-notifDot: {
-    position: "absolute",
-    top: -4,
-    right: -8,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    paddingHorizontal: 4,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#EF4444",
-    borderWidth: 1.5,
-    borderColor: "#FFFFFF",
-  },
-
-  notifDotText: {
-    color: "#FFFFFF",
-    fontSize: 10,
-    fontWeight: "800",
-    lineHeight: 12,
   },
 
   loading: {

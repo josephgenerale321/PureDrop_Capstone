@@ -1,9 +1,17 @@
 import Constants from "expo-constants";
 import { requireOptionalNativeModule } from "expo-modules-core";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 import { type NotificationItem, useReportNotifications } from "./notif_func";
 import { isNotificationUnread } from "./notif_reddot";
+import {
+  getNotificationDedupeKey,
+  isPresentedLoadedForUser,
+  loadPresentedKeys,
+  resetPresentedState,
+  tryClaimPresentedKey,
+} from "./supabase_presented_store";
+import { auth } from "../../firebaseConfig";
 
 /**
  * Android notification channel used for report-update local notifications.
@@ -95,65 +103,37 @@ const getLocalNotificationsModule = () => {
 };
 
 /**
- * Builds a stable "dedupe key" for a notification item.
- *
- * A report's Firestore document id does NOT change when the admin updates its
- * status — only `statusUpdatedAt` (and therefore `createdAtMs`) and `status`
- * change. Tracking by document id alone would make a status update to an
- * already-seen report invisible (the system notification never appears). So we
- * key on the triplet `reportId + createdAtMs + status`, which changes every
- * time the admin sets a new status.
- *
- * Verification cards are derived from the user doc (no own moving timestamp),
- * so they key on the provider's per-decision `seenKey`
- * (`status:updatedAt:rejectionCount`) — stable across restarts, new on every
- * genuine new decision.
+ * Builds a stable "dedupe key" for a notification.
+ * Delegates to the shared Supabase-backed store so the system notification
+ * and the floating banner use the EXACT same key space (this is what stops
+ * the same update presenting twice on app open). A report's document id does
+ * NOT change when the admin updates its status, so the shared key uses the
+ * triplet `reportId + createdAtMs + status`; verification cards key on the
+ * per-decision `seenKey`.
  */
-const getNotificationKey = (item: NotificationItem): string => {
-  if (item.kind === "verification") {
-    return `verification:${item.seenKey ?? `${item.status}:${item.createdAtMs}`}`;
-  }
-  return `${item.id}:${item.createdAtMs}:${item.status}`;
-};
+const getNotificationKey = (item: NotificationItem): string =>
+  getNotificationDedupeKey(item);
 
 /**
- * Module-level "already seen / already presented" trackers.
- *
- * Same rationale as floating_notif.tsx: component-scoped refs reset when the
- * layout remounts, which would re-present the same notification as a duplicate
- * system notification. Hoisting the sets to module scope makes each
- * notification present exactly once per app session. They survive a reopen
- * (background -> foreground, which keeps the same JS context), but are empty on
- * a cold phone/emulator restart (new JS context), so the app-open presentation
- * only fires after a genuine restart.
+ * Module-level "already seen" tracker for this app session.
+ * "Already presented" tracking lives in the shared Supabase-backed store
+ * (`supabase_presented_store.ts`), shared with floating_notif.tsx, persisted
+ * to the Supabase `notification_dedupe` table + AsyncStorage mirror.
  */
 const seededKeysRef = new Set<string>();
-const presentedKeysRef = new Set<string>();
-const MAX_PRESENTED_KEYS = 200;
-
-/**
- * Records a key into the module-level "presented" set, pruning the oldest
- * entries when the set grows too large to avoid unbounded memory growth.
- */
-const markPresented = (key: string): void => {
-  presentedKeysRef.add(key);
-  if (presentedKeysRef.size > MAX_PRESENTED_KEYS) {
-    const oldest = presentedKeysRef.values().next().value;
-    if (oldest !== undefined) {
-      presentedKeysRef.delete(oldest);
-    }
-  }
-};
 
 /**
  * Clears the module-scoped system-notification session state so a future
- * sign-in starts clean (no stale "already seen / presented" keys leaking
- * across sessions). Called on explicit logout. Crash-safe: it only mutates
- * in-memory sets.
+ * sign-in starts clean. "Already presented" keys live in the shared
+ * Supabase-backed store and are cleared there too (Supabase + AsyncStorage).
  */
 export const resetSystemNotificationState = (): void => {
   seededKeysRef.clear();
-  presentedKeysRef.clear();
+  try {
+    resetPresentedState(auth.currentUser?.uid ?? null);
+  } catch {
+    // Non-fatal.
+  }
 };
 
 /**
@@ -262,23 +242,22 @@ const presentLocalNotification = async (
 /**
  * `SystemNotificationSync` — renders nothing.
  *
- * Bridges the Firestore report-notification stream into native OS
- * notifications that appear OUTSIDE the app (the system notification shade /
- * tray). This is the "floating notification" the user sees on the lock screen
- * or notification center, independent of the in-app banner.
+ * Bridges the report-notification stream into native OS notifications that
+ * appear OUTSIDE the app (system shade / tray). This is the user-visible
+ * notification on the lock screen or notification center.
  *
- * Behavior:
- * - On a cold app start (new JS context) it presents ONE local system
- *   notification for the newest unread report update, so reopening the app
- *   surfaces pending updates.
- * - After that, it presents a local system notification for each genuinely
- *   NEW unread report update that arrives while the app is running.
- * - A plain reopen (background -> foreground, same JS context) does NOT
- *   re-present: the module-scoped dedup sets survive the reopen, so the same
- *   notification is not shown again.
- * - It never crashes on dev/preview/web/Expo Go: all native calls are wrapped
- *   in try/catch, gated by a native-module availability check, and guarded by
- *   an `isMounted` flag.
+ * FIX (Supabase, not Firebase): presentation is owned by the shared
+ * Supabase-backed store (`supabase_presented_store.ts` -- `notification_dedupe`
+ * table + AsyncStorage mirror), atomically shared with the in-app floating
+ * banner. Rules:
+ * - While the app is ACTIVE the floating banner owns presentation, so this
+ *   path only CLAIMS the key and stays silent (no duplicate OS heads-up).
+ * - On app open / cold start it seeds + claims and stays SILENT (the user is
+ *   looking at the app; still-unread items live in the notifications screen).
+ * - It schedules an OS notification ONLY for genuinely NEW unread updates
+ *   that arrive while the app is backgrounded/inactive (no banner visible).
+ * - It never fires before the shared presented-keys + read states load, so
+ *   restarts never replay old updates as phantom notifications.
  */
 export default function SystemNotificationSync() {
   const {
@@ -292,15 +271,35 @@ export default function SystemNotificationSync() {
 
 const mountedRef = useRef(true);
   const appOpenResolvedRef = useRef(false);
-  // Tracks whether the app is currently in the foreground. While the app is
-  // ACTIVE the in-app floating banner (floating_notif.tsx) already surfaces a
+  const appStateRef = useRef<boolean>(AppState.currentState === "active");
+  const [presentedReady, setPresentedReady] = useState(false);
+  // Tracks whether the app is currently in the foreground. While ACTIVE the
+  // in-app floating banner (floating_notif.tsx) already surfaces a
   // new status change, so we suppress the native heads-up notification to avoid
   // showing the same update twice. When the app is backgrounded or on the lock
   // screen there is no in-app banner, so the native notification is shown.
-  const appStateRef = useRef<boolean>(AppState.currentState === "active");
 
   useEffect(() => {
     mountedRef.current = true;
+
+    // Join the shared Supabase-backed presented-keys load so this path never
+    // fires before knowing what the floating banner already presented.
+    try {
+      const uid = auth.currentUser?.uid;
+      if (!uid) {
+        setPresentedReady(true);
+      } else {
+        void loadPresentedKeys(uid)
+          .catch(() => new Set<string>())
+          .then(() => {
+            if (mountedRef.current) {
+              setPresentedReady(true);
+            }
+          });
+      }
+    } catch {
+      setPresentedReady(true);
+    }
 
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState === "active") {
@@ -317,16 +316,18 @@ const mountedRef = useRef(true);
   }, []);
 
   useEffect(() => {
-    // Wait until BOTH read states are resolved. On a fresh app/phone restart
-    // they are briefly unresolved while AsyncStorage/Firestore load — if we
-    // presented now, everything would look unread and phantom system
-    // notifications would appear. The verification gate matters most: its
-    // card timestamps are frozen after the decision, so without it EVERY
-    // restart replays "Account verified" as a system notification.
+    // Wait until BOTH read states AND the shared presented-keys are loaded.
+    // On a restart these are briefly unresolved while AsyncStorage/Supabase
+    // load -- presenting now would replay old updates as phantom OS banners.
+    // The verification gate matters most: its timestamps are frozen after the
+    // decision, so without it EVERY restart replays "Account verified".
+    const uid = auth.currentUser?.uid ?? null;
     if (
       loading ||
       !lastSeenLoaded ||
       !verificationSeenLoaded ||
+      !presentedReady ||
+      !isPresentedLoadedForUser(uid) ||
       items.length === 0
     ) {
       return;
@@ -340,30 +341,28 @@ const mountedRef = useRef(true);
     if (!appOpenResolvedRef.current) {
       appOpenResolvedRef.current = true;
 
-      // App open: surface the newest unread report update as a system
-      // notification (so the user sees it even if they weren't looking at
-      // the app when it arrived).
-      let newestUnread: NotificationItem | null = null;
+      // App open / cold start: seed + CLAIM every still-unread key in the
+      // shared store and stay SILENT. The user is looking at the app -- the
+      // floating banner owns in-app presentation and the notifications screen
+      // holds the unread items. Scheduling an OS notification here is exactly
+      // the "appeared when I closed/reopened the app + doubles" bug.
       items.forEach((item) => {
-        // Seed the module-level known set so only genuinely new updates
-        // notify after this. Module scope means it survives remounts.
         seededKeysRef.add(getNotificationKey(item));
-        if (
-          isNotificationUnread(item, lastSeenMs, verificationSeenKey, verificationSeenLoaded)
-        ) {
-          if (!newestUnread || item.createdAtMs > newestUnread.createdAtMs) {
-            newestUnread = item;
+        try {
+          if (
+            isNotificationUnread(
+              item,
+              lastSeenMs,
+              verificationSeenKey,
+              verificationSeenLoaded,
+            )
+          ) {
+            tryClaimPresentedKey(uid, getNotificationKey(item));
           }
+        } catch {
+          // Non-fatal.
         }
       });
-
-      if (newestUnread) {
-        const key = getNotificationKey(newestUnread);
-        if (!presentedKeysRef.has(key) && mountedRef.current) {
-          markPresented(key);
-          void presentLocalNotification(Notifications, newestUnread);
-        }
-      }
       return;
     }
 
@@ -389,16 +388,10 @@ const mountedRef = useRef(true);
 
 if (newestNew) {
       const key = getNotificationKey(newestNew);
-      if (!presentedKeysRef.has(key) && mountedRef.current) {
-        // Always record the key as "presented" so this update is never shown
-        // again later (e.g. when the app returns to the foreground).
-        markPresented(key);
-
-        // While the app is ACTIVE the in-app floating banner has already
-        // surfaced this update, so presenting a native heads-up notification
-        // here would show the same status change twice. Only fire the native
-        // notification when the app is NOT in the foreground (backgrounded or
-        // on the lock screen), where there is no in-app banner.
+      // Atomic cross-presenter claim FIRST: if the floating banner already
+      // claimed this key (same tick while ACTIVE), stay silent -- no double.
+      // Only the background/inactive case schedules the OS notification.
+      if (tryClaimPresentedKey(uid, key) && mountedRef.current) {
         if (!appStateRef.current) {
           void presentLocalNotification(Notifications, newestNew);
         }
@@ -411,6 +404,7 @@ if (newestNew) {
     verificationSeenKey,
     verificationSeenLoaded,
     loading,
+    presentedReady,
   ]);
 
   return null;

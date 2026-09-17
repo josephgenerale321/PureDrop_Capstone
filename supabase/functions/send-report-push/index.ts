@@ -350,14 +350,17 @@ Deno.serve(async (request: Request) => {
     const pushEnabled = readBooleanField(fields, "pushNotificationEnabled");
 
     if (!token) {
+      console.log(`[send-report-push] skipped: no-token userId=${userId}`);
       return jsonResponse({ ok: true, skipped: "no-token" });
     }
 
     if (pushEnabled === false) {
+      console.log(`[send-report-push] skipped: disabled userId=${userId}`);
       return jsonResponse({ ok: true, skipped: "disabled" });
     }
 
     const status = normalizeStatus(body.status);
+    console.log('[send-report-push] request:', JSON.stringify({ kind: isVerificationPush ? 'verification' : 'report', userId, reportId: reportId || null, status: status || null, verificationStatus: verificationStatus || null }));
     const isVerifiedPush = isVerificationPush && verificationStatus === "verified";
     const pushTitle = isVerificationPush
       ? isVerifiedPush
@@ -418,11 +421,14 @@ Deno.serve(async (request: Request) => {
     };
 
     if (expoPayload?.data?.[0]?.status === "error") {
+      console.log(`[send-report-push] expo rejected: ${expoPayload.data[0].message || "unknown"}`);
       return jsonResponse(
         { error: expoPayload.data[0].message || "Expo push rejected the message." },
         422,
       );
     }
+
+    console.log(`[send-report-push] delivered kind=${isVerificationPush ? "verification" : "report"} userId=${userId}`);
 
     if (isVerificationPush) {
       return jsonResponse({ ok: true, kind: "verification", verificationStatus, rejectionTarget });

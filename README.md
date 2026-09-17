@@ -36,7 +36,7 @@ barangay, and optionally upload a photo as supporting evidence.
 ### Notifications
 - Push notifications (report updates) via Supabase edge function
 - In-app floating & system notifications
-- Unread badge indicators
+- Unread badge indicators (leaf-component `TabUnreadBadge`, hidden on the active tab)
 
 ### Profile
 - View / edit profile
@@ -51,8 +51,9 @@ barangay, and optionally upload a photo as supporting evidence.
 | Framework    | [Expo](https://expo.dev) SDK 54 |
 | UI           | React Native 0.81, React 19 |
 | Navigation   | [expo-router](https://docs.expo.dev/router/introduction) (file-based routing) |
+| System UI    | `expo-navigation-bar` (nav bar hidden natively + auto re-hide via `useImmersiveNavBar`) |
 | Auth         | Firebase Authentication |
-| Database     | Firebase Firestore (via Firebase Admin functions) |
+| Database     | Firebase Firestore (Admin SDK lives in `functions/`, not the app bundle) |
 | Storage      | Supabase Storage (buckets: `reports`, `regular_user`) |
 | Realtime / Edge | Supabase Realtime + Edge Functions (e.g. `send-report-push`) |
 | Maps         | `react-native-maps`, MapLibre/OSM tiles, MapTiler |
@@ -77,7 +78,7 @@ PureDrop_Capstone-main/
 │       ├── address_select.tsx
 │       └── email_verification/ # verify_email, success
 │   └── regular_user/           # Main authenticated user screens
-│       ├── _layout.jsx         # Tab layout + notification providers
+│       ├── _layout.jsx         # Tab layout + auth gate (memoized navigator, freezeOnBlur)
 │       ├── home.jsx            # Home dashboard
 │       ├── notifications.tsx   # Notifications tab
 │       ├── profile.tsx         # Profile tab
@@ -96,13 +97,15 @@ PureDrop_Capstone-main/
 ├── components/                 # Reusable UI + feature components
 │   ├── create_report/          # Form, map picker, GPS modal, gestures, ML validation
 │   ├── home/                   # Home dashboard (styles, hook, content)
-│   ├── notifications/          # floating_notif, system_notif, push_notificationfunc, notif_func, styles
+│   ├── notifications/          # floating_notif, system_notif, push_notificationfunc, notif_func, tabUnreadBadge, styles
 │   ├── profile/                # Profile editing, avatar camera/resize/validation
 │   ├── my_report/              # share_reports
 │   ├── all_reports/            # all_repcomponent
 │   ├── loading/                # homepage + restore_session loaders
 │   ├── login/                  # login backend helpers
 │   └── main_layout/            # save_loginfunc, home_exit_handler
+│   └── system/                 # immersiveNavBar + useImmersiveNavBar (Android nav-bar auto-hide)
+
 ├── api/                        # Backend service wrappers (Supabase, storage, auth)
 ├── lib/                        # Business logic
 │   ├── auth/                   # logoutState
@@ -113,6 +116,8 @@ PureDrop_Capstone-main/
 ├── functions/                  # Firebase Cloud Functions (admin SDK)
 ├── assets/                     # Images, icons, splash
 ├── scripts/                    # Utility scripts (avatar migration)
+├── plugins/                    # withAndroidConfigChanges, withMlKit16KB (config plugins)
+├── patches/                    # patch-package patches (vision-camera)
 ├── app.json / app.config.js
 ├── firebase.json / firestore.rules / storage.rules
 ├── google-services.json        # Gitignored (Android builds)
@@ -371,6 +376,33 @@ environment variables.
 
 ---
 
+## Native Configuration (Android)
+
+Two local [config plugins](https://docs.expo.dev/config-plugins/introduction/) in
+`plugins/` keep native fixes alive across `expo prebuild` (which regenerates the
+gitignored `android/` folder from scratch, so raw `AndroidManifest.xml` edits
+would be lost on every EAS build):
+
+- `withAndroidConfigChanges` - widens `MainActivity`'s `android:configChanges`
+  (`smallestScreenSize|density|fontScale|locale|layoutDirection|navigation`) so
+  Android never destroys/re-creates the Activity on language, display/font-size,
+  or navigation-mode changes. Without it, React Native boots a second root in
+  the same engine and expo-router logs
+  `Looks like you have configured linking in multiple places...` while
+  in-memory state is thrown away.
+- `withMlKit16KB` - forces the 16 KB page-size aligned ML Kit face-detection
+  artifact, required for face-detector native libs on newer Android.
+
+The Android system navigation bar is additionally hidden natively from the
+first frame via the `expo-navigation-bar` plugin (`visibility: "hidden"` in
+`app.json`); `components/system/useImmersiveNavBar.ts` (mounted once as
+`<ImmersiveNavBar />` in `app/_layout.tsx`) keeps it hidden at runtime with an
+auto re-hide (~2.5 s) plus exponential backoff so it never flicker-fights the
+ROM. Tunables: `autoHideDelayMs`, `escalateAfter`, `backoffFactor`,
+`maxAutoHides`, `loopWindowMs`, `pollIntervalMs`, `enabled`.
+
+---
+
 ## 🗄️ Backend Services
 
 ### Firebase
@@ -393,7 +425,7 @@ environment variables.
 npm run lint
 
 # Type check (TypeScript)
-npx tsc --noEmit
+npm run typecheck
 ```
 
 ---

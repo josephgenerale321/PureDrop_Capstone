@@ -9,6 +9,7 @@ import { defineSecret } from "firebase-functions/params";
 
 initializeApp();
 
+const REGION = "asia-southeast1";
 
 const ADMIN_PROFILE_COLLECTION = "admin_user";
 
@@ -130,7 +131,6 @@ const SIGHTENGINE_API_SECRET = defineSecret("SIGHTENGINE_API_SECRET");
 // user's regular_user profile document.
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
-const REGION = "asia-southeast1";
 const SIGHTENGINE_API_URL = "https://api.sightengine.com/1.0/check.json";
 const SIGHTENGINE_MODELS = "genai,deepfake,type,text";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -454,6 +454,7 @@ export const sendReportStatusPush = onDocumentUpdated(
 
     const userId = event.params.userId;
     const reportId = typeof event.params.reportId === "string" ? event.params.reportId : "";
+    const status = normalizeStatusForPush(after.status);
 
     try {
       const userDoc = await getFirestore()
@@ -462,6 +463,10 @@ export const sendReportStatusPush = onDocumentUpdated(
         .get();
 
       if (!userDoc.exists) {
+        logger.warn("sendReportStatusPush skipped: user profile not found", {
+          userId,
+          reportId,
+        });
         return;
       }
 
@@ -470,18 +475,37 @@ export const sendReportStatusPush = onDocumentUpdated(
       const pushEnabled = userData.pushNotificationEnabled;
 
       if (!token) {
+        logger.warn("sendReportStatusPush skipped: no push token", {
+          userId,
+          reportId,
+          status,
+        });
         return;
       }
 
       if (pushEnabled === false) {
+        logger.warn("sendReportStatusPush skipped: push disabled", {
+          userId,
+          reportId,
+          status,
+        });
         return;
       }
 
-      const status = normalizeStatusForPush(after.status);
-      const rawUpdatedBy = before.statusUpdatedBy;
-      const changedByAdmin =
-        typeof rawUpdatedBy === "string" ? rawUpdatedBy.toLowerCase() === "admin" : false;
-
+      const changedByAdmin = after.statusUpdatedBy === "admin";
+      if (!changedByAdmin) {
+        logger.warn("sendReportStatusPush skipped: not an admin update", {
+          userId,
+          reportId,
+          status,
+          statusUpdatedBy: after.statusUpdatedBy ?? null,
+        });
+        return;
+      }
+      // NOTE: previously this gate read `before.statusUpdatedBy` (the OLD
+      // snapshot) while the comment claimed to check the admin flag — since
+      // the flag only appears on the new snapshot, that read was never the
+      // admin value and every admin status change exited here silently.
       const body = buildPushBody(status, reportId, changedByAdmin);
 
       const response = await fetch(EXPO_PUSH_URL, {

@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   ActivityIndicator,
   RefreshControl,
@@ -224,7 +224,9 @@ export default function NotificationScreen() {
     refresh,
   } = useReportNotifications();
 
-  const sections = groupNotificationsByTime(items);
+  // Grouping walks every notification item, so memoize it: this screen also
+  // re-renders on unrelated notification-context updates (e.g. read state).
+  const sections = useMemo(() => groupNotificationsByTime(items), [items]);
 
   const handleGoToReports = () => {
     try {

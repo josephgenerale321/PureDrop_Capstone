@@ -1,4 +1,3 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -15,6 +14,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { auth } from "../../firebaseConfig";
 import { type NotificationItem, useReportNotifications } from "./notif_func";
 import { isNotificationUnread } from "./notif_reddot";
+import {
+  getNotificationDedupeKey,
+  isPresentedLoadedForUser,
+  loadPresentedKeys,
+  resetPresentedState,
+  tryClaimPresentedKey,
+} from "./supabase_presented_store";
 
 /**
  * How long the floating banner stays visible before it auto-dismisses.
@@ -40,120 +46,38 @@ const isNotificationsRoute = (pathname: string): boolean => {
 
 /**
  * Builds a stable "dedupe key" for a notification item.
- *
- * A report's Firestore document id does NOT change when the admin updates its
- * status — only `statusUpdatedAt` (and therefore `createdAtMs`) and `status`
- * change. So we key on the triplet `reportId + createdAtMs + status`, which
- * changes every time the admin sets a new status.
- *
- * Verification cards are derived from the user doc (no own timestamp that
- * moves), so they key on the provider's per-decision `seenKey`
- * (`status:updatedAt:rejectionCount`) — stable across restarts, new on every
- * genuine new decision.
+ * Delegates to the shared Supabase-backed store so the floating banner and
+ * the system notification use the EXACT same key space (this is what stops
+ * the same update presenting twice on app open).
  */
-const getNotificationKey = (item: NotificationItem): string => {
-  if (item.kind === "verification") {
-    return `verification:${item.seenKey ?? `${item.status}:${item.createdAtMs}`}`;
-  }
-  return `${item.id}:${item.createdAtMs}:${item.status}`;
-};
+const getNotificationKey = (item: NotificationItem): string =>
+  getNotificationDedupeKey(item);
 
 /**
- * Module-level "already seen / already presented" trackers.
+ * Module-level "already seen" tracker for this app session.
  *
  * - `seededKeysRef` tracks which notifications this app session has already
  *   seen, so genuinely new arrivals can be detected.
- * - `presentedKeysRef` tracks which notifications have already triggered a
- *   floating banner. It is ALSO persisted to AsyncStorage (per user) so a
- *   notification is presented only ONCE over the app's lifetime — it never
- *   re-appears on a later app reopen or restart.
- *
+ * - "Already presented" tracking lives in the shared Supabase-backed store
+ *   (`supabase_presented_store.ts`), shared with system_notif.tsx, persisted
+ *   to the Supabase `notification_dedupe` table + AsyncStorage mirror so a
+ *   notification presents only ONCE over the app's lifetime.
  * Hoisting to module scope means they survive layout remounts (navigation,
  * tab switches, Fast Refresh) without duplicating a banner.
  */
 const seededKeysRef = new Set<string>();
-const presentedKeysRef = new Set<string>();
-const MAX_PRESENTED_KEYS = 200;
-
-const presentedStoragePrefix = "@puredrop/presented_floating_notifs/";
-const getPresentedStorageKey = (uid: string): string =>
-  `${presentedStoragePrefix}${uid}`;
-
-/**
- * Loads the persisted set of already-presented notification keys for a user.
- * Survives app restarts so the same notification never re-presents a floating
- * banner on a later app open.
- */
-const loadPresentedKeys = async (uid: string): Promise<Set<string>> => {
-  try {
-    const raw = await AsyncStorage.getItem(getPresentedStorageKey(uid));
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return new Set(parsed.filter((k): k is string => typeof k === "string"));
-      }
-    }
-  } catch {
-    // Non-fatal: fall back to an empty set.
-  }
-  return new Set();
-};
-
-/**
- * Persists the current set of presented keys for a user (fire-and-forget).
- * Bound to MAX_PRESENTED_KEYS so the stored array cannot grow unbounded.
- */
-const persistPresentedKeys = (uid: string): void => {
-  try {
-    const arr = Array.from(presentedKeysRef).slice(-MAX_PRESENTED_KEYS);
-    void AsyncStorage.setItem(getPresentedStorageKey(uid), JSON.stringify(arr)).catch(
-      () => {
-        // Non-fatal.
-      },
-    );
-  } catch {
-    // Non-fatal.
-  }
-};
-
-/**
- * Records a key into the module-level "presented" set, pruning the oldest
- * entries when the set grows too large, and persists it to AsyncStorage so it
- * survives app restarts/reopens.
- */
-const markPresented = (key: string): void => {
-  presentedKeysRef.add(key);
-  if (presentedKeysRef.size > MAX_PRESENTED_KEYS) {
-    const oldest = presentedKeysRef.values().next().value;
-    if (oldest !== undefined) {
-      presentedKeysRef.delete(oldest);
-    }
-  }
-const uid = auth.currentUser?.uid;
-  if (uid) {
-    persistPresentedKeys(uid);
-  }
-};
 
 /**
  * Clears the module-scoped floating-banner session state so a future sign-in
- * starts with a clean slate (no stale "already presented" keys leaking across
- * sessions). Called on explicit logout. Crash-safe: it only mutates in-memory
- * sets and best-effort clears the persisted keys for the supplied uid.
+ * starts with a clean slate. "Already presented" keys live in the shared
+ * Supabase-backed store and are cleared there too (Supabase + AsyncStorage).
  */
 export const resetFloatingNotificationState = (uid?: string | null): void => {
   seededKeysRef.clear();
-  presentedKeysRef.clear();
-
-  if (uid) {
-    const key = getPresentedStorageKey(uid);
-    try {
-      void AsyncStorage.removeItem(key).catch(() => {
-        // Non-fatal.
-      });
-    } catch {
-      // Non-fatal.
-    }
+  try {
+    resetPresentedState(uid ?? null);
+  } catch {
+    // Non-fatal.
   }
 };
 
@@ -164,8 +88,10 @@ export const resetFloatingNotificationState = (uid?: string | null): void => {
  * unread report notification arrives while the app is running. It deliberately
  * does NOT show pending unread notifications on app open, so the same
  * notification never re-appears every time the app is opened. Presented keys
- * are persisted to AsyncStorage, so even across a full restart the same
- * notification is not re-presented.
+ * are claimed in the shared Supabase-backed store (`notification_dedupe`
+ * table + AsyncStorage mirror, never Firestore), so even across a full
+ * restart the same notification is not re-presented -- and the system
+ * notification path cannot double it on the same open.
  *
  * The component is crash-safe:
  * - It imports only core React Native primitives, `@expo/vector-icons`,
@@ -281,7 +207,9 @@ const mountedRef = useRef(true);
 
   /**
    * Restore the persisted "already presented" keys once on mount so the same
-   * notification is never re-presented after an app restart/reopen.
+   * notification is never re-presented after an app restart/reopen. Uses the
+   * shared Supabase-backed store (Supabase `notification_dedupe` table +
+   * AsyncStorage mirror) -- never Firestore.
    */
   useEffect(() => {
     let isMounted = true;
@@ -290,13 +218,14 @@ const mountedRef = useRef(true);
       setPresentedLoaded(true);
       return;
     }
-    void loadPresentedKeys(uid).then((loaded) => {
-      if (!isMounted) {
-        return;
-      }
-      loaded.forEach((k) => presentedKeysRef.add(k));
-      setPresentedLoaded(true);
-    });
+    void loadPresentedKeys(uid)
+      .catch(() => new Set<string>())
+      .then(() => {
+        if (!isMounted) {
+          return;
+        }
+        setPresentedLoaded(true);
+      });
     return () => {
       isMounted = false;
     };
@@ -308,37 +237,60 @@ const mountedRef = useRef(true);
    * The floating banner reacts ONLY to genuinely NEW unread report updates
    * that arrive while the app is running. It deliberately does NOT show a
    * banner for pending unread notifications on app open or cold start — the
-   * first snapshot simply seeds the "already seen" set. Pending unread updates
-   * are surfaced by the OS lock-screen/system notification instead
-   * (system_notif.tsx).
+   * first snapshot simply seeds the "already seen" set AND claims every
+   * still-unread update as presented in the shared Supabase-backed store,
+   * so neither this banner nor the system notification re-fires it later.
    *
-   * Presented keys are persisted to AsyncStorage, so even on a cold start the
-   * same notification is never re-presented as a floating banner.
+   * Presented claims live in Supabase (`notification_dedupe`) + AsyncStorage,
+   * shared atomically with system_notif.tsx via tryClaimPresentedKey.
    */
   useEffect(() => {
     // Wait until the read states and the persisted presented-key set have
     // been resolved. On a fresh app/phone restart these are briefly
-    // unresolved while AsyncStorage/Firestore load — presenting now would
+    // unresolved while AsyncStorage/Supabase load — presenting now would
     // treat everything as new and a phantom banner would appear. The
     // verification gate matters most: its card timestamps are frozen after
     // the decision, so without it EVERY restart replays "Account verified".
+    const activeUid = auth.currentUser?.uid ?? null;
     if (
       loading ||
       !lastSeenLoaded ||
       !verificationSeenLoaded ||
       !presentedLoaded ||
+      !isPresentedLoadedForUser(activeUid) ||
       items.length === 0
     ) {
       return;
     }
 
     // Seed the "already seen" set on the first resolved snapshot so only
-    // genuinely new updates toast after this. Module scope means it survives
-    // remounts.
+    // genuinely new updates toast after this. Also CLAIM every still-unread
+    // update in the shared Supabase store: the user is inside the app, so the
+    // floating banner path owns presentation -- without this claim the system
+    // path (system_notif.tsx) would schedule a duplicate OS notification for
+    // the same update on the SAME app open (the "doubles" bug), and both
+    // would replay on every reopen while still unread.
     if (!appOpenResolvedRef.current) {
       appOpenResolvedRef.current = true;
+      const uid = auth.currentUser?.uid ?? null;
       items.forEach((item) => {
-        seededKeysRef.add(getNotificationKey(item));
+        const key = getNotificationKey(item);
+        seededKeysRef.add(key);
+        try {
+          if (
+            isNotificationUnread(
+              item,
+              lastSeenMs,
+              verificationSeenKey,
+              verificationSeenLoaded,
+            ) &&
+            isPresentedLoadedForUser(uid)
+          ) {
+            tryClaimPresentedKey(uid, key);
+          }
+        } catch {
+          // Non-fatal.
+        }
       });
       return;
     }
@@ -365,8 +317,10 @@ const mountedRef = useRef(true);
 
     if (newestNew) {
       const key = getNotificationKey(newestNew);
-      if (!presentedKeysRef.has(key) && mountedRef.current) {
-        markPresented(key);
+      const uid = auth.currentUser?.uid ?? null;
+      // Atomic cross-presenter claim: if the system path already claimed this
+      // key (same tick), stay silent instead of doubling.
+      if (mountedRef.current && tryClaimPresentedKey(uid, key)) {
         present(newestNew);
       }
     }
