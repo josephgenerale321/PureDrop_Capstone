@@ -1,8 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import Clipboard from "@react-native-clipboard/clipboard";
 import {
   Alert,
-  Clipboard,
   Linking,
   Platform,
   ScrollView,
@@ -92,8 +92,8 @@ const openMessengerFallback = (message: string) => {
 };
 
 // Copies the share message to the device clipboard. Uses the web clipboard
-// API on web and React Native's Clipboard on native. Returns whether the
-// copy succeeded so the caller can show the right feedback.
+// API on web and @react-native-clipboard/clipboard on native. Returns whether
+// the copy succeeded so the caller can show the right feedback.
 export const copyReportDetails = async (report: ShareableReport): Promise<boolean> => {
   const message = buildReportShareMessage(report);
 

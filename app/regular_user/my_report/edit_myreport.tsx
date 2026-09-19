@@ -87,22 +87,16 @@ export default function EditMyReportScreen() {
     }
   }, [router]);
 
-  // [Discard]: confirm the discard and continue the interrupted navigation.
-  // The queued `beforeRemove` action is dispatched when the guard intercepted
-  // a removal; when the lightbox was opened directly from the back button or
-  // hardware back (screens in the Tabs navigator stay mounted, so
-  // `beforeRemove` does NOT fire on history back), fall back to a plain back.
+  // [Discard]: confirm the discard and redirect to the My Reports page
+  // (always, regardless of where the back navigation was headed).
+  // `isDiscardingRef` whitelists this one navigation so the unsaved-changes
+  // guard lets the redirect through without a second prompt.
   const handleDiscardChanges = useCallback(() => {
-    const pendingEvent = pendingRemoveEventRef.current;
     pendingRemoveEventRef.current = null;
     setDiscardModalVisible(false);
     isDiscardingRef.current = true;
-    if (pendingEvent) {
-      navigation.dispatch(pendingEvent.data.action);
-    } else {
-      performBack();
-    }
-  }, [navigation, performBack]);
+    router.replace("/regular_user/my_report");
+  }, [router]);
 
   // Reset the guard state whenever the screen regains focus, so a future
   // edit session (remount) never inherits a stale "discarding" flag or a
