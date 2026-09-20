@@ -84,6 +84,12 @@ export const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  // Destructive LOG OUT button in the back-confirm lightbox — same red as the
+  // sign-out modal's YES button; only shown to previously-verified users whose
+  // account is re-rejected (their only way out of the hub).
+  confirmLogoutButton: {
+    backgroundColor: "#EF4444",
+  },
   confirmButtonText: {
     color: "#FFFFFF",
     fontWeight: "700",

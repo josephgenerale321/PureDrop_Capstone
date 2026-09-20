@@ -2,13 +2,16 @@ import { useCallback, useState } from "react";
 import { Alert, BackHandler, Platform } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { getVerificationLaterOutcome } from "../../../login/backend/postEmailVerificationGate";
+import { performLogout } from "../../../../lib/auth/performLogout";
 import { START_ROUTE } from "../verificationmainroutes";
 
 export interface VerificationMainBack {
   isBackConfirmOpen: boolean;
+  isLoggingOut: boolean;
   handleBack: () => void;
   handleStayBack: () => void;
   handleConfirmBack: () => Promise<void>;
+  handleLogout: () => Promise<void>;
 }
 
 // Back navigation for the verification hub — extracted verbatim from
@@ -21,6 +24,8 @@ export default function useVerificationMainBack(): VerificationMainBack {
   // Lightbox confirmation for the back action — opened by both the on-screen
   // arrow and the Android hardware back button.
   const [isBackConfirmOpen, setIsBackConfirmOpen] = useState(false);
+  // Guard against double taps while the shared logout sequence runs.
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   // A single back press opens the lightbox; the user makes an explicit
   // choice there. Returns true because the press is always consumed (used
@@ -133,5 +138,28 @@ export default function useVerificationMainBack(): VerificationMainBack {
     }
   };
 
-  return { isBackConfirmOpen, handleBack, handleStayBack, handleConfirmBack };
+  // [ LOG OUT ] — the only exit for an EXISTING user that was approved before
+  // and re-rejected later: getVerificationLaterOutcome() refuses the "later"
+  // marker for ANY rejected account (so LATER is a dead end for them), and the
+  // regular_user layout is fail-closed for rejected accounts, making even the
+  // sign-out modal unreachable. This runs the FULL shared logout sequence
+  // (presence, saved login, caches, push token, notification state, "later"
+  // marker, Firebase signOut) and lands on /start ("Let's get started") where
+  // the user can sign in with a different account.
+  const handleLogout = async () => {
+    if (isLoggingOut) {
+      return;
+    }
+    setIsBackConfirmOpen(false);
+    setIsLoggingOut(true);
+    try {
+      await performLogout(router, START_ROUTE);
+    } finally {
+      // performLogout releases the module-level logout flag itself on
+      // failure; this only clears this hook's UI guard.
+      setIsLoggingOut(false);
+    }
+  };
+
+  return { isBackConfirmOpen, isLoggingOut, handleBack, handleStayBack, handleConfirmBack, handleLogout };
 }

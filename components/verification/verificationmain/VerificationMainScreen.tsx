@@ -33,8 +33,14 @@ export default function VerificationMainScreen() {
     validIdType,
     wasPreviouslyVerified,
   } = useVerificationMainProgress();
-  const { isBackConfirmOpen, handleBack, handleStayBack, handleConfirmBack } =
-    useVerificationMainBack();
+  const {
+    isBackConfirmOpen,
+    isLoggingOut,
+    handleBack,
+    handleStayBack,
+    handleConfirmBack,
+    handleLogout,
+  } = useVerificationMainBack();
 
   const handleFaceRecognition = () => {
     if (hasFaceScan) {
@@ -133,8 +139,11 @@ export default function VerificationMainScreen() {
       <VerificationBackConfirmLightbox
         visible={isBackConfirmOpen}
         isRejected={verificationStatus === "rejected"}
+        wasPreviouslyVerified={wasPreviouslyVerified}
+        isLoggingOut={isLoggingOut}
         onStay={handleStayBack}
         onConfirm={handleConfirmBack}
+        onLogout={handleLogout}
       />
     </>
   );

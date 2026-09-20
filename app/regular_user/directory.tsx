@@ -14,18 +14,19 @@ export default function DirectoryScreen() {
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={[styles.header, { paddingTop: Math.max(12, insets.top + 4) }]}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-          hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
-        >
-          <Ionicons name="arrow-back" size={24} color="#0F172A" />
-        </TouchableOpacity>
-
         <Text style={styles.title}>Directory</Text>
-
-        <View style={styles.headerSpacer} />
       </View>
+
+      {/* Floating back button — matches profileview / My Reports: 36x36 blue,
+          pinned to the top-left. Kept outside the header bar so it never shifts
+          with the title. */}
+      <TouchableOpacity
+        style={[styles.backButton, { top: insets.top + 12 }]}
+        onPress={() => router.back()}
+        hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+      >
+        <Ionicons name="arrow-back" size={24} color="#ffffff" />
+      </TouchableOpacity>
 
       <ScrollView 
         style={styles.content} 
@@ -154,9 +155,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#F8FAFC",
   },
   header: {
-    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingBottom: 16,
     backgroundColor: "#FFFFFF",
@@ -165,21 +164,24 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: "#F1F5F9",
+    // Floating back button — matches profileview / My Reports: 36x36, radius 6,
+    // pinned to the top-left. `top` is applied dynamically from the safe-area
+    // inset in the component (hardcoded values sit at the wrong distance on
+    // devices with different status-bar heights).
+    position: "absolute",
+    left: 20,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 6,
+    backgroundColor: "#0284c7",
     justifyContent: "center",
     alignItems: "center",
   },
-  headerSpacer: {
-    width: 40,
-    height: 40,
-  },
   title: {
     color: "#0F172A",
-    fontSize: 20,
-    fontWeight: "800",
+    fontSize: 24,
+    fontWeight: "700",
   },
   content: {
     flex: 1,

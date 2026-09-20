@@ -247,6 +247,19 @@ export default function useVerificationDecisionWatcher() {
                   data.validIdFrontPath ??
                   data.validIdSubmittedAt,
               );
+              // Admin-typed reason for THIS rejection. The previously-verified
+              // popup below must tell the user WHY the account was rejected —
+              // first-time (new user) rejections show the same text on the
+              // rejection notice screen instead. Null when the admin left it
+              // blank or the field is missing on legacy rejections.
+              const reasonRaw = data.rejectionReason as string | null | undefined;
+              const rejectionReason =
+                typeof reasonRaw === "string" && reasonRaw.trim().length > 0
+                  ? reasonRaw.trim()
+                  : null;
+              const rejectionReasonLine = rejectionReason
+                ? `\n\nReason: ${rejectionReason}`
+                : "";
               const goToRejectionNotice = () => {
                 try {
                   // Same dismiss-first rule as the approval redirect: flow
@@ -271,7 +284,7 @@ export default function useVerificationDecisionWatcher() {
               if (wasPreviouslyVerified && hasFaceOnFile && hasValidIdOnFile) {
                 Alert.alert(
                   "Verification Under Review",
-                  "Your account was verified before with a valid ID and face scan on file. This rejection may have been accidental — please check the notice and re-verify only if needed.",
+                  `Your account was verified before with a valid ID and face scan on file. This rejection may have been accidental — please check the notice and re-verify only if needed.${rejectionReasonLine}`,
                   [{ text: "OK", onPress: goToRejectionNotice }],
                 );
                 return;
