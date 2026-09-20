@@ -121,17 +121,17 @@ export default function MyReportScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
+      <TouchableOpacity
+        style={[styles.backButton, { top: insets.top + 12 }]}
+        onPress={() => router.replace("/regular_user/home")}
+        activeOpacity={0.85}
+        hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+      >
+        <Ionicons name="arrow-back" size={24} color="#ffffff" />
+      </TouchableOpacity>
+
       <View style={[styles.header, { paddingTop: Math.max(20, insets.top + 10) }]}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.replace("/regular_user/home")}
-          activeOpacity={0.85}
-          hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
-        >
-          <Ionicons name="arrow-back" size={24} color="#0F172A" />
-        </TouchableOpacity>
         <Text style={styles.title}>My Reports</Text>
-        <View style={styles.headerSpacer} />
       </View>
 
       {offline ? (

@@ -288,32 +288,34 @@ export default function NotificationScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <View style={styles.animatedScreen}>
-        <View style={[styles.header, { paddingTop: Math.max(8, insets.top + 2) }]}>
-<TouchableOpacity
-            style={styles.backButton}
-            onPress={() => router.navigate("/regular_user/home")}
-            hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
-            accessibilityRole="button"
-            accessibilityLabel="Go back to home"
-          >
-            <Ionicons name="chevron-back" size={24} color="#0F172A" />
-          </TouchableOpacity>
+      {/* Floating header actions — same alignment as profileview: the back
+          button is pinned to the top-left and the "Read" action to the
+          top-right, so the centered title never has to shift. */}
+      <TouchableOpacity
+        style={[styles.backButton, { top: insets.top + 12 }]}
+        onPress={() => router.navigate("/regular_user/home")}
+        hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+        accessibilityRole="button"
+        accessibilityLabel="Go back to home"
+      >
+        <Ionicons name="arrow-back" size={24} color="#ffffff" />
+      </TouchableOpacity>
 
+      {unreadCount > 0 ? (
+        <TouchableOpacity
+          style={[styles.markReadButton, { top: insets.top + 12 }]}
+          onPress={markAllAsRead}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Mark all notifications as read"
+        >
+          <Text style={styles.markReadText}>Read</Text>
+        </TouchableOpacity>
+      ) : null}
+
+      <View style={styles.animatedScreen}>
+        <View style={[styles.header, { paddingTop: Math.max(20, insets.top + 10) }]}>
           <Text style={styles.title}>Notifications</Text>
-          <View style={styles.badgeWrap}>
-            {unreadCount > 0 ? (
-<TouchableOpacity
-                style={styles.markReadButton}
-                onPress={markAllAsRead}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Mark all notifications as read"
-              >
-                <Text style={styles.markReadText}>Read</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
         </View>
 
         {loading ? (

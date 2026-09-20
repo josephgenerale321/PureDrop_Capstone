@@ -104,6 +104,22 @@ export function CreateReportFormContent({
 
   return (
     <>
+      {/* Fixed header — mirrors profileview: floating blue back button on the
+          left and a centered title. Both sit outside the ScrollView so neither
+          moves while the form scrolls (same as the My Reports screen). */}
+      <TouchableOpacity
+        style={[styles.backButton, { top: insets.top + 12 }]}
+        onPress={onBack}
+        activeOpacity={0.85}
+        hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+      >
+        <Ionicons name="arrow-back" size={24} color="#ffffff" />
+      </TouchableOpacity>
+
+      <View style={[styles.header, { paddingTop: Math.max(20, insets.top + 10) }]}>
+        <Text style={styles.pageTitle}>{pageTitle}</Text>
+      </View>
+
       <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -112,10 +128,7 @@ export function CreateReportFormContent({
         <ScrollView
           ref={scrollViewRef}
           style={styles.formScroll}
-          contentContainerStyle={[
-            styles.content,
-            { paddingTop: Math.max(22, insets.top + 10) },
-          ]}
+          contentContainerStyle={styles.content}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
           onScroll={handleScroll}
@@ -123,19 +136,6 @@ export function CreateReportFormContent({
           scrollEventThrottle={16}
           {...mobileScrollProps}
         >
-          <View style={styles.headerRow}>
-            <TouchableOpacity
-              style={styles.backButton}
-              onPress={onBack}
-              activeOpacity={0.85}
-              hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
-            >
-              <Ionicons name="arrow-back" size={24} color="#0F172A" />
-            </TouchableOpacity>
-            <Text style={styles.pageTitle}>{pageTitle}</Text>
-            <View style={{ width: 40 }} />
-          </View>
-
           <Text style={styles.sectionTitle}>Category</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryRow}>
             {CATEGORY_OPTIONS.map((option) => {

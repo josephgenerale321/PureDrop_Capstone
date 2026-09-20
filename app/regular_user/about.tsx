@@ -9,18 +9,17 @@ export default function AboutScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <TouchableOpacity
+        style={[styles.backButton, { top: insets.top + 12 }]}
+        onPress={() => router.replace("/regular_user/profile")}
+        activeOpacity={0.85}
+        hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+      >
+        <Ionicons name="arrow-back" size={24} color="#ffffff" />
+      </TouchableOpacity>
+
       <View style={[styles.header, { paddingTop: Math.max(12, insets.top + 4) }]}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.replace("/regular_user/profile")}
-          hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
-        >
-          <Ionicons name="arrow-back" size={24} color="#0F172A" />
-        </TouchableOpacity>
-
         <Text style={styles.headerTitle}>About</Text>
-
-        <View style={styles.headerSpacer} />
       </View>
 
       <ScrollView
@@ -81,37 +80,30 @@ const styles = StyleSheet.create({
   },
 
   header: {
-    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingBottom: 16,
   },
 
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: "#FFFFFF",
+    position: "absolute",
+    // `top` is applied dynamically from the safe-area inset in the component
+    // (hardcoded values sit at the wrong distance on devices with different
+    // status-bar heights).
+    left: 20,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 6,
+    backgroundColor: "#0284c7",
     justifyContent: "center",
     alignItems: "center",
-    zIndex: 2,
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-
-  headerSpacer: {
-    width: 40,
-    height: 40,
   },
 
   headerTitle: {
     color: "#0F172A",
-    fontSize: 20,
-    fontWeight: "800",
+    fontSize: 24,
+    fontWeight: "700",
   },
 
   scrollContent: {

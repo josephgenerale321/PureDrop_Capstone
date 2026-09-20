@@ -19,7 +19,8 @@ import {
   saveProfileCache,
 } from "../main_layout/offline_profile_cache";
 import { auth, db } from "../../firebaseConfig";
-import { uidToNumber } from "../../lib/uidToNumber";
+import { claimSequentialUserId } from "../../lib/regular_user/sequentialId";
+import { readStoredSequentialId, uidToNumber } from "../../lib/uidToNumber";
 
 const LOGIN_ROUTE = "/login" as Href;
 const LOCAL_AVATAR_URI_PATTERN = /^(file|content|ph|assets-library):/i;
@@ -56,18 +57,33 @@ interface RegularUserDoc {
   waterMeter?: number | string | null;
   profileImageUrl?: string;
   profileImagePath?: string;
+  sequentialId?: unknown;
 }
 
+// Display ID priority: stored sequentialId (1, 2, 3...) → stable hash
+// fallback (legacy docs with no stored ID yet — self-healed on view).
 const resolveDisplayId = (uid: string, data?: RegularUserDoc): string => {
-  const stored = (data as { sequentialId?: unknown; displayId?: unknown } | undefined);
-  const fromDoc = stored?.sequentialId ?? stored?.displayId;
-  if (typeof fromDoc === "number" && Number.isFinite(fromDoc)) {
-    return String(Math.trunc(fromDoc));
-  }
-  if (typeof fromDoc === "string" && fromDoc.trim().length > 0) {
-    return fromDoc.trim();
+  const stored = readStoredSequentialId(data);
+  if (stored !== null) {
+    return String(stored);
   }
   return uidToNumber(uid);
+};
+
+// Self-heal for legacy accounts: if a user doc has no stored sequentialId
+// (created before the feature), claim one in the background (atomic
+// transaction) so the next snapshot — and every other screen — shows
+// 1, 2, 3... Fire-and-forget: display uses the hash fallback meanwhile,
+// and claim failures are silently ignored (retried on the next view).
+const selfHealLog: Record<string, boolean> = {};
+const selfHealSequentialId = (uid: string, data?: RegularUserDoc) => {
+  if (!uid || selfHealLog[uid] || readStoredSequentialId(data) !== null) {
+    return;
+  }
+  selfHealLog[uid] = true;
+  void claimSequentialUserId(uid).catch(() => {
+    delete selfHealLog[uid];
+  });
 };
 
 export type EditableProfileValues = {
@@ -167,8 +183,11 @@ export function useProfileBackend() {
             typeof data.profileImageUrl === "string" && data.profileImageUrl.length > 0
               ? data.profileImageUrl
               : null;
-          // Display ID comes from the doc itself (or stable hash fallback) —
-          // zero extra Firestore reads (the old full-collection scan is gone).
+          // Display ID comes from the stored sequentialId (1, 2, 3...) —
+          // self-healed in the background for legacy docs that lack one.
+          // Zero extra Firestore reads for the display itself.
+          selfHealSequentialId(currentUser.uid, data);
+          const displaySequentialId = readStoredSequentialId(data);
           setProfile({
             fullName: data.fullName || "User",
             address: data.address || "",
@@ -177,14 +196,15 @@ export function useProfileBackend() {
             profileImageUrl: imgUrl,
             uid: resolveDisplayId(currentUser.uid, data),
           });
-          // Persist the profile locally (name + downloaded photo) so the
-          // Profile screen can render offline too.
+          // Persist the profile locally (name + downloaded photo + display
+          // ID) so the Profile screen can render offline too.
           void saveProfileCache(currentUser.uid, {
             fullName: data.fullName || "",
             address: data.address || "",
             email: data.email || currentUser.email || "",
             waterMeter: data.waterMeter ?? null,
             profileImageUrl: imgUrl,
+            sequentialId: displaySequentialId,
           });
           setLoading(false);
         },
@@ -194,8 +214,9 @@ export function useProfileBackend() {
           }
 
           console.error("Failed to subscribe to profile:", profileError);
-          // Offline fallback: show the cached profile (name + local photo)
-          // instead of an error so the Profile screen still reflects the user.
+          // Offline fallback: show the cached profile (name + local photo +
+          // cached display ID) instead of an error so the Profile screen
+          // still reflects the user.
           try {
             const cached = await getProfileCache(currentUser.uid);
             if (!isMounted) {
@@ -208,7 +229,12 @@ export function useProfileBackend() {
                 email: cached.email || currentUser.email || "No email",
                 waterMeter: cached.waterMeter ?? null,
                 profileImageUrl: cached.profileImageLocalUri || cached.profileImageUrl,
-                uid: uidToNumber(currentUser.uid),
+                uid:
+                  typeof cached.sequentialId === "number" &&
+                  Number.isInteger(cached.sequentialId) &&
+                  cached.sequentialId >= 1
+                    ? String(cached.sequentialId)
+                    : uidToNumber(currentUser.uid),
               });
               setError(null);
             } else {

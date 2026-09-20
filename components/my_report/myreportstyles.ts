@@ -13,31 +13,26 @@ export const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingBottom: 20,
-    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
   },
   title: {
     color: "#0F172A",
     fontSize: 24,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: "#FFFFFF",
-    alignItems: "center",
+    position: "absolute",
+    // `top` is applied dynamically from the safe-area inset in the component
+    // (hardcoded values sit at the wrong distance on devices with different
+    // status-bar heights).
+    left: 20,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 6,
+    backgroundColor: "#0284c7",
     justifyContent: "center",
-    zIndex: 2,
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  headerSpacer: {
-    width: 40,
+    alignItems: "center",
   },
   offlineBanner: {
     flexDirection: "row",

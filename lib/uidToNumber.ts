@@ -3,8 +3,9 @@
  * short numeric display ID. This is a deterministic hash — the same UID
  * always produces the same number, and it never throws.
  *
- * Used only for DISPLAY purposes. The real UID is still used internally
- * for Firestore document IDs, auth, storage paths, etc.
+ * Used only for DISPLAY purposes, and only as a LAST-RESORT fallback for
+ * legacy accounts that have no stored `sequentialId` yet. The real UID is
+ * still used internally for Firestore document IDs, auth, storage, etc.
  *
  * @param uid The Firebase Auth UID (string, null, or undefined).
  * @returns A stable numeric string (e.g. "1", "42", "12345").
@@ -23,4 +24,18 @@ export const uidToNumber = (uid: string | null | undefined): string => {
   // Ensure a positive number and keep it reasonably short.
   const positive = Math.abs(hash);
   return String(positive % 1000000);
+};
+
+/**
+ * Reads a previously stored sequential display ID (1, 2, 3...) from a
+ * regular-user document. Only positive integers count — anything else means
+ * "no ID assigned yet" and the caller should fall back to `uidToNumber`.
+ */
+export const readStoredSequentialId = (
+  data?: { sequentialId?: unknown } | null,
+): number | null => {
+  const value = data?.sequentialId;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1
+    ? value
+    : null;
 };

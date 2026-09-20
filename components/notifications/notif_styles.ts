@@ -9,36 +9,36 @@ export const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingBottom: 12,
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    // Floating back button — matches profileview / My Reports: 36x36, radius 6,
+    // pinned to the top-left. `top` is applied dynamically from the safe-area
+    // inset in the component (hardcoded values sit at the wrong distance on
+    // devices with different status-bar heights).
+    position: "absolute",
+    left: 20,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 6,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF",
-    zIndex: 2,
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
+    backgroundColor: "#0284c7",
   },
   title: {
     color: "#0F172A",
-    fontSize: 20,
-    fontWeight: "800",
-  },
-  badgeWrap: {
-    width: 40,
-    alignItems: "flex-end",
+    fontSize: 24,
+    fontWeight: "700",
   },
   markReadButton: {
+    // Pinned to the top-right, mirroring the back button, so the centered
+    // title never has to shift left to make room for it.
+    position: "absolute",
+    right: 20,
+    zIndex: 10,
     minWidth: 40,
     minHeight: 32,
     borderRadius: 10,

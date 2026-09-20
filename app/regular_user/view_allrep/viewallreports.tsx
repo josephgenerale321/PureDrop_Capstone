@@ -14,7 +14,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { uidToNumber } from "../../../lib/uidToNumber";
+import { readStoredSequentialId, uidToNumber } from "../../../lib/uidToNumber";
 import { auth, db } from "../../../firebaseConfig";
 
 type DetailedCommunityReport = {
@@ -93,10 +93,16 @@ export default function ViewAllReportsScreen() {
         const userSnap = await getDoc(userRef);
         const userData = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : {};
 
+        // Same anonymous-name source as the profile screen (stored
+        // sequentialId → stable hash), so "User 3" here matches "ID 3"
+        // on that person's profile.
+        const storedSequentialId = readStoredSequentialId({
+          sequentialId: userData.sequentialId,
+        });
         const fallbackName =
           typeof userData.fullName === "string" && userData.fullName.length > 0
             ? userData.fullName
-            : `User ${uidToNumber(selectedUserId)}`;
+            : `User ${storedSequentialId !== null ? storedSequentialId : uidToNumber(selectedUserId)}`;
         const fallbackAvatar =
           typeof userData.profileImageUrl === "string" && userData.profileImageUrl.length > 0
             ? userData.profileImageUrl
@@ -164,7 +170,9 @@ export default function ViewAllReportsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: Math.max(16, insets.top + 6) }]}>
+      <View
+        style={[styles.fixedHeader, { paddingTop: Math.max(8, insets.top + 6) }]}
+      >
         <TouchableOpacity
           style={styles.topBack}
           onPress={goToReportList}
@@ -173,7 +181,9 @@ export default function ViewAllReportsScreen() {
         >
           <Ionicons name="arrow-back" size={26} color="#0F172A" />
         </TouchableOpacity>
+      </View>
 
+      <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.card}>
           <Text style={styles.heading}>Problem Summary</Text>
           <Image source={avatarSource} style={styles.cornerAvatar} resizeMode="cover" />
@@ -236,6 +246,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#F8FAFC",
   },
+  fixedHeader: {
+    paddingHorizontal: 24,
+    paddingBottom: 12,
+    backgroundColor: "#F8FAFC",
+  },
   scrollContent: {
     paddingHorizontal: 24,
     paddingBottom: 28,
@@ -253,7 +268,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 20,
     zIndex: 2,
     shadowColor: "#0F172A",
     shadowOffset: { width: 0, height: 2 },

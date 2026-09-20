@@ -20,7 +20,7 @@ import {
 import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AllRepComponent, { type AllReportListItem } from "../../../components/all_reports/all_repcomponent";
-import { uidToNumber } from "../../../lib/uidToNumber";
+import { readStoredSequentialId, uidToNumber } from "../../../lib/uidToNumber";
 import { auth, db } from "../../../firebaseConfig";
 
 const LOGIN_ROUTE = "/login" as Href;
@@ -30,6 +30,7 @@ type UserProfileCache = Record<
   {
     fullName?: string;
     profileImageUrl?: string;
+    sequentialId?: unknown;
   }
 >;
 
@@ -137,11 +138,12 @@ export default function AllReportListScreen() {
                   profileCache[uid] = {};
                   return;
                 }
-                const userData = userSnap.data() as { fullName?: unknown; profileImageUrl?: unknown };
+                const userData = userSnap.data() as { fullName?: unknown; profileImageUrl?: unknown; sequentialId?: unknown };
                 profileCache[uid] = {
                   fullName: typeof userData.fullName === "string" ? userData.fullName : undefined,
                   profileImageUrl:
                     typeof userData.profileImageUrl === "string" ? userData.profileImageUrl : undefined,
+                  sequentialId: userData.sequentialId,
                 };
               } catch {
                 profileCache[uid] = {};
@@ -152,6 +154,15 @@ export default function AllReportListScreen() {
           const normalized = docs
             .map((item) => {
               const profile = item.userId ? profileCache[item.userId] : undefined;
+              // Anonymous fallback keeps the same sequential-ID source as the
+              // profile screen (stored ID → stable hash), so "User 3" here is
+              // the same person as "ID 3" on their profile.
+              const storedSequentialId = item.userId
+                ? readStoredSequentialId({ sequentialId: profile?.sequentialId })
+                : null;
+              const anonymousName = item.userId
+                ? `User ${storedSequentialId !== null ? storedSequentialId : uidToNumber(item.userId)}`
+                : "Unknown User";
               return {
                 reportId: item.reportId,
                 userId: item.userId,
@@ -161,7 +172,7 @@ export default function AllReportListScreen() {
                 reporterName:
                   item.reporterName
                   || profile?.fullName
-                  || (item.userId ? `User ${uidToNumber(item.userId)}` : "Unknown User"),
+                  || anonymousName,
                 reporterAvatarUrl: item.reporterAvatarUrl || profile?.profileImageUrl || null,
               } satisfies AllReportListItem;
             })

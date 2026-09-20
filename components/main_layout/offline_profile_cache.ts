@@ -171,6 +171,9 @@ export type CachedProfile = {
   profileImageUrl?: string | null;
   // Local `file://` URI of the downloaded profile picture (offline-safe).
   profileImageLocalUri?: string | null;
+  // Permanent sequential display ID (1, 2, 3...) — cached so the profile
+  // screen shows the right number offline too.
+  sequentialId?: number | null;
 };
 
 const cacheKeyFor = (uid: string): string => `${CACHE_PREFIX}:${uid}`;
@@ -277,6 +280,18 @@ export async function saveProfileCache(
       waterMeter: profile.waterMeter ?? null,
       profileImageUrl: profile.profileImageUrl ?? null,
       profileImageLocalUri: localUri,
+      sequentialId:
+        typeof profile.sequentialId === "number" &&
+        Number.isInteger(profile.sequentialId) &&
+        profile.sequentialId >= 1
+          ? profile.sequentialId
+          // Keep a previously cached ID when the new snapshot has none yet
+          // (e.g. an older cached write racing a legacy doc read).
+          : typeof previous?.sequentialId === "number" &&
+              Number.isInteger(previous.sequentialId) &&
+              previous.sequentialId >= 1
+            ? previous.sequentialId
+            : null,
     };
 
     await AsyncStorage.setItem(cacheKeyFor(uid), JSON.stringify(payload));
@@ -323,6 +338,12 @@ export async function getProfileCache(
       profileImageLocalUri:
         typeof parsed.profileImageLocalUri === "string"
           ? parsed.profileImageLocalUri
+          : null,
+      sequentialId:
+        typeof parsed.sequentialId === "number" &&
+        Number.isInteger(parsed.sequentialId) &&
+        parsed.sequentialId >= 1
+          ? parsed.sequentialId
           : null,
     };
   } catch {
@@ -389,6 +410,11 @@ const cachedProfileToDocData = (
     email: cached.email || emailFallback || "",
     waterMeter: cached.waterMeter ?? null,
     profileImageUrl: cached.profileImageUrl,
+    ...(typeof cached.sequentialId === "number" &&
+    Number.isInteger(cached.sequentialId) &&
+    cached.sequentialId >= 1
+      ? { sequentialId: cached.sequentialId }
+      : {}),
   };
 };
 

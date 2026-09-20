@@ -154,8 +154,8 @@ return () => unsubscribe();
             The report could not be loaded. It may have been removed or you may have a connection issue.
           </Text>
 <View style={styles.errorActions}>
-            <TouchableOpacity style={styles.backButton} onPress={() => router.replace("/regular_user/my_report")}>
-              <Text style={styles.backButtonText}>Go Back</Text>
+            <TouchableOpacity style={styles.goBackButton} onPress={() => router.replace("/regular_user/my_report")}>
+              <Text style={styles.goBackButtonText}>Go Back</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.retryButton} onPress={handleRetry} activeOpacity={0.85}>
               <Ionicons name="refresh-outline" size={18} color="#FFFFFF" />
@@ -169,16 +169,18 @@ return () => unsubscribe();
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-<ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: Math.max(16, insets.top + 6) }]}>
-        <TouchableOpacity
-          style={styles.topBack}
-          onPress={() => router.replace("/regular_user/my_report")}
-          activeOpacity={0.85}
-          hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
-        >
-          <Ionicons name="arrow-back" size={26} color="#0F172A" />
-        </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.floatingBackButton, { top: insets.top + 12 }]}
+        onPress={() => router.replace("/regular_user/my_report")}
+        activeOpacity={0.85}
+        hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+      >
+        <Ionicons name="arrow-back" size={24} color="#ffffff" />
+      </TouchableOpacity>
 
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, { paddingTop: 60 }]}
+      >
         <View style={styles.card}>
           <Text style={styles.heading}>Problem Summary</Text>
 
@@ -247,20 +249,33 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 20,
   },
-  topBack: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: "#FFFFFF",
-    alignItems: "center",
+  floatingBackButton: {
+    position: "absolute",
+    // `top` is applied dynamically from the safe-area inset in the component
+    // (hardcoded values sit at the wrong distance on devices with different
+    // status-bar heights).
+    left: 20,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 6,
+    backgroundColor: "#0284c7",
     justifyContent: "center",
-    marginBottom: 20,
-    zIndex: 2,
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
+    alignItems: "center",
+  },
+  backButton: {
+    position: "absolute",
+    // `top` is applied dynamically from the safe-area inset in the component
+    // (hardcoded values sit at the wrong distance on devices with different
+    // status-bar heights).
+    left: 20,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 6,
+    backgroundColor: "#0284c7",
+    justifyContent: "center",
+    alignItems: "center",
   },
   card: {
     borderRadius: 16,
@@ -317,13 +332,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 16,
   },
-  backButton: {
+  goBackButton: {
     backgroundColor: "#0EA5E9",
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderRadius: 16,
   },
-  backButtonText: {
+  goBackButtonText: {
     color: "#FFFFFF",
     fontSize: 16,
     fontWeight: "700",

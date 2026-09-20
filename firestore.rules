@@ -32,11 +32,16 @@ service cloud.firestore {
     }
 
     function isValidUserUpdate() {
-      // Prevent privilege escalation.
+      // Prevent privilege escalation for regular users.
       return !('role' in request.resource.data) || request.resource.data.role == resource.data.role;
     }
 
     function isSafeRegularUserUpdate() {
+      // Regular users cannot change identity fields. sequentialId is
+      // write-once: settable only when the doc has none yet (signup /
+      // self-heal transaction), and thereafter it must stay equal — the
+      // `updateDoc()` merge calls the app makes (push token refresh, profile
+      // edit) carry the old sequentialId back, which is allowed.
       return isValidUserUpdate()
              && (
                !('uid' in request.resource.data)
@@ -45,7 +50,43 @@ service cloud.firestore {
              && (
                !('createdAt' in request.resource.data)
                || request.resource.data.createdAt == resource.data.createdAt
+             )
+             && (
+               !('sequentialId' in request.resource.data)
+               || (
+                 request.resource.data.sequentialId is int
+                 && request.resource.data.sequentialId >= 1
+                 && (
+                   !('sequentialId' in resource.data)
+                   || request.resource.data.sequentialId == resource.data.sequentialId
+                 )
+               )
              );
+    }
+
+    function isSafeAdminUserUpdate() {
+      // Admins may change role/status, but must preserve identity and timestamps.
+      // sequentialId follows the same write-once rule as above: addable when
+      // missing (admin-created account claim), equal-value rewrites allowed.
+      return (
+        !('uid' in request.resource.data)
+        || request.resource.data.uid == resource.data.uid
+      )
+      && (
+        !('createdAt' in request.resource.data)
+        || request.resource.data.createdAt == resource.data.createdAt
+      )
+      && (
+        !('sequentialId' in request.resource.data)
+        || (
+          request.resource.data.sequentialId is int
+          && request.resource.data.sequentialId >= 1
+          && (
+            !('sequentialId' in resource.data)
+            || request.resource.data.sequentialId == resource.data.sequentialId
+          )
+        )
+      );
     }
 
     function isValidAdminUserWrite() {
@@ -60,8 +101,6 @@ service cloud.firestore {
                'statusUpdatedAt',
                'statusUpdatedBy',
                'statusUpdatedByUid',
-               'editedBy',
-               'editedByUid',
                'updatedAt',
                'issue',
                'category',
@@ -74,15 +113,15 @@ service cloud.firestore {
              && (
                !changed.hasAny(['status'])
                || request.resource.data.status in [
- 'Pending',
-                     'Resolving',
-                     'Approved',
-                     'Rejected',
-                     'pending',
-                     'resolving',
-                     'approved',
-                     'rejected'
-                   ]
+'Pending',
+                    'Resolving',
+                    'Approved',
+                    'Rejected',
+                    'pending',
+                    'resolving',
+                    'approved',
+                    'rejected'
+                  ]
              );
     }
 
@@ -90,19 +129,53 @@ service cloud.firestore {
       // Signed-in users can read profile docs.
       allow get, list: if isSignedIn();
 
-      // Profile document is created by the authenticated owner.
-      allow create: if isOwner(userId);
+      // Profile document is created by the authenticated owner. The signup
+      // profile is born with its final sequentialId (1, 2, 3...), so the
+      // create branch must allow it — write-once is enforced on update.
+      allow create: if isOwner(userId)
+        && (
+          !('sequentialId' in request.resource.data)
+          || (
+            request.resource.data.sequentialId is int
+            && request.resource.data.sequentialId >= 1
+          )
+        );
 
-      // Owners and admins can update while preserving role and identity fields.
+// Owners and admins can update while preserving role and identity fields.
       // This covers profile-image writes (profileImageUrl / profileImagePath)
-      // that the mobile app performs when a user edits their profile picture.
+      // performed when a user edits their profile picture.
+      // sequentialId stays write-once on update: self-heal may ADD it when
+      // the doc has none, but it can never be changed or removed afterwards.
       allow update: if (
-                      (isOwner(userId) || isAdmin())
-                      && isSafeRegularUserUpdate()
+                      (
+                        isOwner(userId)
+                        && isSafeRegularUserUpdate()
+                      )
+                      || (
+                        isAdmin()
+                        && isSafeAdminUserUpdate()
+                      )
                     );
 
       // Keep delete scoped to owner/admin workflows.
       allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // Shared atomic counter for sequential user display IDs (1, 2, 3...).
+    // Only ever bumped by +1 in the reserve/claim transaction — nobody can
+    // rewrite history, skip ahead, or hijack another user's number.
+    // Split into create + update because on create there is no
+    // resource.data to diff against.
+    match /counters/{counterId} {
+      allow get: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.next is int
+        && request.resource.data.next >= 1
+        && request.resource.data.keys().hasOnly(['next', 'updatedAt']);
+      allow update: if isSignedIn()
+        && request.resource.data.next is int
+        && request.resource.data.next == resource.data.next + 1
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['next', 'updatedAt']);
     }
 
     // Dedicated collection for admin profile records.
@@ -114,6 +187,13 @@ service cloud.firestore {
       allow create, update: if isOwner(userId) && isValidAdminUserWrite();
     }
 
+    // Per-admin activity log (settings changes, role updates, etc.).
+    match /admin_activity/{userId}/events/{eventId} {
+      allow get, list: if isOwner(userId);
+      allow create: if isOwner(userId);
+      allow update, delete: if false;
+    }
+
     // Required for collectionGroup(db, "reports") queries.
     match /{documentPath=**}/reports/{reportId} {
       allow get, list: if isSignedIn();
@@ -123,7 +203,7 @@ service cloud.firestore {
                     && request.resource.data.userId is string
                     && request.resource.data.userId == request.auth.uid;
 
-      // Owners can edit their own reports. Admins can edit approved report fields.
+      // Owners can edit their own reports. Admins can edit allowed report fields.
       allow update: if isSignedIn()
                     && (
                       (
@@ -146,6 +226,5 @@ service cloud.firestore {
                       || isAdmin()
                     );
     }
-
   }
 }

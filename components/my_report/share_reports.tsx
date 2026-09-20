@@ -282,14 +282,9 @@ export default function ShareReportScreen() {
     status: getParam(params.status),
   };
 
-  // Safe back: screens in the Tabs navigator stay mounted, so the history
-  // stack may be empty (cold deep-link) — fall back to the My Reports tab.
+  // Always go back to My Reports list (app/regular_user/my_report/index.tsx).
   const handleBackPress = () => {
-    if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace("/regular_user/my_report");
-    }
+    router.replace("/regular_user/my_report");
   };
 
   const handleOpenFacebook = async () => {

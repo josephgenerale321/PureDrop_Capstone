@@ -1,6 +1,7 @@
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "../../firebaseConfig";
+import { reserveSequentialUserId } from "../regular_user/sequentialId";
 
 export interface RegisterParams {
   fullName: string;
@@ -78,8 +79,23 @@ export async function registerUser(params: RegisterParams) {
 
   const user = userCredential.user;
 
+  // Reserve this user's sequential display ID (1, 2, 3...) BEFORE creating
+  // the profile, so the doc is born with its final ID already present — no
+  // stub document is ever written. Falls back to no stored ID (profile
+  // shows a hash fallback) if the reservation fails — the profile screen
+  // self-heals it on next view.
+  // This read/modify/write chain MUST stay atomic (transaction inside the
+  // helper), so two simultaneous signups can never receive the same ID.
+  let sequentialId: number | null = null;
+  try {
+    sequentialId = await reserveSequentialUserId();
+  } catch {
+    sequentialId = null;
+  }
+
   await setDoc(doc(db, "regular_user", user.uid), {
     uid: user.uid,
+    ...(sequentialId !== null ? { sequentialId } : {}),
     fullName,
     address,
     email,

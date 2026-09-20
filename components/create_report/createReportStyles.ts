@@ -17,29 +17,31 @@ export const styles = StyleSheet.create({
     paddingBottom: 110,
   },
 
-  // Header
-  headerRow: {
-    flexDirection: "row",
+  // Header — matches profileview: floating blue back button + centered title.
+  // Rendered outside the ScrollView so the header stays put while the form
+  // scrolls (same pattern as the My Reports list screen).
+  header: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
     alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 20,
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: "#FFFFFF",
+    position: "absolute",
+    // `top` is applied dynamically from the safe-area inset in the component
+    // (hardcoded values sit at the wrong distance on devices with different
+    // status-bar heights).
+    left: 20,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 6,
+    backgroundColor: "#0284c7",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
   },
   pageTitle: {
-    fontSize: 20,
-    fontWeight: "800",
+    fontSize: 24,
+    fontWeight: "700",
     color: "#0F172A",
   },
 
