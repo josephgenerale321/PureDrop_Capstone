@@ -522,8 +522,10 @@ export const sendReportStatusPush = onDocumentUpdated(
           // (push_notificationfunc.tsx / system_notif.tsx).
           channelId: "report-updates",
           priority: "high",
+          categoryId: "report-update",
           data: {
             reportId,
+            userId,
             route: "/regular_user/notifications",
           },
         }),
@@ -642,6 +644,7 @@ export const sendVerificationStatusPush = onDocumentUpdated(
             verificationStatus: afterStatus,
             rejectionTarget,
             wasReapproved: after.wasReapproved === true,
+            userId,
             route: isVerified ? "/login/validation/fullyverif" : "/login/validation/rejectedverif",
           },
         }),

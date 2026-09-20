@@ -19,6 +19,7 @@ import { auth } from "../../firebaseConfig";
  * the OS channel is consistent across both paths.
  */
 const LOCAL_CHANNEL_ID = "report-updates";
+const REPORT_CATEGORY_ID = "report-update";
 
 /**
  * Native module names required by the expo-notifications module graph.
@@ -182,6 +183,7 @@ if (item.status === "Pending") {
 const presentLocalNotification = async (
   Notifications: any,
   item: NotificationItem,
+  ownerUid: string | null,
 ): Promise<string | null> => {
   try {
     if (Platform.OS === "android") {
@@ -225,11 +227,14 @@ const presentLocalNotification = async (
               projectId,
             }
           : {
+              kind: "report",
+              userId: ownerUid,
               reportId: item.reportId,
               route: "/regular_user/notifications",
               projectId,
             },
       },
+      ...(item.kind === "report" ? { categoryId: REPORT_CATEGORY_ID } : {}),
       trigger: null, // Present immediately — no remote push, no FCM.
     });
 
@@ -393,7 +398,7 @@ if (newestNew) {
       // Only the background/inactive case schedules the OS notification.
       if (tryClaimPresentedKey(uid, key) && mountedRef.current) {
         if (!appStateRef.current) {
-          void presentLocalNotification(Notifications, newestNew);
+          void presentLocalNotification(Notifications, newestNew, uid);
         }
       }
     }

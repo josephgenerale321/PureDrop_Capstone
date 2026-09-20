@@ -385,6 +385,8 @@ Deno.serve(async (request: Request) => {
             : "/login/validation/rejectedverif",
         }
       : {
+          kind: "report",
+          userId,
           reportId,
           route: "/regular_user/notifications",
         };
@@ -404,6 +406,7 @@ Deno.serve(async (request: Request) => {
         // (push_notificationfunc.tsx / system_notif.tsx).
         channelId: "report-updates",
         priority: "high",
+        ...(isVerificationPush ? {} : { categoryId: "report-update" }),
         data: pushData,
       }),
     });

@@ -3,6 +3,8 @@ import { Alert } from "react-native";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { type Href, useRouter } from "expo-router";
+import { getLocallyAcknowledgedRejectionKey } from "../../login/backend/postEmailVerificationGate";
+import { saveVerificationCache } from "../../main_layout/offline_profile_cache";
 import { auth, db } from "../../../firebaseConfig";
 
 // Verified users' destination — when the admin approves a "pending" account
@@ -36,9 +38,13 @@ const REJECTED_NOTICE_ROUTE = "/login/validation/rejectedverif" as Href;
 // ---------------------------------------------------------------------------
 
 // Approval guard — fingerprint of the last handled "verified" snapshot
-// (uid + document updatedAt) so snapshot re-emissions of the same write can
-// never fire twice, while a later reject → re-approve cycle (a NEW updatedAt)
-// can fire again.
+// (uid + the admin's own `verifiedAt` decision stamp) so snapshot
+// re-emissions of the same write can never fire twice, while a later
+// reject → re-approve cycle (a NEW `verifiedAt`) can fire again. The stamp
+// deliberately avoids `updatedAt`: that field is bumped by OUR OWN writes
+// (`markFullyVerifiedNoticeSeen` on OK) and by the presence heartbeat, which
+// rotated the key after every acknowledgement and replayed the alert in a
+// loop.
 let handledApprovalKey: string | null = null;
 
 // Rejection guard — uid + rejection count of the last handled rejection, so a
@@ -115,21 +121,40 @@ export default function useVerificationDecisionWatcher() {
           // celebration). The one-time fullyverif marker is CONSUMED here so
           // the next login also goes directly Home instead of replaying the
           // celebration for an approval the user already acknowledged. The
-          // updatedAt fingerprint keeps snapshot re-emissions (and the
-          // duplicate listeners on stacked screens) from firing twice, while
-          // still allowing a future reject → re-approve cycle to alert again.
+          // approval fingerprint below keeps snapshot re-emissions (and
+          // the duplicate listeners on stacked screens) from firing twice,
+          // while still allowing a future reject → re-approve cycle to alert
+          // again.
           if (status === "verified") {
-            const updatedAt = data.updatedAt as
+            // Anchor the fingerprint to the ADMIN's own decision stamp,
+            // `verifiedAt` (server-stamped on every approve, nulled on every
+            // reject) — NEVER to `updatedAt`. `updatedAt` is bumped by our own
+            // acknowledgement write below (`markFullyVerifiedNoticeSeen`) and
+            // by the presence heartbeat every 2 minutes, so an
+            // `updatedAt`-keyed guard rotated right after OK, the same
+            // approval looked "new" again and the alert replayed forever.
+            // `reapprovalCycle` only exists once the updated admin panel has
+            // approved the account; it keeps legacy rows distinct and acts as
+            // a tiebreaker when two approvals land in the same millisecond.
+            const verifiedAt = data.verifiedAt as
               | { toMillis?: () => number }
               | null
               | undefined;
-            const stamp =
-              typeof updatedAt?.toMillis === "function"
-                ? String(updatedAt.toMillis())
-                : "none";
-            const approvalKey = `${uid}:${stamp}`;
+            const verifiedStamp =
+              typeof verifiedAt?.toMillis === "function"
+                ? String(verifiedAt.toMillis())
+                : `legacy:${Number(data.reapprovalCycle) || 0}`;
+            const approvalKey = `${uid}:${verifiedStamp}`;
             if (handledApprovalKey !== approvalKey) {
               handledApprovalKey = approvalKey;
+              // Keep the gate-relevant AsyncStorage snapshot in step with the
+              // live decision BEFORE navigating. The `/regular_user` layout
+              // (app/regular_user/_layout.jsx) reads that snapshot cache-first;
+              // while it still said "rejected" the freshly approved user was
+              // bounced straight back into this hub — the OK → hub (checked) →
+              // OK loop. Never throws; a storage failure only costs the
+              // authoritative server re-check on Home.
+              void saveVerificationCache(uid, data);
               // Re-approved existing user (explicit `wasReapproved` flag written
               // by the admin panel at approve time): they already celebrated
               // once, so they get the restrained "verified again" wording
@@ -153,18 +178,23 @@ export default function useVerificationDecisionWatcher() {
                     onPress: () => {
                       // The user acknowledged THIS approval in-session — burn
                       // the one-time fullyverif ticket now (best-effort, never
-                      // blocks navigation) so the next login skips it.
-                      void (async () => {
-                        try {
-                          const { markFullyVerifiedNoticeSeen } = await import(
-                            "../../login/backend/postEmailVerificationGate"
-                          );
-                          await markFullyVerifiedNoticeSeen(uid);
-                        } catch {
-                          // Non-fatal — worst case the login gate shows
-                          // fullyverif once; never crash or trap.
-                        }
-                      })();
+                      // blocks navigation) so the next login skips it. Skipped
+                      // for an account whose marker is already on the doc (an
+                      // existing user who celebrated before): rewriting it
+                      // only churns the document for nothing.
+                      if (!isExistingFullyVerifiedUser) {
+                        void (async () => {
+                          try {
+                            const { markFullyVerifiedNoticeSeen } = await import(
+                              "../../login/backend/postEmailVerificationGate"
+                            );
+                            await markFullyVerifiedNoticeSeen(uid);
+                          } catch {
+                            // Non-fatal — worst case the login gate shows
+                            // fullyverif once; never crash or trap.
+                          }
+                        })();
+                      }
                       try {
                         // Dismiss any flow screens (camera/review) pushed
                         // above the hub first, so the user is actually taken
@@ -229,11 +259,25 @@ export default function useVerificationDecisionWatcher() {
             }
 
             const rejectionKey = `${uid}:${rejectionCount}`;
+            // The user acknowledged THIS rejection on the notice screen (they
+            // pressed [Re-verify ID]) — honour the in-memory acknowledgement
+            // immediately. The Firestore `rejectedNoticeSeenCount` write is
+            // still in flight for a moment, and reading only the document made
+            // the hub treat the rejection as fresh and re-pop the
+            // "Verification Under Review" alert / bounce the user back to the
+            // notice right after they chose to re-verify.
+            const locallyAcknowledged =
+              getLocallyAcknowledgedRejectionKey() === rejectionKey;
             if (
               seenCount !== rejectionCount &&
+              !locallyAcknowledged &&
               handledRejectionKey !== rejectionKey
             ) {
               handledRejectionKey = rejectionKey;
+              // Same cache-honesty rule as the approval branch: persist the
+              // live rejection so the gate-relevant snapshot can never keep
+              // claiming "verified" for an account the admin just rejected.
+              void saveVerificationCache(uid, data);
               // Accidental-reject signal: previously fully verified (celebration
               // marker still present) + both Valid ID and face scan still on
               // file. Same markers the hub's useVerificationMainProgress uses.

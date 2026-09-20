@@ -84,21 +84,39 @@ export default function RejectedVerificationScreen() {
         };
 
         const profileRef = doc(db, "regular_user", uid);
+        const fetchServerData = async () => {
+          const snapshot = await getDocFromServer(profileRef);
+          return snapshot.exists()
+            ? (snapshot.data() as Record<string, unknown>)
+            : null;
+        };
         const fast = await getProfileFast({
           uid,
           emailFallback: auth.currentUser?.email ?? null,
           getCacheSnapshot: async () => null,
-          getServerSnapshot: async () => {
-            const snapshot = await getDocFromServer(profileRef);
-            return snapshot.exists()
-              ? (snapshot.data() as Record<string, unknown>)
-              : null;
-          },
+          getServerSnapshot: fetchServerData,
         });
         if (cancelled) {
           return;
         }
+        // Provisional cache-first paint (instant text on warm opens).
         applyData(fast.data);
+        // The AsyncStorage snapshot can PREDATE this rejection — an old
+        // "verified" copy carries no reason, no target and a stale count, which
+        // rendered the notice with no "Reason:" line and no "Please resubmit:"
+        // hint. Always revalidate from the server so the details on screen (and
+        // the count the acknowledgement write uses) are authoritative. Offline
+        // / hiccup: the cached values simply stay on screen.
+        if (fast.source !== "server" && fast.data) {
+          try {
+            const fresh = await fetchServerData();
+            if (!cancelled) {
+              applyData(fresh);
+            }
+          } catch {
+            // Non-fatal — the cached values already painted.
+          }
+        }
       } catch {
         // Non-fatal — the screen already renders with the default texts, so
         // an offline device or a Firestore hiccup can never crash it.
@@ -142,6 +160,22 @@ export default function RejectedVerificationScreen() {
     // "Please wait...". The write lands silently in the background.
     setIsSubmitting(true);
 
+    // Record the acknowledgement FIRST — still fire-and-forget (never awaited,
+    // never blocking), but starting it before the replace() matters:
+    // `markRejectedNoticeSeen` mirrors the acknowledgement IN MEMORY
+    // synchronously, so the hub's realtime rejection watcher already sees
+    // "acknowledged" when it mounts on the next tick. With the write started
+    // AFTER the navigation, the hub read a not-yet-acknowledged document and
+    // re-popped the "Verification Under Review" alert (and could bounce the
+    // user back to this notice) the moment they arrived to re-verify.
+    void (async () => {
+      try {
+        await markRejectedNoticeSeen(rejectionCount);
+      } catch {
+        // Non-fatal — the helper never throws.
+      }
+    })();
+
     // Into the re-verification flow — SINGLE replace() (never
     // dismissAll()+replace back-to-back: dismissAll() unmounts this screen
     // mid-flight, so the replace() never runs). Wrapped so an Expo Router
@@ -152,17 +186,6 @@ export default function RejectedVerificationScreen() {
       // Navigation must never crash the app.
       setIsSubmitting(false);
     }
-
-    // Mark this rejection's notice as seen so it pops up only ONCE per
-    // rejection (a new admin rejection shows it again). Fire-and-forget:
-    // never awaited, never blocks the navigation above.
-    void (async () => {
-      try {
-        await markRejectedNoticeSeen(rejectionCount);
-      } catch {
-        // Non-fatal — navigation already happened.
-      }
-    })();
   };
 
   return (

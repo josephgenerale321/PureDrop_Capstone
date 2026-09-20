@@ -21,6 +21,7 @@ import {
 } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { auth, db } from "../../firebaseConfig";
+import { getNotificationCalendarAnchors } from "./notif_reddot";
 // Synced with verificationPushSync (module-level handled key) so every
 // acknowledgement path converges — defined locally (not imported) to avoid
 // a notif_func <-> verificationPushSync import cycle.
@@ -200,13 +201,51 @@ const formatTimestampLabel = (value: unknown): string => {
   return "Date unavailable";
 };
 
+// Month abbreviations for the absolute card labels below. Kept as a table
+// instead of `toLocaleDateString` options so the format is identical on
+// Android / iOS / web (Hermes Intl support varies) and matches the app's
+// English-only UI.
+const MONTH_ABBREVIATIONS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+/**
+ * Timestamp label for a notification card.
+ *
+ * CALENDAR-ALIGNED on purpose: it uses the SAME anchors as the section
+ * headers (`getNotificationCalendarAnchors`), so a card can never contradict
+ * the bucket it is rendered under:
+ *
+ *   today      -> "Just now" / "Xm ago" / "Xh ago"
+ *   yesterday  -> "Yesterday"
+ *   this week  -> "Xd ago"     (header "This Week")
+ *   older      -> "Aug 30"     (header "This Month" / "Last Month" / "Earlier")
+ *                 "Aug 30, 2025" when the year differs
+ *
+ * The previous rolling version emitted "Xd ago" for anything younger than 7
+ * days, which rendered "Last Month" + "2d ago" on the 1st–3rd of a month, and
+ * treated any 24–48h gap as "Yesterday" even when it was not the previous
+ * calendar day. `Xd ago` is now only reachable inside the current / previous
+ * calendar week, so the label always agrees with its header.
+ */
 export const formatRelativeTime = (createdAtMs: number): string => {
   if (!createdAtMs || createdAtMs <= 0) {
     return "";
   }
 
-  const now = Date.now();
-  const diffMs = now - createdAtMs;
+  const nowMs = Date.now();
+  const diffMs = nowMs - createdAtMs;
   if (diffMs < 0) {
     return "Just now";
   }
@@ -221,22 +260,43 @@ export const formatRelativeTime = (createdAtMs: number): string => {
     return `${diffMin}m ago`;
   }
 
-  const diffHours = Math.floor(diffMin / 60);
-  if (diffHours < 24) {
-    return `${diffHours}h ago`;
+  const anchors = getNotificationCalendarAnchors(nowMs);
+
+  if (createdAtMs >= anchors.startOfToday) {
+    return `${Math.floor(diffMin / 60)}h ago`;
   }
 
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays === 1) {
+  if (createdAtMs >= anchors.startOfYesterday) {
     return "Yesterday";
   }
 
-  if (diffDays < 7) {
-    return `${diffDays}d ago`;
+  if (createdAtMs >= anchors.startOfLastWeek) {
+    // Calendar days (not `diffHours / 24`) so the number matches the day
+    // boundary the bucket used. Covers both This Week and Last Week, so the
+    // label (e.g. "9d ago") always agrees with its section header.
+    const created = new Date(createdAtMs);
+    const startOfCreatedDay = new Date(
+      created.getFullYear(),
+      created.getMonth(),
+      created.getDate(),
+    ).getTime();
+    const daysAgo = Math.max(
+      1,
+      Math.round((anchors.startOfToday - startOfCreatedDay) / 86_400_000),
+    );
+    return `${daysAgo}d ago`;
   }
 
+  // Older than last calendar week: an absolute, calendar-true date. NEVER
+  // "Xd ago" here — that is exactly what contradicted the "This Month" /
+  // "Last Month" headers.
   try {
-    return new Date(createdAtMs).toLocaleDateString();
+    const created = new Date(createdAtMs);
+    const month = MONTH_ABBREVIATIONS[created.getMonth()] ?? "";
+    const date = `${month} ${created.getDate()}`.trim();
+    return created.getFullYear() === new Date(nowMs).getFullYear()
+      ? date
+      : `${date}, ${created.getFullYear()}`;
   } catch {
     return "";
   }

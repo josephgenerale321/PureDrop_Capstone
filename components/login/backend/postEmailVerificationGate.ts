@@ -611,10 +611,39 @@ export async function resolvePostLoginTarget(
   return "home";
 }
 
+// ---------------------------------------------------------------------------
+// In-memory rejection acknowledgement mirror
+// ---------------------------------------------------------------------------
+// The Firestore write below needs a round-trip, but the hub's realtime
+// rejection watcher (useVerificationDecisionWatcher) and the `/regular_user`
+// fail-closed gate re-evaluate the account the INSTANT the user navigates off
+// the notice screen. While the write was still in flight they read the
+// rejection as UNacknowledged and replayed the notice / the "Verification
+// Under Review" alert right after [Re-verify ID]. This synchronous mirror
+// closes that window; a NEW rejection bumps `verificationRejectionCount`, so
+// its own notice still fires. Keyed `uid:count` — the same fingerprint the
+// watcher uses.
+let locallyAcknowledgedRejectionKey: string | null = null;
+
+/**
+ * `uid:count` of the rejection the user acknowledged on THIS app run, or null.
+ * Purely in-memory (never persisted): the Firestore write stays the durable
+ * record — this only prevents acting on a not-yet-synced acknowledgement.
+ */
+export function getLocallyAcknowledgedRejectionKey(): string | null {
+  return locallyAcknowledgedRejectionKey;
+}
+
 /**
  * Marks the rejection notice as SEEN for the given rejection count, so the
  * notice pops up exactly ONCE per rejection (a new admin rejection bumps
  * `verificationRejectionCount` and the notice shows again).
+ *
+ * The count is reconciled against the live `regular_user` document first: the
+ * notice screen reads cache-first, so the count it passes can be stale (0 for
+ * a rejection that just landed). Writing that stale 0 recorded the rejection
+ * as forever-UNacknowledged (seen 0 ≠ count 1) — the exact reason the notice
+ * and the existing-user alert kept coming back after [Re-verify ID].
  *
  * Fully non-fatal: if the write fails the worst case is the notice showing
  * one more time on the next login — never a crash.
@@ -625,9 +654,30 @@ export async function markRejectedNoticeSeen(rejectionCount: number): Promise<vo
     return;
   }
 
-  const safeCount = Number.isFinite(rejectionCount)
+  let safeCount = Number.isFinite(rejectionCount)
     ? Math.max(0, Math.floor(rejectionCount))
     : 0;
+
+  // Synchronous mirror — set BEFORE the first await so the hub's watcher,
+  // mounting on the next tick, already sees this rejection as acknowledged.
+  locallyAcknowledgedRejectionKey = `${user.uid}:${safeCount}`;
+
+  // Authoritative count: never acknowledge LESS than the account's real
+  // rejection count (server read; offline keeps the caller's value).
+  try {
+    const snap = await getDoc(doc(db, "regular_user", user.uid));
+    const liveRaw = snap.exists()
+      ? (snap.data() as { verificationRejectionCount?: unknown })
+          .verificationRejectionCount
+      : undefined;
+    const live = Number(liveRaw);
+    if (Number.isFinite(live) && Math.floor(live) > safeCount) {
+      safeCount = Math.floor(live);
+      locallyAcknowledgedRejectionKey = `${user.uid}:${safeCount}`;
+    }
+  } catch {
+    // Offline / hiccup — keep the caller's count.
+  }
 
   try {
     await updateDoc(doc(db, "regular_user", user.uid), {

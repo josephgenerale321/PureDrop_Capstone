@@ -23,6 +23,7 @@ import {
   markSessionReady,
 } from "../../components/main_layout/save_loginfunc";
 import { resolvePostLoginTarget } from "../../components/login/backend/postEmailVerificationGate";
+import { consumePendingReportsRoute } from "../../components/notifications/push_notificationfunc";
 
 const FORGOT_PASSWORD_ROUTE = "/login/forgot_password" as Href;
 // Rejection notice screen — shown when the admin rejected the user's
@@ -93,6 +94,16 @@ const handleLogin = async () => {
           }
         } catch {
           // Non-fatal — fast path simply stays unarmed.
+        }
+      }
+
+      if (loginTarget === "home") {
+        const continued = await consumePendingReportsRoute(
+          auth.currentUser?.uid ?? "",
+          router,
+        );
+        if (continued) {
+          return;
         }
       }
 

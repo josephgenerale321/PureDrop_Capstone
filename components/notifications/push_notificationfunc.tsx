@@ -6,9 +6,98 @@ import { onAuthStateChanged } from "firebase/auth";
 import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { useEffect, useRef } from "react";
 import { AppState, Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { auth, db } from "../../firebaseConfig";
 
 const PUSH_CHANNEL_ID = "report-updates";
+
+export const REPORT_CATEGORY_ID = "report-update";
+export const VIEW_REPORTS_ACTION_ID = "view-reports";
+export const VIEW_REPORTS_ACTION_TITLE = "View Your Reports";
+const MY_REPORTS_ROUTE = "/regular_user/my_report/index" as Href;
+const LOGIN_ROUTE = "/login" as Href;
+const pendingReportsRouteStorageKey = (uid: string): string =>
+  `@puredrop/pending_reports_route/${uid}`;
+
+const stashPendingReportsRouteForPushOwner = async (pushOwnerUid: string): Promise<void> => {
+  try {
+    await AsyncStorage.setItem(pendingReportsRouteStorageKey(pushOwnerUid), String(MY_REPORTS_ROUTE));
+  } catch {
+    // Non-fatal.
+  }
+};
+
+export const clearPendingReportsRoute = async (uid: string): Promise<void> => {
+  try {
+    await AsyncStorage.removeItem(pendingReportsRouteStorageKey(uid));
+  } catch {
+    // Non-fatal.
+  }
+};
+
+export const consumePendingReportsRoute = async (
+  signedInUid: string,
+  router: { push: (route: Href) => void },
+): Promise<boolean> => {
+  try {
+    const stored = await AsyncStorage.getItem(pendingReportsRouteStorageKey(signedInUid));
+    if (stored !== String(MY_REPORTS_ROUTE)) {
+      return false;
+    }
+    await AsyncStorage.removeItem(pendingReportsRouteStorageKey(signedInUid));
+    router.push(MY_REPORTS_ROUTE);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const ensureReportCategoryAsync = async (Notifications: any): Promise<void> => {
+  try {
+    await Notifications.setNotificationCategoryAsync(REPORT_CATEGORY_ID, [
+      {
+        identifier: VIEW_REPORTS_ACTION_ID,
+        buttonTitle: VIEW_REPORTS_ACTION_TITLE,
+        options: { opensAppToForeground: true },
+      },
+    ]);
+  } catch {
+    // Non-fatal.
+  }
+};
+
+/**
+ * Registers the `report-update` notification category (with the
+ * `view-reports` action button) without requiring an authenticated session.
+ *
+ * Must run at app start on EVERY route (mounted in `app/_layout.tsx`) rather
+ * than only inside `PushNotificationSync` (which mounts solely under
+ * `app/regular_user/_layout.jsx`). On Android the action buttons only render
+ * when the category was registered before the push arrives while the app
+ * process is alive (expo/expo#31503) — a backgrounded/killed app that never
+ * ran the registration shows a buttonless banner even though `categoryId`
+ * arrives intact. Idempotent; safe to call alongside `PushNotificationSync`.
+ */
+export const ensureReportActionCategoryAsync = async (): Promise<void> => {
+  const Notifications = getNotificationsModule();
+  if (!Notifications) {
+    return;
+  }
+  await ensureReportCategoryAsync(Notifications);
+};
+
+/**
+ * Root-level sync — mount once in `app/_layout.tsx` (every route, no auth
+ * required) so the category exists before any report push can arrive.
+ * `PushNotificationSync` keeps its own call for foreground sessions; both are
+ * idempotent.
+ */
+export function ReportActionCategorySync() {
+  useEffect(() => {
+    void ensureReportActionCategoryAsync();
+  }, []);
+  return null;
+}
 
 type PushRegistrationResult = {
   token: string | null;
@@ -357,17 +446,40 @@ export default function PushNotificationSync() {
 
     const Notifications = getNotificationsModule();
     if (Notifications) {
+      void ensureReportCategoryAsync(Notifications);
       responseSubscriptionRef.current =
         Notifications.addNotificationResponseReceivedListener(
           (response: NotificationResponse) => {
             try {
-              // Verification pushes carry `data.route` (fullyverif / rejectedverif)
-              // from sendVerificationStatusPush / the admin dashboard. Report
-              // pushes carry the notifications list route. Fall back to the list
-              // for legacy payloads without a route.
-              const rawRoute = (response?.notification?.request?.content?.data as
-                | { route?: unknown }
-                | undefined)?.route;
+              const content = response?.notification?.request?.content;
+              const data = (content?.data as
+                | { route?: unknown; userId?: unknown }
+                | undefined) ?? {};
+              const actionId = response?.actionIdentifier as string | undefined;
+              const signedInUid = auth.currentUser?.uid ?? null;
+              const pushOwnerUid =
+                typeof data.userId === "string" && data.userId.length > 0
+                  ? data.userId
+                  : null;
+              if (actionId === VIEW_REPORTS_ACTION_ID) {
+                if (signedInUid && pushOwnerUid && signedInUid !== pushOwnerUid) {
+                  void stashPendingReportsRouteForPushOwner(pushOwnerUid);
+                  router.push(LOGIN_ROUTE);
+                  return;
+                }
+                if (!signedInUid && pushOwnerUid) {
+                  void stashPendingReportsRouteForPushOwner(pushOwnerUid);
+                  router.push(LOGIN_ROUTE);
+                  return;
+                }
+                if (!signedInUid) {
+                  router.push(LOGIN_ROUTE);
+                  return;
+                }
+                router.push(MY_REPORTS_ROUTE);
+                return;
+              }
+              const rawRoute = data.route;
               const route =
                 typeof rawRoute === "string" && rawRoute.startsWith("/")
                   ? (rawRoute as Href)

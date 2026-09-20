@@ -10,7 +10,10 @@ import { clearProfileCache } from "../../components/main_layout/offline_profile_
 import { clearReports } from "../../components/my_report/offlinefunc";
 import { beginLogout, finishLogout } from "./logoutState";
 import { markCurrentUserInactive } from "../../app/regular_user/status/RegularUserPresenceSync";
-import { unregisterPushNotificationsAsync } from "../../components/notifications/push_notificationfunc";
+import {
+  clearPendingReportsRoute,
+  unregisterPushNotificationsAsync,
+} from "../../components/notifications/push_notificationfunc";
 import { resetFloatingNotificationState } from "../../components/notifications/floating_notif";
 import { resetSystemNotificationState } from "../../components/notifications/system_notif";
 import { resetVerificationPushSyncState } from "../../components/verification/backend/verificationPushSync";
@@ -95,6 +98,9 @@ export async function performLogout(
 
   try {
     await clearVerificationLater();
+    if (uid) {
+      await clearPendingReportsRoute(uid);
+    }
   } catch {
     // Non-fatal — clearing the marker is hygiene, not a requirement.
   }

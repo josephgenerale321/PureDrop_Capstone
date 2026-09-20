@@ -24,6 +24,7 @@ import {
   getProfileCache,
   getProfileFast,
   saveProfileCache,
+  saveVerificationCache,
 } from "../../components/main_layout/offline_profile_cache";
 
 // While a saved-login marker exists, Firebase may need several seconds to
@@ -119,6 +120,14 @@ function RegularUserTabs() {
         return;
       }
       redirectingRef.current = true;
+      // Keep the gate-relevant AsyncStorage snapshot in step with this live
+      // rejection: the notice screen (rejectedverif) paints from that snapshot
+      // first, and a stale "verified" copy rendered it with no reason and no
+      // "Please resubmit" hint. Never throws; only a real rejected payload is
+      // written (an empty one would wipe the cached snapshot).
+      if (data?.verificationStatus === "rejected") {
+        void saveVerificationCache(auth.currentUser?.uid ?? "", data);
+      }
       const asCount = (v) =>
         typeof v === "number" && Number.isFinite(v)
           ? Math.max(0, Math.floor(v))
@@ -216,8 +225,19 @@ function RegularUserTabs() {
           if (!isMounted) {
             return;
           }
+          // A cache-ONLY "rejected" copy must NOT bounce the user on its own:
+          // the snapshot can be stale (the admin approved this account moments
+          // ago while the live verification hub was open, but the cache still
+          // says "rejected"), and redirecting on it threw freshly approved
+          // users back into /verification/verificationmain in a loop. The
+          // authoritative server re-check below is the decider for cache hits —
+          // and when the server is unreachable, the cached rejection is
+          // honoured there too, so this stays fail-CLOSED for real rejections.
+          const cachedRejected =
+            data?.verificationStatus === "rejected" &&
+            fast.source !== "server";
           if (data) {
-            if (data.verificationStatus === "rejected") {
+            if (data.verificationStatus === "rejected" && !cachedRejected) {
               setAccessAllowed(false);
               setAccessChecked(true);
               setAuthChecked(true);
@@ -248,11 +268,22 @@ function RegularUserTabs() {
               setAccessAllowed(true);
               setAccessChecked(true);
             } catch {
-              // Server unreachable — fail OPEN (old offline behaviour): a
-              // valid user is never trapped on a loader. NOTE: a rejected
-              // user on a fully-offline device can therefore still see cached
-              // Home until the network returns — accepted tradeoff (Firestore
-              // has no signed offline ACL); the online path above enforces it.
+              // Server unreachable. A cached REJECTION stays fail-CLOSED: the
+              // verdict was never trusted on its own, but nothing disproved it
+              // either — so a rejected user is kept out of Home instead of
+              // being waved through on stale data.
+              if (cachedRejected) {
+                setAccessAllowed(false);
+                setAccessChecked(true);
+                setAuthChecked(true);
+                redirectForRejected(data || {});
+                return;
+              }
+              // Plain cache hit — fail OPEN (old offline behaviour): a valid
+              // user is never trapped on a loader. NOTE: a rejected user on a
+              // fully-offline device can therefore still see cached Home until
+              // the network returns — accepted tradeoff (Firestore has no
+              // signed offline ACL); the online path above enforces it.
               if (isMounted) {
                 setAccessAllowed(true);
                 setAccessChecked(true);
