@@ -67,6 +67,9 @@ export function createLegacyAndroidGestures(
     isSavingRef,
     lastTouchRef,
     isDraggingRef,
+    resizeLastXRef,
+    resizeTravelRef,
+    resizeDraggingRef,
     applyFrame,
   } = deps;
   // Pointer travel since grant, accumulated from verified deltas — replaces
@@ -144,11 +147,16 @@ export function createLegacyAndroidGestures(
 
 
   // Bottom-right corner handle — aspect-locked resize driven by the edge.
+  // Uses the dedicated resize refs (see valididcropper.tsx): NEVER the shared
+  // lastTouchRef, which the move gesture also writes — sharing it lets a frame
+  // drag poison the handle's next tap into a fullscreen-maxing phantom delta.
   const resizePan = PanResponder.create({
     // Capture so the corner handle wins over the frame's move gesture.
     onStartShouldSetPanResponderCapture: () => !isSavingRef.current,
     onPanResponderGrant: () => {
-      lastTouchRef.current = { ...UNSET };
+      resizeLastXRef.current = Number.NaN;
+      resizeTravelRef.current = 0;
+      resizeDraggingRef.current = false;
     },
     onPanResponderMove: (event) => {
       const current = displayedRef.current;
@@ -160,17 +168,25 @@ export function createLegacyAndroidGestures(
       if (!point) {
         return;
       }
-      const last = lastTouchRef.current;
-      if (!Number.isFinite(last.x)) {
+      const lastX = resizeLastXRef.current;
+      if (!Number.isFinite(lastX)) {
         // First trustworthy sample — baseline only, no resize.
-        lastTouchRef.current = point;
+        resizeLastXRef.current = point.x;
         return;
       }
-      const deltaX = point.x - last.x;
-      lastTouchRef.current = point;
+      const deltaX = point.x - lastX;
+      resizeLastXRef.current = point.x;
       if (Math.abs(deltaX) > MAX_EVENT_DELTA) {
         // Synthetic OEM spike — drop it.
         return;
+      }
+      // Tap guard: a plain tap must never resize, even by a pixel.
+      if (!resizeDraggingRef.current) {
+        resizeTravelRef.current += Math.abs(deltaX);
+        if (resizeTravelRef.current < MOVE_THRESHOLD) {
+          return;
+        }
+        resizeDraggingRef.current = true;
       }
 
       // The top-left corner stays fixed and the frame never leaves the
@@ -193,10 +209,14 @@ export function createLegacyAndroidGestures(
       applyFrame({ ...currentFrame, width, height: width / CROP_ASPECT });
     },
     onPanResponderRelease: () => {
-      lastTouchRef.current = { ...UNSET };
+      resizeLastXRef.current = Number.NaN;
+      resizeTravelRef.current = 0;
+      resizeDraggingRef.current = false;
     },
     onPanResponderTerminate: () => {
-      lastTouchRef.current = { ...UNSET };
+      resizeLastXRef.current = Number.NaN;
+      resizeTravelRef.current = 0;
+      resizeDraggingRef.current = false;
     },
   });
 

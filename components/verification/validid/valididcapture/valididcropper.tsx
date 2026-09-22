@@ -100,6 +100,10 @@ export type CropperGestureDeps = {
   isSavingRef: { current: boolean };
   lastTouchRef: { current: { x: number; y: number } };
   isDraggingRef: { current: boolean };
+  /** Dedicated resize baseline — NEVER shared with the move gesture. */
+  resizeLastXRef: { current: number };
+  resizeTravelRef: { current: number };
+  resizeDraggingRef: { current: boolean };
   applyFrame: (next: CropRect) => void;
 };
 
@@ -116,6 +120,12 @@ export type CropperGestureBuilders = (
  * (cropperoldphone.tsx) replaces these on old devices whose touch pipeline
  * reports 0/NaN coordinates on grant and synthesizes spike moves, which
  * teleports (or NaNs out) the frame during resize.
+ *
+ * Vivo (Funtouch OS) hardening, applied on every build: never trust the grant
+ * coordinates (Vivo can deliver grant with 0/near-origin coords, then the
+ * first move jumps to the true finger position — using that delta teleports
+ * the frame), re-baseline from the first verified MOVE event's raw pageX/pageY
+ * instead, and drop per-event spikes larger than any real finger travel.
  */
 export function createDefaultGestures(
   deps: CropperGestureDeps,
@@ -129,33 +139,73 @@ export function createDefaultGestures(
     isSavingRef,
     lastTouchRef,
     isDraggingRef,
+    resizeLastXRef,
+    resizeTravelRef,
+    resizeDraggingRef,
     applyFrame,
   } = deps;
+
+  // Pointer travel since grant, accumulated from VERIFIED deltas only
+  // (gestureState.dx/dy inherit the same OEM grant-coordinate quirks).
+  let travelSinceGrant = 0;
 
   // Drags the whole crop frame around the visible photo.
   const movePan = PanResponder.create({
     onStartShouldSetPanResponder: () => !isSavingRef.current,
-    onPanResponderGrant: (_event, gestureState) => {
-      lastTouchRef.current = { x: gestureState.moveX, y: gestureState.moveY };
+    onPanResponderGrant: () => {
+      // Vivo Funtouch OS can grant with 0/NaN coords — baselining here would
+      // teleport the frame on the first move. Mark "no baseline" and let the
+      // first verified MOVE event set it instead.
+      lastTouchRef.current = { x: Number.NaN, y: Number.NaN };
+      travelSinceGrant = 0;
       isDraggingRef.current = false;
     },
-    onPanResponderMove: (_event, gestureState) => {
+    onPanResponderMove: (event, gestureState) => {
       const current = displayedRef.current;
       const currentFrame = frameRef.current;
       if (isSavingRef.current || !current || !currentFrame) {
         return;
       }
 
-      const deltaX = gestureState.moveX - lastTouchRef.current.x;
-      const deltaY = gestureState.moveY - lastTouchRef.current.y;
-      lastTouchRef.current = { x: gestureState.moveX, y: gestureState.moveY };
+      // Prefer raw page coords (gestureState.moveX/moveY inherit the same OEM
+      // grant-coordinate quirks); fall back to gestureState when unavailable.
+      const raw = event.nativeEvent as {
+        pageX?: unknown;
+        pageY?: unknown;
+      };
+      const moveX =
+        typeof raw.pageX === "number" && Number.isFinite(raw.pageX)
+          ? raw.pageX
+          : gestureState.moveX;
+      const moveY =
+        typeof raw.pageY === "number" && Number.isFinite(raw.pageY)
+          ? raw.pageY
+          : gestureState.moveY;
+      if (!Number.isFinite(moveX) || !Number.isFinite(moveY)) {
+        return;
+      }
+      const last = lastTouchRef.current;
+      if (!Number.isFinite(last.x) || !Number.isFinite(last.y)) {
+        // First trustworthy sample — baseline only, no move yet.
+        lastTouchRef.current = { x: moveX, y: moveY };
+        return;
+      }
+      const deltaX = moveX - last.x;
+      const deltaY = moveY - last.y;
+      lastTouchRef.current = { x: moveX, y: moveY };
+      if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
+        return;
+      }
+      // Drop synthetic OEM spikes (grant-at-0 → jump-to-finger).
+      if (Math.abs(deltaX) > 240 || Math.abs(deltaY) > 240) {
+        return;
+      }
 
-      // Ignore micro-jitter so a tap never nudges the frame.
+      // Ignore micro-jitter so a tap never nudges the frame. Accumulated from
+      // verified deltas (gestureState.dx/dy inherit OEM grant quirks).
       if (!isDraggingRef.current) {
-        if (
-          Math.abs(gestureState.dx) < MOVE_THRESHOLD &&
-          Math.abs(gestureState.dy) < MOVE_THRESHOLD
-        ) {
+        if (travelSinceGrant < MOVE_THRESHOLD) {
+          travelSinceGrant += Math.abs(deltaX) + Math.abs(deltaY);
           return;
         }
         isDraggingRef.current = true;
@@ -184,21 +234,69 @@ export function createDefaultGestures(
   });
 
   // Bottom-right corner handle — aspect-locked resize driven by the edge.
+  // Uses its OWN baseline (never the shared lastTouchRef): the frame's move
+  // gesture and this resize gesture share that ref, so without a dedicated
+  // baseline a drag on the frame would poison the handle's next tap — the
+  // first resize delta would be (handleX - lastFrameX), a huge jump that
+  // slams the frame to max size. That is exactly the Android 15 "tap the
+  // circle, it maxes out" bug.
   const resizePan = PanResponder.create({
     // Capture so the corner handle wins over the frame's move gesture.
     onStartShouldSetPanResponderCapture: () => !isSavingRef.current,
-    onPanResponderGrant: (_event, gestureState) => {
-      lastTouchRef.current = { x: gestureState.moveX, y: gestureState.moveY };
+    // Fallback claim if an OEM ROM dispatches the touch without a capture
+    // phase (seen on some Vivo Funtouch builds) — without this the tap falls
+    // through to the frame's move gesture and the frame jumps.
+    onStartShouldSetPanResponder: () => !isSavingRef.current,
+    onMoveShouldSetPanResponderCapture: () => !isSavingRef.current,
+    // Never let the frame's move gesture steal the touch mid-resize.
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderGrant: () => {
+      // Same Vivo guard as the move gesture: never baseline from grant.
+      resizeLastXRef.current = Number.NaN;
+      // Tap travel guard: a plain tap must never resize, even by a pixel.
+      resizeTravelRef.current = 0;
+      resizeDraggingRef.current = false;
     },
-    onPanResponderMove: (_event, gestureState) => {
+    onPanResponderMove: (event, gestureState) => {
       const current = displayedRef.current;
       const currentFrame = frameRef.current;
       if (isSavingRef.current || !current || !currentFrame) {
         return;
       }
 
-      const deltaX = gestureState.moveX - lastTouchRef.current.x;
-      lastTouchRef.current = { x: gestureState.moveX, y: gestureState.moveY };
+      const raw = event.nativeEvent as { pageX?: unknown };
+      const moveX =
+        typeof raw.pageX === "number" && Number.isFinite(raw.pageX)
+          ? raw.pageX
+          : gestureState.moveX;
+      if (!Number.isFinite(moveX)) {
+        return;
+      }
+      const lastX = resizeLastXRef.current;
+      if (!Number.isFinite(lastX)) {
+        // First trustworthy sample — baseline only, no resize yet. This is
+        // the actual Vivo fix: a tap on the handle no longer resizes from a
+        // bogus grant baseline.
+        resizeLastXRef.current = moveX;
+        return;
+      }
+      const deltaX = moveX - lastX;
+      resizeLastXRef.current = moveX;
+      if (!Number.isFinite(deltaX)) {
+        return;
+      }
+      if (Math.abs(deltaX) > 240) {
+        return;
+      }
+      // A tap (or finger tremble) on the handle must not resize at all:
+      // accumulate real travel first, arm only past the threshold.
+      if (!resizeDraggingRef.current) {
+        resizeTravelRef.current += Math.abs(deltaX);
+        if (resizeTravelRef.current < MOVE_THRESHOLD) {
+          return;
+        }
+        resizeDraggingRef.current = true;
+      }
 
       // The top-left corner stays fixed and the frame never leaves the
       // visible photo.
@@ -206,18 +304,28 @@ export function createDefaultGestures(
         current.offsetX + current.width - currentFrame.x,
         (current.offsetY + current.height - currentFrame.y) * CROP_ASPECT,
       );
+      if (!Number.isFinite(maxWidth) || maxWidth <= 0) {
+        return;
+      }
       const width = clamp(
         currentFrame.width + deltaX,
         MIN_CROP_WIDTH,
         maxWidth,
       );
+      if (!Number.isFinite(width) || !Number.isFinite(width / CROP_ASPECT)) {
+        return;
+      }
       applyFrame({ ...currentFrame, width, height: width / CROP_ASPECT });
     },
     onPanResponderRelease: () => {
-      isDraggingRef.current = false;
+      resizeLastXRef.current = Number.NaN;
+      resizeTravelRef.current = 0;
+      resizeDraggingRef.current = false;
     },
     onPanResponderTerminate: () => {
-      isDraggingRef.current = false;
+      resizeLastXRef.current = Number.NaN;
+      resizeTravelRef.current = 0;
+      resizeDraggingRef.current = false;
     },
   });
 
@@ -270,6 +378,15 @@ export default function ValidIdCropper({
   const isSavingRef = useRef(false);
   const lastTouchRef = useRef({ x: 0, y: 0 });
   const isDraggingRef = useRef(false);
+  // Dedicated resize-gesture state. The move gesture and the resize gesture
+  // MUST NOT share lastTouchRef: both PanResponders write it on grant/move,
+  // so a frame drag writes frame coords into it and the handle's next tap
+  // would diff (handleX - staleFrameX) — a huge phantom delta that clamps to
+  // maxWidth and slams the square to fullscreen. Separate refs kill that
+  // cross-talk entirely (Android 15 "tap circle → maxes out" bug).
+  const resizeLastXRef = useRef<number>(Number.NaN);
+  const resizeTravelRef = useRef<number>(0);
+  const resizeDraggingRef = useRef<boolean>(false);
   // Mirrors displayUri for the stable crop callback; also tracks the
   // normalized intermediate file for cleanup when the cropper closes.
   const displayUriRef = useRef<string | null>(null);
@@ -481,8 +598,14 @@ export default function ValidIdCropper({
         isSavingRef,
         lastTouchRef,
         isDraggingRef,
+        resizeLastXRef,
+        resizeTravelRef,
+        resizeDraggingRef,
         applyFrame,
       }),
+    // Refs are stable identities — the builders only read .current, so the
+    // responders never need rebuilding mid-gesture.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [gestures, applyFrame],
   );
 
@@ -694,9 +817,19 @@ export default function ValidIdCropper({
                 <View style={styles.cropCornerBL} />
                 <View style={styles.cropCornerBR} />
 
-                {/* Bottom-right resize handle (aspect-locked). */}
-                <View style={styles.resizeHandle} {...resizePan.panHandlers}>
-                  <Ionicons name="resize" size={14} color="#0F172A" />
+                {/* Bottom-right resize handle (aspect-locked). The touch target
+                    is intentionally larger than the visible circle (transparent
+                    padding via hitSlop + a bigger wrapper) so fat-finger taps
+                    on Vivo/large-screen devices land on the handle instead of
+                    the move frame behind it. */}
+                <View
+                  style={styles.resizeHitArea}
+                  {...resizePan.panHandlers}
+                  hitSlop={{ top: 16, right: 16, bottom: 16, left: 16 }}
+                >
+                  <View style={styles.resizeHandle}>
+                    <Ionicons name="resize" size={14} color="#0F172A" />
+                  </View>
                 </View>
               </View>
             </>
@@ -852,10 +985,18 @@ const styles = StyleSheet.create({
     borderRightColor: "#0EA5E9",
     borderBottomRightRadius: 10,
   },
-  resizeHandle: {
+  resizeHitArea: {
     position: "absolute",
-    right: -14,
-    bottom: -14,
+    // Larger than the visible circle — extends the grab zone outward so taps
+    // near the corner reliably hit the handle, not the move frame.
+    right: -24,
+    bottom: -24,
+    width: 56,
+    height: 56,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  resizeHandle: {
     width: 32,
     height: 32,
     borderRadius: 16,
