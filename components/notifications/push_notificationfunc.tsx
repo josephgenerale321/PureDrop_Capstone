@@ -5,7 +5,7 @@ import { type Href, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { useEffect, useRef } from "react";
-import { AppState, Platform } from "react-native";
+import { Alert, AppState, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { auth, db } from "../../firebaseConfig";
 
@@ -16,6 +16,11 @@ export const VIEW_REPORTS_ACTION_ID = "view-reports";
 export const VIEW_REPORTS_ACTION_TITLE = "View Your Reports";
 const MY_REPORTS_ROUTE = "/regular_user/my_report" as Href;
 const LOGIN_ROUTE = "/login" as Href;
+// Route carried by server-sent report pushes (`data.route`). Kept as a named
+// constant so the intent key below can recognize a report push that has no
+// usable reportId (in that case the button lands on My Reports and the body on
+// the notifications route — both the same place to the user).
+const REPORT_PUSH_ROUTE = "/regular_user/notifications";
 // Detail screen for a single report (view_reportuser.tsx). The outside
 // notification button + body tap prefer this when the push carries a
 // reportId (e.g. Report #18); otherwise we fall back to the list above.
@@ -40,28 +45,354 @@ const pendingReportsRouteStorageKey = (uid: string): string =>
 // its descriptor is recorded; later launches seeing the same descriptor skip
 // navigation entirely until the user taps a NEW notification. Best-effort and
 // never throws, so dev + preview builds stay crash-free.
+//
+// Second trap, fixed here too: Android can hand ONE tap to the app TWICE — the
+// emitter delivers the notification (default action) and, when the
+// [View Your Reports] button was used, the category action as well. Those two
+// deliveries differ in `actionIdentifier`, so the descriptor above sees two
+// DIFFERENT taps and both would navigate — that is the duplicated
+// my_report / view_reportuser screen sitting on the back stack (the "it opens
+// 2 times" report). `describeReportTapIntent()` collapses them: it keys the
+// tap by DESTINATION (which screen, for which owner, for which signed-in
+// account) and ignores which button delivered it. A short window
+// (`TAP_INTENT_WINDOW_MS`) keeps genuinely later taps working.
 const HANDLED_PUSH_TAP_KEY = "@puredrop/handled_push_tap";
 
-const readHandledPushTap = async (): Promise<string | null> => {
+/**
+ * Window for the PERSISTED record (survives reloads / app kills): how long a
+ * recorded destination counts as "already routed". Long enough to cover one
+ * tap whose two deliveries straddle a JS reload, short enough that a genuine
+ * later tap on the same notification still navigates.
+ */
+const TAP_INTENT_WINDOW_MS = 5000;
+
+/**
+ * Window for the IN-MEMORY record (same JS context), longer on purpose: one
+ * tap's two deliveries can straddle the multi-second session restore running
+ * behind the "Just a moment…" loading screen. During that window the SAME tap
+ * resolves to Login for the first delivery and to the report's detail screen for
+ * the second — both used to navigate, which is the duplicated reports screen
+ * seen right after the loading page.
+ */
+const TAP_DESTINATION_WINDOW_MS = 10000;
+
+/**
+ * Backstop for sibling deliveries that cannot be paired by destination or by
+ * identifier (some OEM builds re-post the notification for the action button, so
+ * both the identifier AND the content date can differ). Two deliveries of ONE
+ * tap land within milliseconds of each other; a human cannot tap two different
+ * notifications that fast — by then the app is already in the foreground.
+ */
+const TAP_NAVIGATION_EPOCH_MS = 1200;
+
+type HandledPushTapRecord = {
+  /** Exact tap descriptor (`describeReportPushTap`) — replay of the same tap. */
+  descriptor: string | null;
+  /** Action-agnostic destination (`describeReportTapIntent`). */
+  intent: string | null;
+  /** When the tap was routed (ms epoch, 0 = unknown/legacy record). */
+  at: number;
+};
+
+const emptyHandledPushTapRecord = (): HandledPushTapRecord => ({
+  descriptor: null,
+  intent: null,
+  at: 0,
+});
+
+const readHandledPushTap = async (): Promise<HandledPushTapRecord> => {
   try {
     const stored = await AsyncStorage.getItem(HANDLED_PUSH_TAP_KEY);
-    return typeof stored === "string" && stored.length > 0 && stored.length <= 512
-      ? stored
-      : null;
+    if (typeof stored !== "string" || stored.length === 0 || stored.length > 1024) {
+      return emptyHandledPushTapRecord();
+    }
+    // Legacy format (older builds): the bare descriptor string.
+    if (stored.charCodeAt(0) !== 123 /* '{' */) {
+      return { descriptor: stored.slice(0, 400), intent: null, at: 0 };
+    }
+    const parsed = JSON.parse(stored) as {
+      d?: unknown;
+      i?: unknown;
+      t?: unknown;
+    };
+    return {
+      descriptor:
+        typeof parsed?.d === "string" && parsed.d.length > 0
+          ? parsed.d.slice(0, 400)
+          : null,
+      intent:
+        typeof parsed?.i === "string" && parsed.i.length > 0
+          ? parsed.i.slice(0, 400)
+          : null,
+      at: typeof parsed?.t === "number" && Number.isFinite(parsed.t) ? parsed.t : 0,
+    };
   } catch {
-    return null;
+    return emptyHandledPushTapRecord();
   }
 };
 
-const writeHandledPushTap = async (descriptor: string): Promise<void> => {
+const writeHandledPushTap = async (
+  descriptor: string,
+  intent: string,
+): Promise<void> => {
   try {
-    if (!descriptor) {
+    if (!descriptor && !intent) {
       return;
     }
-    await AsyncStorage.setItem(HANDLED_PUSH_TAP_KEY, descriptor.slice(0, 512));
+    const record: HandledPushTapRecord = {
+      descriptor: descriptor ? descriptor.slice(0, 400) : null,
+      intent: intent ? intent.slice(0, 400) : null,
+      at: Date.now(),
+    };
+    // Publish synchronously first so a sibling delivery arriving before the
+    // AsyncStorage write settles still sees the claim.
+    loadedHandledPushTap = record;
+    await AsyncStorage.setItem(HANDLED_PUSH_TAP_KEY, JSON.stringify({
+      d: record.descriptor,
+      i: record.intent,
+      t: record.at,
+    }));
   } catch {
     // Non-fatal.
   }
+};
+
+type TapIntentParts = {
+  /** Which screen the tap resolves to (detail / hub / login / notice). */
+  target: string;
+  /** Identifier of the notification itself ("" when the runtime omits it). */
+  notificationId: string;
+  /** uid the push belongs to ("" when the payload had none). */
+  owner: string;
+};
+
+/**
+ * Split an intent key (`${target}|n:${id}|owner:${owner}|me:${me}`).
+ *
+ * The signed-in-account segment is deliberately NOT part of the parsed result:
+ * ONE tap can be delivered twice, once before Firebase finishes restoring the
+ * session and once after (`auth.currentUser` null on the first, live on the
+ * second) — boot ordering, not a different tap. Destination + push owner stay
+ * in, so different reports/accounts still navigate independently.
+ */
+const parseTapIntent = (intent: string): TapIntentParts | null => {
+  if (typeof intent !== "string" || intent.length === 0) {
+    return null;
+  }
+  const nAt = intent.indexOf("|n:");
+  const ownerAt = intent.indexOf("|owner:");
+  const meAt = intent.indexOf("|me:");
+  const target = nAt === -1 ? intent : intent.slice(0, nAt);
+  const notificationId =
+    nAt === -1
+      ? ""
+      : intent.slice(
+          nAt + 3,
+          ownerAt !== -1 ? ownerAt : meAt !== -1 ? meAt : undefined,
+        );
+  const owner =
+    ownerAt === -1
+      ? ""
+      : intent.slice(ownerAt + 7, meAt !== -1 ? meAt : undefined);
+  return { target, notificationId, owner };
+};
+
+/**
+ * True when two intents describe the same destination for the same push owner.
+ * A missing notification id on either side (older record shape) counts as a
+ * match — the destination + owner comparison already covers the interesting
+ * cases — while two DIFFERENT ids stay distinct, so separate pushes about the
+ * same report each still get their own navigation.
+ */
+const tapIntentsMatch = (
+  a: TapIntentParts | null,
+  b: TapIntentParts | null,
+): boolean => {
+  if (!a || !b) {
+    return false;
+  }
+  if (a.target !== b.target || a.owner !== b.owner) {
+    return false;
+  }
+  return !a.notificationId || !b.notificationId || a.notificationId === b.notificationId;
+};
+
+/**
+ * True when `next` is a MORE specific destination than the one already routed
+ * for the SAME push.
+ *
+ * Used by the sibling-delivery backstop below. A tap whose two deliveries
+ * straddle the session restore resolves to Login (session not yet live behind
+ * the "Just a moment…" page) and then to the report's detail screen — the user
+ * never sees the same screen twice, so letting the second delivery through is
+ * not a duplicate: suppressing it would silently drop the tap the user just
+ * made. The test lives here (not in the shipped comparison) so the equal-screen
+ * cases still collapse.
+ */
+const isDestinationUpgrade = (
+  previous: TapIntentParts | null,
+  next: TapIntentParts | null,
+): boolean => {
+  try {
+    if (!previous || !next) {
+      return false;
+    }
+    if (previous.target === next.target) {
+      return false;
+    }
+    return (
+      next.target.startsWith(REPORT_DETAIL_PATHNAME) &&
+      previous.target !== ""
+    );
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Cold-start-drain guard — the ONLY place the descriptor is compared, because
+ * the drain is the only path that can see the native last-response slot
+ * replaying a tap that was already routed.
+ *
+ * - Exact descriptor match → that same tap was routed in an earlier launch (or
+ *   earlier in this one): skip, do not navigate again.
+ * - Fresh intent match inside `TAP_INTENT_WINDOW_MS` → the sibling delivery of
+ *   the tap being processed right now (Android reports one tap as the default
+ *   action AND the category action): skip.
+ *
+ * Anything else navigates, so a genuine later tap on the same notification
+ * still works.
+ */
+const wasHandledPushTapAlready = (
+  record: HandledPushTapRecord,
+  descriptor: string,
+  intent: string,
+): boolean => {
+  try {
+    if (descriptor && record.descriptor === descriptor) {
+      return true;
+    }
+    return wasPersistedIntentRecentlyRouted(record, intent);
+  } catch {
+    // Fall through — treated as "not handled" (never crash).
+  }
+  return false;
+};
+
+/**
+ * Windowed intent guard used by BOTH call sites.
+ *
+ * The descriptor is intentionally ignored here: it is identical for every tap
+ * of the same notification, so honouring it would make a legitimate second tap
+ * (open the push, go back, tap it again) do nothing. Only "this destination was
+ * routed moments ago" is deduped.
+ */
+function wasPersistedIntentRecentlyRouted(
+  record: HandledPushTapRecord,
+  intent: string,
+): boolean {
+  try {
+    if (record.at === 0 || Date.now() - record.at > TAP_INTENT_WINDOW_MS) {
+      return false;
+    }
+    return tapIntentsMatch(parseTapIntent(record.intent ?? ""), parseTapIntent(intent));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * In-memory mirror of the persisted record above. Needed because the persisted
+ * write is fire-and-forget: the two deliveries of one tap can land inside the
+ * same JS context before the AsyncStorage write settles.
+ */
+const lastTapIntent = { key: null as string | null, at: 0 };
+
+/**
+ * Synchronous cache of the persisted record, populated by the cold-start drain
+ * (and refreshed on every write) so the tap handler can compare intents without
+ * awaiting storage inside a native event callback.
+ */
+let loadedHandledPushTap: HandledPushTapRecord = emptyHandledPushTapRecord();
+
+/**
+ * In-memory "was this destination just routed?" guard — the fast, synchronous
+ * check used by BOTH call sites (`tryHandleReportPushTap` for warm taps and the
+ * cold-start drain). Two tiers:
+ *
+ * 1. `TAP_DESTINATION_WINDOW_MS` + `tapIntentsMatch`: the sibling delivery of one
+ *    Android tap (default action + [View Your Reports] button). The signed-in
+ *    half is ignored on purpose — boot ordering can restore the session between
+ *    the two deliveries, and that is still ONE tap.
+ * 2. `TAP_NAVIGATION_EPOCH_MS` same-screen backstop: some OEM builds re-post the
+ *    notification for the action button, so even the notification id (and the
+ *    content date) differ. Two deliveries of one tap land milliseconds apart,
+ *    while a human cannot tap another notification before the app is already in
+ *    the foreground — so the same SCREEN twice inside this window is a duplicate.
+ */
+const wasTapIntentJustRouted = (intent: string): boolean => {
+  try {
+    if (!intent || !lastTapIntent.key || lastTapIntent.at <= 0) {
+      return false;
+    }
+    const age = Date.now() - lastTapIntent.at;
+    if (age < 0) {
+      return false;
+    }
+    const previous = parseTapIntent(lastTapIntent.key);
+    const next = parseTapIntent(intent);
+    if (!next) {
+      return false;
+    }
+    if (age <= TAP_DESTINATION_WINDOW_MS && tapIntentsMatch(previous, next)) {
+      return true;
+    }
+    if (
+      age <= TAP_NAVIGATION_EPOCH_MS &&
+      previous != null &&
+      previous.target !== "" &&
+      previous.target === next.target
+    ) {
+      return true;
+    }
+    // Sibling delivery that straddled the session restore: the SAME
+    // notification, for the SAME push owner, milliseconds apart — but the
+    // destination differs because `auth.currentUser` flipped from null (still
+    // restoring behind the "Just a moment…" loading page) to the restored uid.
+    // That is boot ordering, not a second tap, so it must navigate once. Only
+    // the identifier+owner pair is compared here and only inside the epoch
+    // window, so separate pushes about the same report (different identifiers)
+    // each keep their own navigation.
+    //
+    // The equal-screen rule is what makes this a DUPLICATE guard, so a
+    // destination UPGRADE (the first delivery showed Login / My Reports because
+    // the session was not live yet, the sibling resolves to the report's detail
+    // screen) is deliberately let through: two different screens are never a
+    // duplicate, and swallowing the upgraded one would lose the tap the user
+    // just made while sitting on the "Just a moment…" page.
+    if (
+      age <= TAP_NAVIGATION_EPOCH_MS &&
+      previous != null &&
+      previous.notificationId !== "" &&
+      previous.notificationId === next.notificationId &&
+      previous.owner === next.owner &&
+      !isDestinationUpgrade(previous, next)
+    ) {
+      return true;
+    }
+    return false;
+  } catch {
+    // Never throw from a native event callback — treat as "not routed".
+    return false;
+  }
+};
+
+const markTapIntentRouted = (intent: string): void => {
+  if (!intent) {
+    return;
+  }
+  lastTapIntent.key = intent;
+  lastTapIntent.at = Date.now();
 };
 
 // --- Deep-link helpers (crash-safe, preview-build safe) --------------------
@@ -328,6 +659,89 @@ const VERIFICATION_ROUTES = new Set([
   "/login/validation/rejectedverif",
 ]);
 
+/**
+ * Action-agnostic identity of WHERE a tapped report push goes.
+ *
+ * Android can deliver ONE tap twice (the notification/default action AND the
+ * category action). Those deliveries differ in `actionIdentifier` — so
+ * `describeReportPushTap()` cannot pair them — but they resolve to the SAME
+ * screen, which is what produced the duplicated reports screen ("it opens 1
+ * time on launch, 2 times when tapping View My Reports in the notification").
+ * This key is deliberately action-free: destination + push owner + signed-in
+ * account. The destination mirrors `routeReportPushTap()`'s choice (usable
+ * reportId wins → detail screen; gated notice routes; else My Reports).
+ *
+ * Different reports, different owners, or a signed-in/out transition all still
+ * produce different keys, so nothing that deserves its own navigation is lost.
+ */
+const describeReportTapIntent = (response: ReportPushTapResponse): string => {
+  try {
+    const data = response?.notification?.request?.content?.data ?? {};
+    // Same notification → same identifier for BOTH of its deliveries, so
+    // including it lets one tap's sibling delivery collapse while two DIFFERENT
+    // pushes about the same report still navigate independently.
+    const notificationId =
+      typeof response?.notification?.request?.identifier === "string"
+        ? (response.notification.request.identifier as string)
+        : "";
+    const pushOwnerUid = typeof data.userId === "string" ? data.userId.trim() : "";
+    const reportId = sanitizeReportId(data.reportId) ?? "";
+    const rawRoute = typeof data.route === "string" ? data.route : "";
+    const signedInUid = auth.currentUser?.uid ?? "";
+    // Mirror the REAL destination of `routeReportPushTap()` (not just the ideal
+    // one): a report push tapped while signed out lands on Login, and a push
+    // owned by another account lands on the current account's My Reports. If
+    // this said "detail screen" for those cases, a single tap whose two
+    // deliveries straddle the session restore would be suppressed even though
+    // only the LESS specific screen had been shown.
+    let target: string;
+    if (reportId) {
+      if (!signedInUid) {
+        target = String(LOGIN_ROUTE);
+      } else if (pushOwnerUid && signedInUid !== pushOwnerUid) {
+        target = String(MY_REPORTS_ROUTE);
+      } else {
+        target = `${REPORT_DETAIL_PATHNAME}?reportId=${reportId}`;
+      }
+    } else if (VERIFICATION_ROUTES.has(rawRoute)) {
+      target = signedInUid ? rawRoute : String(LOGIN_ROUTE);
+    } else if (rawRoute === REPORT_PUSH_ROUTE || rawRoute === String(MY_REPORTS_ROUTE)) {
+      // Report push WITHOUT a usable reportId: the button lands on My Reports
+      // while the body lands on the reports route — same place as far as the
+      // user is concerned, so collapse both onto one hub key.
+      target = "reports-hub";
+    } else {
+      target = String(MY_REPORTS_ROUTE);
+    }
+    return `${target}|n:${notificationId}|owner:${pushOwnerUid}|me:${signedInUid || "signed-out"}`.slice(
+      0,
+      400,
+    );
+  } catch {
+    return "";
+  }
+};
+
+// Shown (at most once per mismatched tap) when a push for ANOTHER account is
+// tapped while someone else is signed in. Best-effort and never throws —
+// Alert is a no-op-safe native module on dev/preview builds.
+let lastMismatchAlertKey: string | null = null;
+const notifyPushAccountMismatch = (descriptor: string): void => {
+  try {
+    if (lastMismatchAlertKey === descriptor) {
+      return;
+    }
+    lastMismatchAlertKey = descriptor;
+    Alert.alert(
+      "Notification is for a different account",
+      "That update belongs to another account on this phone. You are staying signed in — switch accounts to view it.",
+      [{ text: "OK", style: "default" }],
+    );
+  } catch {
+    // Non-fatal.
+  }
+};
+
 const routeReportPushTap = (
   response: ReportPushTapResponse,
   router: ReportPushTapRouter,
@@ -357,10 +771,10 @@ const routeReportPushTap = (
     : null;
 
   if (actionId === VIEW_REPORTS_ACTION_ID) {
-    // Logged-out tap (or a tap for another account): park the deep link under
-    // the push owner's key when known so the login handoff can continue
-    // there, then land on Login instead of the unmatched-route error.
-    if (!signedInUid || (pushOwnerUid && signedInUid !== pushOwnerUid)) {
+    // Logged-out tap: park the deep link under the push owner's key when
+    // known so the login handoff can continue there, then land on Login
+    // instead of the unmatched-route error.
+    if (!signedInUid) {
       const ownerKey = pushOwnerUid ?? signedInUid;
       if (ownerKey) {
         void stashPendingReportsRouteForPushOwner(ownerKey, pushReportId, pushOwnerUid);
@@ -369,6 +783,27 @@ const routeReportPushTap = (
         navigate(LOGIN_ROUTE);
       } catch {
         // Navigation must never crash the app.
+      }
+      return true;
+    }
+    // Signed in as a DIFFERENT account than the push owner (e.g. the push is
+    // for Joseph's report #18 but kurdapyakurdapyu is logged in): do NOT kick
+    // the user to Login — that reads as "my session broke". Stay signed in on
+    // the CURRENT account's My Reports and explain why the other report can't
+    // open (Firestore rules would deny reading another user's report anyway).
+    // The deep link is stashed under the push owner's key so that if the user
+    // later switches back to that account, the post-login handoff opens it.
+    if (pushOwnerUid && signedInUid !== pushOwnerUid) {
+      void stashPendingReportsRouteForPushOwner(pushOwnerUid, pushReportId, pushOwnerUid);
+      try {
+        navigate(MY_REPORTS_ROUTE);
+      } catch {
+        // Navigation must never crash the app.
+      }
+      try {
+        notifyPushAccountMismatch(describeReportPushTap(response));
+      } catch {
+        // Non-fatal.
       }
       return true;
     }
@@ -410,11 +845,12 @@ const routeReportPushTap = (
     // tap should land on the SAME detail screen as the [View Your Reports]
     // button (view_reportuser.tsx) when the push carries a usable reportId.
     // Logged-out body taps park the deep link and land on Login so the
-    // post-login handoff can continue into the detail screen.
+    // post-login handoff can continue into the detail screen. A different
+    // signed-in account stays signed in (see mismatch handling above).
     const isReportPushRoute =
       rawRoute === "/regular_user/notifications" || rawRoute === String(MY_REPORTS_ROUTE);
     if (isReportPushRoute && detailRoute) {
-      if (!signedInUid || (pushOwnerUid && signedInUid !== pushOwnerUid)) {
+      if (!signedInUid) {
         const ownerKey = pushOwnerUid ?? signedInUid;
         if (ownerKey) {
           void stashPendingReportsRouteForPushOwner(ownerKey, pushReportId, pushOwnerUid);
@@ -423,6 +859,20 @@ const routeReportPushTap = (
           navigate(LOGIN_ROUTE);
         } catch {
           // Navigation must never crash the app.
+        }
+        return true;
+      }
+      if (pushOwnerUid && signedInUid !== pushOwnerUid) {
+        void stashPendingReportsRouteForPushOwner(pushOwnerUid, pushReportId, pushOwnerUid);
+        try {
+          navigate(MY_REPORTS_ROUTE);
+        } catch {
+          // Navigation must never crash the app.
+        }
+        try {
+          notifyPushAccountMismatch(describeReportPushTap(response));
+        } catch {
+          // Non-fatal.
         }
         return true;
       }
@@ -442,17 +892,39 @@ const routeReportPushTap = (
   }
   // No route in payload (older local notifications): if we still know the
   // report, deep-link the body tap to its detail screen (same as the button).
-  if (detailRoute && (!signedInUid || (pushOwnerUid && signedInUid !== pushOwnerUid))) {
-    const ownerKey = pushOwnerUid ?? signedInUid;
-    if (ownerKey) {
-      void stashPendingReportsRouteForPushOwner(ownerKey, pushReportId, pushOwnerUid);
+  // Logged-out taps park + go to Login; a different signed-in account stays
+  // signed in on its own My Reports (mismatch alert explains why).
+  if (!signedInUid) {
+    if (detailRoute) {
+      const ownerKey = pushOwnerUid ?? signedInUid;
+      if (ownerKey) {
+        void stashPendingReportsRouteForPushOwner(ownerKey, pushReportId, pushOwnerUid);
+      }
+      try {
+        navigate(LOGIN_ROUTE);
+      } catch {
+        // Navigation must never crash the app.
+      }
+      return true;
     }
-    try {
-      navigate(LOGIN_ROUTE);
-    } catch {
-      // Navigation must never crash the app.
+    return false;
+  }
+  if (pushOwnerUid && signedInUid !== pushOwnerUid) {
+    if (detailRoute) {
+      void stashPendingReportsRouteForPushOwner(pushOwnerUid, pushReportId, pushOwnerUid);
+      try {
+        navigate(MY_REPORTS_ROUTE);
+      } catch {
+        // Navigation must never crash the app.
+      }
+      try {
+        notifyPushAccountMismatch(describeReportPushTap(response));
+      } catch {
+        // Non-fatal.
+      }
+      return true;
     }
-    return true;
+    return false;
   }
   if (detailRoute && signedInUid) {
     try {
@@ -474,10 +946,25 @@ const tryHandleReportPushTap = (
     return false;
   }
   const tapKey = describeReportPushTap(response);
+  const tapIntent = describeReportTapIntent(response);
   if (handledReportPushTapKeys.has(tapKey)) {
     return true;
   }
+  // One Android category tap can arrive as TWO responses (default action +
+  // action button). Their descriptors differ, so compare destinations too:
+  // the in-memory mirror first (the persisted write is fire-and-forget and may
+  // still be in flight for the sibling delivery), then the persisted record
+  // loaded by the cold-start drain. Deliberately synchronous — this runs inside
+  // a native event callback where an await would let the sibling slip in first.
+  if (
+    wasTapIntentJustRouted(tapIntent) ||
+    wasHandledPushTapAlready(loadedHandledPushTap, tapKey, tapIntent)
+  ) {
+    handledReportPushTapKeys.add(tapKey);
+    return true;
+  }
   handledReportPushTapKeys.add(tapKey);
+  markTapIntentRouted(tapIntent);
   // Cap the claim set — a long-lived session can otherwise grow it
   // unboundedly (one entry per tapped report push).
   if (handledReportPushTapKeys.size > 50) {
@@ -490,7 +977,7 @@ const tryHandleReportPushTap = (
   // in-memory Set above) does NOT re-navigate to the same detail screen.
   // Fire-and-forget: the cold-start drain re-checks AsyncStorage before
   // routing, and warm taps are unaffected.
-  void writeHandledPushTap(tapKey);
+  void writeHandledPushTap(tapKey, tapIntent);
   try {
     return routeReportPushTap(response, router, navigate);
   } catch {
@@ -557,14 +1044,24 @@ export function ReportActionCategorySync() {
         if (!isMounted) {
           return true;
         }
-        // Replay guard: this tap was already routed in a previous launch
-        // (persisted claim survives JS reloads / app kills, unlike the
-        // in-memory Set). Skip navigation, but still clear the native slot so
-        // the stale response stops being returned.
+        // Replay guard: this tap (or its sibling delivery — Android emits one
+        // tap as the default action AND the category action) was already routed
+        // in a previous launch or earlier in this one. The persisted claim
+        // survives JS reloads / app kills, unlike the in-memory Set. Skip
+        // navigation, but still clear the native slot so the stale response
+        // stops being returned.
         try {
           const tapKey = describeReportPushTap(lastResponse);
+          const tapIntent = describeReportTapIntent(lastResponse);
           const alreadyHandled = await readHandledPushTap();
-          if (alreadyHandled === tapKey) {
+          loadedHandledPushTap = alreadyHandled;
+          if (wasHandledPushTapAlready(alreadyHandled, tapKey, tapIntent)) {
+            handledReportPushTapKeys.add(tapKey);
+            await clearNativeLastResponse(Notifications);
+            return true;
+          }
+          if (wasTapIntentJustRouted(tapIntent)) {
+            handledReportPushTapKeys.add(tapKey);
             await clearNativeLastResponse(Notifications);
             return true;
           }

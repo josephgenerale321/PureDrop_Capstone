@@ -14,6 +14,45 @@ export default function SignOutModal() {
     await performLogout(router, LOGIN_ROUTE);
   };
 
+  const handleCancel = () => {
+    // Close the transparent-modal signout stack and land back on the profile
+    // tab. `router.back()` dismisses this modal route; `dismissTo` is the
+    // guarded fallback when there is nothing to pop. A bare `replace("profile")`
+    // fails on the nested Stack (no route literally named "profile" there —
+    // the tab is `profile.tsx` one navigator up), which is exactly the dev-only
+    // `The action 'REPLACE' with payload {"name":"profile"} was not handled by
+    // any navigator` warning. Absolute href keeps it working in dev + preview.
+    try {
+      if (router.canGoBack?.()) {
+        router.back();
+        return;
+      }
+    } catch {
+      // Fall through to the dismiss/replace fallbacks below.
+    }
+    try {
+      const nav = router as unknown as {
+        dismissTo?: (href: Href) => void;
+        dismiss?: () => void;
+      };
+      if (typeof nav.dismissTo === "function") {
+        nav.dismissTo("/regular_user/profile" as Href);
+        return;
+      }
+      if (typeof nav.dismiss === "function") {
+        nav.dismiss();
+        return;
+      }
+    } catch {
+      // Fall through to absolute replace below.
+    }
+    try {
+      router.replace("/regular_user/profile" as Href);
+    } catch {
+      // Navigation must never crash the app.
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.modalCard}>
@@ -24,7 +63,7 @@ export default function SignOutModal() {
             <Text style={styles.buttonText}>YES</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.button, styles.noButton]} onPress={() => router.replace("/regular_user/profile")}>
+          <TouchableOpacity style={[styles.button, styles.noButton]} onPress={handleCancel}>
             <Text style={[styles.buttonText, styles.noButtonText]}>NO</Text>
           </TouchableOpacity>
         </View>
