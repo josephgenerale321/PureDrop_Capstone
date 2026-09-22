@@ -15,32 +15,41 @@ export default function SignOutModal() {
   };
 
   const handleCancel = () => {
-    // Close the transparent-modal signout stack and land back on the profile
-    // tab. `router.back()` dismisses this modal route; `dismissTo` is the
-    // guarded fallback when there is nothing to pop. A bare `replace("profile")`
-    // fails on the nested Stack (no route literally named "profile" there —
-    // the tab is `profile.tsx` one navigator up), which is exactly the dev-only
-    // `The action 'REPLACE' with payload {"name":"profile"} was not handled by
-    // any navigator` warning. Absolute href keeps it working in dev + preview.
+    // Close the signout modal and land back on the profile tab.
+    //
+    // WHY back-style closes land on HOME (home.jsx) instead of profile: the
+    // modal is opened via `router.push("/regular_user/signout/signout_modal")`,
+    // and `signout` is its own (hidden) tab in the bottom-tabs navigator, so
+    // pushing the modal SWITCHES the active tab profile -> signout. The tab
+    // router's default `backBehavior = 'firstRoute'` then rebuilds history as
+    // [home, signout] — the profile entry is gone. Any pop-style close pops
+    // `signout` and reveals `home` (the first Tabs.Screen):
+    //   - router.back()  -> GO_BACK through Tabs -> home (canGoBack() is still
+    //     true, so a back()-first handler always takes this wrong branch).
+    //   - dismiss()      -> POP on the signout stack; nothing sits under the
+    //     modal there, so it also exposes the home tab.
+    //   - dismissTo(profile) -> POP_TO, which is a *stack* operation: profile
+    //     is not inside the signout stack, so the pop can't land on it and the
+    //     tab navigator falls back to its first route = home.
+    //
+    // Fix: NAVIGATE to the profile tab explicitly — the canonical tab-switch
+    // action, handled directly by the tab router with no popping involved, so
+    // backBehavior can't reroute it. Absolute replace() stays as fallback.
+    // (A bare replace("profile") fails on the nested Stack — no route literally
+    // named "profile" there — which is the dev-only REPLACE warning; absolute
+    // href avoids it.)
     try {
-      if (router.canGoBack?.()) {
-        router.back();
-        return;
-      }
+      router.navigate("/regular_user/profile" as Href);
+      return;
     } catch {
-      // Fall through to the dismiss/replace fallbacks below.
+      // Fall through to the fallbacks below.
     }
     try {
       const nav = router as unknown as {
         dismissTo?: (href: Href) => void;
-        dismiss?: () => void;
       };
       if (typeof nav.dismissTo === "function") {
         nav.dismissTo("/regular_user/profile" as Href);
-        return;
-      }
-      if (typeof nav.dismiss === "function") {
-        nav.dismiss();
         return;
       }
     } catch {
