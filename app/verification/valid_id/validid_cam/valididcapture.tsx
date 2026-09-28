@@ -22,7 +22,9 @@ import {
   useIdCapture,
   type IdPhotoSide,
 } from "../../../../components/verification/validid/valididcapture/backend/idcapturefunc";
-import ValidIdCropper from "../../../../components/verification/validid/valididcapture/valididcropper";
+import ValidIdCropper, {
+  type GuideRect,
+} from "../../../../components/verification/validid/valididcapture/valididcropper";
 import CropperOldPhone from "../../../../components/verification/validid/valididcapture/cropperoldphone";
 import useVerificationDecisionWatcher from "../../../../components/verification/backend/useVerificationDecisionWatcher";
 
@@ -137,6 +139,13 @@ function NativeIdCapture({
   visionCamera: VisionCameraModule;
   side: IdPhotoSide;
 }) {
+  // Live-preview geometry, handed to the cropper so it can reproduce the guide.
+  // The preview is centre-cropped (vision-camera's Android default resizeMode is
+  // COVER), so the guide's rectangle is NOT a fixed fraction of the photo —
+  // see guideRectInPhoto in valididcropper.
+  const [viewSize, setViewSize] = useState<GuideRect | null>(null);
+  const [guideRect, setGuideRect] = useState<GuideRect | null>(null);
+
   const {
     device,
     hasPermission,
@@ -225,7 +234,19 @@ function NativeIdCapture({
   }
 
   return (
-    <View style={styles.container}>
+    <View
+      style={styles.container}
+      // The camera is StyleSheet.absoluteFill inside this container, so this
+      // layout IS the preview's layout.
+      onLayout={(event) => {
+        const { width, height } = event.nativeEvent.layout;
+        setViewSize((prev) =>
+          prev && prev.width === width && prev.height === height
+            ? prev
+            : { x: 0, y: 0, width, height },
+        );
+      }}
+    >
       {device ? (
         <StableIdCamera
           Camera={visionCamera.Camera}
@@ -251,12 +272,32 @@ function NativeIdCapture({
 
       <Text style={styles.sideTitle}>{SIDE_TITLES[side]}</Text>
 
-      {/* Landscape ID-card guide (no face gate — documents aren't faces) */}
-      <View style={styles.idGuide}>
-        <View style={styles.guideCornerTL} />
-        <View style={styles.guideCornerTR} />
-        <View style={styles.guideCornerBL} />
-        <View style={styles.guideCornerBR} />
+      {/* Landscape ID-card guide (no face gate — documents aren't faces),
+          centered in the preview and measured so the cropper can open on
+          exactly this rectangle — see guideRectInPhoto. pointerEvents is off
+          because the guide is purely decorative and would otherwise sit in the
+          touch path above the preview. */}
+      <View style={styles.idGuideWrap} pointerEvents="none">
+        <View
+          style={styles.idGuide}
+          onLayout={(event) => {
+            const { x, y, width, height } = event.nativeEvent.layout;
+            setGuideRect((prev) =>
+              prev &&
+              prev.x === x &&
+              prev.y === y &&
+              prev.width === width &&
+              prev.height === height
+                ? prev
+                : { x, y, width, height },
+            );
+          }}
+        >
+          <View style={styles.guideCornerTL} />
+          <View style={styles.guideCornerTR} />
+          <View style={styles.guideCornerBL} />
+          <View style={styles.guideCornerBR} />
+        </View>
       </View>
 
       <Text style={[styles.hintText, cameraError && styles.hintTextWarn]}>
@@ -287,6 +328,9 @@ function NativeIdCapture({
           sideLabel={SIDE_TITLES[side]}
           onConfirm={handleCropConfirm}
           onCancel={handleCropCancel}
+          viewWidth={viewSize?.width}
+          viewHeight={viewSize?.height}
+          guideRect={guideRect}
         />
       )}
     </View>

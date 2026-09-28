@@ -62,7 +62,95 @@ export type ValidIdCropperProps = {
   onConfirm: (croppedUri: string) => void;
   /** Called when the user backs out — the caller discards the capture. */
   onCancel: () => void;
+  /**
+   * Size of the live camera view the on-screen ID guide was drawn over, in
+   * points. Omitted when the cropper is entered without one (deep link).
+   */
+  viewWidth?: number;
+  /** @see viewWidth */
+  viewHeight?: number;
+  /**
+   * The capture screen's guide rectangle, measured in the same point space as
+   * viewWidth/viewHeight. When supplied together with the view size, the cropper
+   * opens on exactly the region the guide described instead of guessing.
+   */
+  guideRect?: GuideRect | null;
 };
+
+/** A rectangle in view/screen points. */
+export type GuideRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+/**
+ * Maps the capture screen's on-screen ID guide back onto the captured photo.
+ *
+ * WHY THIS IS NEEDED
+ * The live preview is centre-cropped to the view — vision-camera's Android
+ * default `resizeMode` is COVER (HybridPreviewView.kt), so a tall view shows
+ * only a horizontal slice of the 3:4 sensor frame. The rectangle the user
+ * lined the card up against is therefore NOT "86% of the photo": on a 9:19.5
+ * view it maps to roughly HALF the photo's width. Opening the cropper on a
+ * fixed 86% frame made the capture screen lie about what would be cropped, so
+ * every capture had to be re-framed by hand.
+ *
+ * This inverts that cover transform, giving the guide's true rectangle in photo
+ * pixels. The capture screen is then WYSIWYG, and the frame still matches the
+ * ID-card aspect the guide advertises.
+ *
+ * Returns null when any dimension is unusable (caller falls back to the
+ * centered default).
+ */
+export function guideRectInPhoto(
+  view: { width: number; height: number },
+  guide: GuideRect,
+  photo: { width: number; height: number },
+): CropRect | null {
+  if (
+    !(view.width > 0) ||
+    !(view.height > 0) ||
+    !(photo.width > 0) ||
+    !(photo.height > 0) ||
+    !(guide.width > 0) ||
+    !(guide.height > 0)
+  ) {
+    return null;
+  }
+  // Identical fit to the preview's: scale so the photo fills the view and
+  // overflows (is cropped) on the non-matching axis.
+  const scale = Math.max(view.width / photo.width, view.height / photo.height);
+  if (!Number.isFinite(scale) || scale <= 0) {
+    return null;
+  }
+
+  // A "cover" fit CENTRES the scaled photo in the view, so it overflows by an
+  // equal amount on both sides of whichever axis overflows. This offset is what
+  // turns a view-space rectangle into a photo-space one. Omitting it displaces
+  // the frame by half the overflow: on a tall 9:19.5 phone the photo overflows
+  // horizontally, so the frame landed a full 384px (20% of the photo's width)
+  // too far left and the card poked out past its right edge.
+  const offsetX = (view.width - photo.width * scale) / 2;
+  const offsetY = (view.height - photo.height * scale) / 2;
+
+  const width = Math.min(guide.width / scale, photo.width);
+  const height = Math.min(guide.height / scale, photo.height);
+  if (!(width > 0) || !(height > 0)) {
+    return null;
+  }
+
+  return {
+    // Clamp so a guide that sits slightly outside the visible slice (possible
+    // after rounding, or when the guide is dragged near an edge) still yields a
+    // frame fully inside the photo — a negative origin would crash crop().
+    x: clamp((guide.x - offsetX) / scale, 0, photo.width - width),
+    y: clamp((guide.y - offsetY) / scale, 0, photo.height - height),
+    width,
+    height,
+  };
+}
 
 export const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
@@ -91,6 +179,97 @@ function resolveManipulatorModule(module: unknown): ManipulatorModule | null {
     return nested as ManipulatorModule;
   }
   return null;
+}
+
+/**
+ * The `ImageManipulatorContext` type, derived from the lazy import so the
+ * module itself stays unloaded until the crop step actually runs.
+ */
+type ManipulatorContext = ReturnType<
+  ManipulatorModule["ImageManipulator"]["manipulate"]
+>;
+
+/**
+ * Longest edge, in pixels, of the working copy the cropper previews and crops.
+ *
+ * WHY THIS IS BOUNDED
+ * The ID flow captures through vision-camera's `usePhotoOutput`, whose default
+ * `targetResolution` is `CommonResolutions.UHD_4_3` (3024x4032 ~= 12.2 MP), and
+ * expo-image-manipulator decodes its source at FULL resolution into an
+ * ARGB_8888 bitmap — roughly 49 MB per copy on Android. Every transformer in
+ * the chain allocates another one, so a rotate + render of an unbounded capture
+ * parks well over 100 MB of native bitmap memory while the camera session is
+ * still resident. That is what got the process OOM-killed — Android restarts
+ * the activity, which is what looks like "the app reloaded" the moment the
+ * cropper opens.
+ *
+ * This cap is also the preview/crop resolution, so it must stay well above what
+ * an ID card needs: the default crop frame spans 86% of the frame's width, and
+ * admins zoom in to read small print. 2560 leaves the cropped card around
+ * 2200px on its long edge — comfortably legible, at ~20 MB of bitmap.
+ */
+export const MAX_NORMALIZED_EDGE = 2560;
+
+/**
+ * Longest edge used for the orientation probe. The probe only needs the source
+ * aspect ratio, so it renders a thumbnail instead of paying for a second
+ * full-resolution decode. Its reported width/height are therefore a RATIO, not
+ * the source's real size — feed them to fitRatioToEdge, never to resize().
+ */
+const PROBE_EDGE = 64;
+
+/**
+ * Turns an aspect ratio into concrete target dimensions whose longest edge is
+ * exactly `maxEdge`.
+ *
+ * The ratio may come from a THUMBNAIL probe (see PROBE_EDGE), so `width`/
+ * `height` here are only proportional — never a pixel size to preserve. Always
+ * scaling up to the cap is deliberate: the input is a camera capture, so in
+ * practice this downscales, and when a source really is smaller than the cap,
+ * upscaling costs a little memory but invents no detail (the crop output stays
+ * exactly as sharp as the original was). Guaranteeing the cap is what keeps the
+ * native bitmap bounded.
+ *
+ * Returns null when the ratio is unusable.
+ */
+export function fitRatioToEdge(
+  width: number,
+  height: number,
+  maxEdge: number,
+): { width: number; height: number } | null {
+  if (!(width > 0) || !(height > 0) || !Number.isFinite(maxEdge) || maxEdge <= 0) {
+    return null;
+  }
+  const scale = maxEdge / Math.max(width, height);
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+/**
+ * Releases an expo shared object without ever throwing.
+ *
+ * This is not optional bookkeeping: on Android an `ImageManipulatorContext`
+ * holds the decoded bitmap (see ManipulatorTask), so a context that is never
+ * released keeps ~49 MB pinned for the rest of the screen's life even though
+ * the `ImageRef` from `renderAsync()` was freed. `release()` also detaches the
+ * native counterpart, so a second call (or a call on an already-collected
+ * object) throws — cleanup paths must not propagate that.
+ */
+function releaseNative(shared: unknown): void {
+  if (!shared || typeof shared !== "object") {
+    return;
+  }
+  const release = (shared as { release?: unknown }).release;
+  if (typeof release !== "function") {
+    return;
+  }
+  try {
+    (release as () => void).call(shared);
+  } catch {
+    // Already released or already collected — nothing left to free.
+  }
 }
 
 /** Refs and setters the gesture builders need to move/resize the frame. */
@@ -349,6 +528,9 @@ export default function ValidIdCropper({
   sideLabel,
   onConfirm,
   onCancel,
+  viewWidth,
+  viewHeight,
+  guideRect,
   gestures = createDefaultGestures,
 }: ValidIdCropperFullProps) {
   const [containerSize, setContainerSize] = useState<{
@@ -442,14 +624,41 @@ export default function ValidIdCropper({
     displayUriRef.current = displayUri;
   }, [displayUri]);
 
-  // (Re)center a default crop frame whenever the displayed photo changes
+  // (Re)place the default crop frame whenever the displayed photo changes
   // (initial layout, rotation, or a new capture).
+  //
+  // Preferred source is the capture screen's guide: mapping it back into photo
+  // pixels makes the two screens agree, so lining the card up in the guide is
+  // the same thing as framing it here. The centered 86% default is only the
+  // fallback for a cropper opened without that geometry (deep link, or the
+  // guide had not been measured yet).
   useEffect(() => {
     if (!displayed) {
       frameRef.current = null;
       setFrame(null);
       return;
     }
+
+    const guidePhotoRect =
+      guideRect && imageSize && viewWidth && viewHeight
+        ? guideRectInPhoto(
+            { width: viewWidth, height: viewHeight },
+            guideRect,
+            imageSize,
+          )
+        : null;
+
+    if (guidePhotoRect) {
+      // Photo pixels -> canvas points via the same contain-fit the <Image> uses.
+      applyFrame({
+        x: displayed.offsetX + guidePhotoRect.x * displayed.scale,
+        y: displayed.offsetY + guidePhotoRect.y * displayed.scale,
+        width: guidePhotoRect.width * displayed.scale,
+        height: guidePhotoRect.height * displayed.scale,
+      });
+      return;
+    }
+
     const width = Math.min(
       displayed.width * INITIAL_SIZE_FRACTION,
       displayed.height * CROP_ASPECT,
@@ -461,7 +670,14 @@ export default function ValidIdCropper({
       height: width / CROP_ASPECT,
     };
     applyFrame(initial);
-  }, [displayed, applyFrame]);
+  }, [
+    displayed,
+    imageSize,
+    guideRect,
+    viewWidth,
+    viewHeight,
+    applyFrame,
+  ]);
 
   // Prepares the file the cropper previews and crops. Vision-camera captures
   // carry EXIF orientation tags, and on Android the dimensions Image.getSize
@@ -517,46 +733,99 @@ export default function ValidIdCropper({
         // does NOT bake that tag into pixels on SDK 54. Explicitly rotate the
         // context -90 deg so the normalized file is upright (portrait pixels)
         // before the preview ever shows it.
-        let renderedWidth = 0;
-        let renderedHeight = 0;
+        //
+        // The probe renders a THUMBNAIL. Reading the source aspect ratio used
+        // to cost a second full-resolution decode — ~49 MB of native bitmap on
+        // top of the real pass, which is what tipped the process into an OOM
+        // kill (the "app reload") the moment the cropper opened.
+        let sourceWidth = 0;
+        let sourceHeight = 0;
+        let probeContext: ManipulatorContext | null = null;
+        let probe: ImageRef | null = null;
         try {
-          const probeContext = ImageManipulator.manipulate(photoUri);
-          const probe = await probeContext.renderAsync();
-          renderedWidth = probe.width;
-          renderedHeight = probe.height;
-          probe.release();
+          probeContext = ImageManipulator.manipulate(photoUri);
+          probeContext.resize({ width: PROBE_EDGE });
+          probe = await probeContext.renderAsync();
+          sourceWidth = probe.width;
+          sourceHeight = probe.height;
         } catch (probeError) {
           console.warn(
             "[ValidIdCropper] orientation probe failed, skipping auto-rotate:",
             probeError,
           );
+        } finally {
+          // Both objects must go: the thumbnail ref AND the context, which
+          // pins whatever it decoded.
+          releaseNative(probe);
+          releaseNative(probeContext);
         }
-        const needsPortraitFix = renderedWidth > renderedHeight && renderedHeight > 0;
-        const context = ImageManipulator.manipulate(photoUri);
-        if (needsPortraitFix) {
-          console.log(
-            "[ValidIdCropper] portrait auto-rotate: sensor",
-            `${renderedWidth}x${renderedHeight}`,
-            "-> rotating -90 deg",
-          );
-          // -90 deg: landscape sensor pixels -> upright portrait.
-          context.rotate(-90);
+
+        const needsPortraitFix = sourceWidth > sourceHeight && sourceHeight > 0;
+        // The probe is a PROBE_EDGE-wide THUMBNAIL, so sourceWidth/sourceHeight
+        // carry the source's ASPECT RATIO, not its pixel size. They must be
+        // re-scaled up to the working cap — passing them straight to resize()
+        // would emit a ~64x48 preview (the unreadable-blur regression).
+        //
+        // Scaling a 90 degree rotation and rotating a scale commute, so the
+        // bound can be derived from the pre-rotate ratio. With no probe result
+        // there is no ratio, so bound by width alone: the manipulator derives
+        // the height from the real source ratio, and the crop math reads the
+        // true dimensions back off the rendered ref regardless.
+        const target =
+          fitRatioToEdge(sourceWidth, sourceHeight, MAX_NORMALIZED_EDGE) ?? {
+            width: MAX_NORMALIZED_EDGE,
+            height: 0,
+          };
+
+        let context: ManipulatorContext | null = null;
+        let rendered: ImageRef | null = null;
+        let width = 0;
+        let height = 0;
+        let normalizedUri = "";
+        try {
+          context = ImageManipulator.manipulate(photoUri);
+          // Downscale BEFORE rotating. Every transformer in the chain
+          // allocates its own bitmap while the previous one is still
+          // reachable, so rotating first meant two full-size copies were live
+          // at once; shrinking first keeps the peak at one full-size decode
+          // plus two small ones.
+          if (target.width > 0) {
+            context.resize(
+              target.height > 0
+                ? { width: target.width, height: target.height }
+                : { width: target.width },
+            );
+          }
+          if (needsPortraitFix) {
+            console.log(
+              "[ValidIdCropper] portrait auto-rotate: sensor ratio",
+              `${sourceWidth}:${sourceHeight}`,
+              "-> rotating -90 deg, working copy",
+              `${target.width}x${target.height}`,
+            );
+            // -90 deg: landscape sensor pixels -> upright portrait.
+            context.rotate(-90);
+          }
+          rendered = await context.renderAsync();
+          // Capture the dimensions before releasing the native ref — they are
+          // the ground truth of what crop() will operate on.
+          ({ width, height } = rendered);
+          const saved = await rendered.saveAsync({
+            compress: 0.95,
+            format: SaveFormat.JPEG,
+          });
+          // Some native builds return a bare absolute path instead of a file://
+          // URI — normalize the same way the crop result is normalized.
+          normalizedUri = /^(file|content|https?):\/\//.test(saved.uri) ||
+            saved.uri.startsWith("data:")
+            ? saved.uri
+            : `file://${saved.uri}`;
+        } finally {
+          // The decoded bitmap is owned by the context, not only by the ref.
+          // Releasing just the ref left ~49 MB resident per manipulation.
+          releaseNative(rendered);
+          releaseNative(context);
         }
-        const rendered = await context.renderAsync();
-        // Capture the dimensions before releasing the native ref — they are
-        // the ground truth of what crop() will operate on.
-        const { width, height } = rendered;
-        const saved = await rendered.saveAsync({
-          compress: 0.95,
-          format: SaveFormat.JPEG,
-        });
-        rendered.release();
-        // Some native builds return a bare absolute path instead of a file://
-        // URI — normalize the same way the crop result is normalized.
-        const normalizedUri = /^(file|content|https?):\/\//.test(saved.uri) ||
-          saved.uri.startsWith("data:")
-          ? saved.uri
-          : `file://${saved.uri}`;
         if (cancelled) {
           FileSystem.deleteAsync(normalizedUri, { idempotent: true }).catch(
             () => {},
@@ -651,6 +920,7 @@ export default function ValidIdCropper({
 
     isSavingRef.current = true;
     setIsRotating(true);
+    let context: ManipulatorContext | null = null;
     let rendered: ImageRef | null = null;
     try {
       const resolved = resolveManipulatorModule(
@@ -664,7 +934,7 @@ export default function ValidIdCropper({
       // wrong (some Vivo builds tag the sensor opposite). Rotates the exact
       // file the preview shows, swaps dimensions, and re-centers the frame
       // via the displayed effect.
-      const context = ImageManipulator.manipulate(currentUri);
+      context = ImageManipulator.manipulate(currentUri);
       context.rotate(90);
       rendered = await context.renderAsync();
       const { width, height } = rendered;
@@ -672,8 +942,6 @@ export default function ValidIdCropper({
         compress: 0.95,
         format: SaveFormat.JPEG,
       });
-      rendered.release();
-      rendered = null;
       const rotatedUri = /^(file|content|https?):\/\//.test(result.uri) ||
         result.uri.startsWith("data:")
         ? result.uri
@@ -703,7 +971,8 @@ export default function ValidIdCropper({
         "Could not rotate the photo. Please retake it.",
       );
     } finally {
-      rendered?.release();
+      releaseNative(rendered);
+      releaseNative(context);
       isSavingRef.current = false;
       setIsRotating(false);
     }
@@ -735,6 +1004,7 @@ export default function ValidIdCropper({
 
     isSavingRef.current = true;
     setIsSaving(true);
+    let context: ManipulatorContext | null = null;
     let rendered: ImageRef | null = null;
     try {
       // Crop the same normalized file the preview shows, so the output is
@@ -753,13 +1023,19 @@ export default function ValidIdCropper({
         throw new Error("Cannot find native module 'ExpoImageManipulator'");
       }
       const { ImageManipulator, SaveFormat } = resolved;
-      const context = ImageManipulator.manipulate(sourceUri);
+      context = ImageManipulator.manipulate(sourceUri);
       context.crop({ originX, originY, width, height });
       rendered = await context.renderAsync();
       const result = await rendered.saveAsync({
         compress: 0.9,
         format: SaveFormat.JPEG,
       });
+      // Free the decoded bitmap before handing off: onConfirm navigates away
+      // and the crop result is already on disk, so nothing below needs it.
+      releaseNative(rendered);
+      rendered = null;
+      releaseNative(context);
+      context = null;
       console.log(
         "[ValidIdCropper] cropped:",
         result.uri,
@@ -806,7 +1082,8 @@ export default function ValidIdCropper({
         );
       }
     } finally {
-      rendered?.release();
+      releaseNative(rendered);
+      releaseNative(context);
       isSavingRef.current = false;
       setIsSaving(false);
     }

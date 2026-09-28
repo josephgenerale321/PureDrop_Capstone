@@ -7,6 +7,7 @@ import { useIsFocused } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import {
   capturePhotoToFileStable,
+  requestCameraPermissionSafely,
   toErrorMessage,
   type VisionCameraModule,
 } from "../../../faceselfie_comp/selfiecapture/backend/selfiecaptfunc";
@@ -77,14 +78,21 @@ export function useIdCapture({
 
   // Opens the (optional) permission prompt; a denied request surfaces the
   // same guidance alert whether it was auto-requested or retried by the user.
+  //
+  // Uses the shared guard because this screen is reached straight from the
+  // selfie flow: navigating over mounts a fresh hook instance while the
+  // previous screen's permission request may still be in flight, and a
+  // per-instance ref here would not see it. Without serialization the second
+  // requestPermission() overwrites Android's single PermissionListener slot,
+  // the first coroutine never resumes, and its JPromise is rejected on GC with
+  // "java.lang.RuntimeException: Timeouted: JPromise was destroyed!" as an
+  // unhandled rejection (margelo/react-native-vision-camera#3834).
   const requestPermissionWithFeedback = useCallback(() => {
-    void requestPermission().then((granted) => {
-      if (!granted) {
-        Alert.alert(
-          "Camera Permission",
-          "Camera access is required to capture your Valid ID. Please enable it in your device settings.",
-        );
-      }
+    requestCameraPermissionSafely(requestPermission, () => {
+      Alert.alert(
+        "Camera Permission",
+        "Camera access is required to capture your Valid ID. Please enable it in your device settings.",
+      );
     });
   }, [requestPermission]);
 

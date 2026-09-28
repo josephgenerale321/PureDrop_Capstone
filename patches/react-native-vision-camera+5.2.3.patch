@@ -20,3 +20,25 @@ diff --git a/node_modules/react-native-vision-camera/src/hooks/internal/useCamer
      }
    }, [session])
  
+diff --git a/node_modules/react-native-vision-camera/src/hooks/internal/useCameraController.ts b/node_modules/react-native-vision-camera/src/hooks/internal/useCameraController.ts
+--- a/node_modules/react-native-vision-camera/src/hooks/internal/useCameraController.ts
++++ b/node_modules/react-native-vision-camera/src/hooks/internal/useCameraController.ts
+@@ -84,9 +84,17 @@ export function useCameraController({
+     let isCanceled = false
+     const load = async () => {
+       try {
+         if (device == null) {
+           // No device, configure with empty devices
+-          session.configure([], {})
++          // `.catch(..)` is required here for the same reason as the session
++          // teardown in useCameraSession.ts: `configure` returns a Nitro
++          // JPromise, and leaving it pending-and-unreferenced lets JS GC
++          // destroy it while it is still in flight, so its destructor rejects
++          // with "Timeouted: JPromise was destroyed!" as an unhandled promise
++          // rejection. Note the enclosing try/catch does NOT help — a floating
++          // promise is never awaited, so nothing observes its rejection.
++          // The session may already be disposed on teardown — ignore.
++          void session.configure([], {}).catch(() => {})
+           setController(undefined)
+         } else {
+           // Device + outputs - configure session

@@ -22,10 +22,17 @@ export const styles = StyleSheet.create({
   },
   // ID cards are 85.6mm × 54mm ≈ 1.586:1, so the guide is a landscape
   // rectangle (unlike the portrait face frame) to match the document shape.
+  //
+  // The guide is centered (not parked at a fixed top offset) so that the guide
+  // and the cropper's default frame agree: the cropper maps this rectangle into
+  // photo space via guideRectInPhoto, and a centered guide is what makes the
+  // frame land centered on the captured photo. See valididcropper.tsx.
+  idGuideWrap: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   idGuide: {
-    position: "absolute",
-    top: "30%",
-    alignSelf: "center",
     width: "88%",
     aspectRatio: 1.586,
   },

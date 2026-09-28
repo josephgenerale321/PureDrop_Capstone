@@ -36,8 +36,69 @@ const PERMISSION_ALERT_MESSAGE =
   "Camera access is required for face verification. Please enable it in your device settings.";
 
 // How long concurrent permission requests are collapsed into one while a
-// native request may still be in-flight (see requestPermissionWithFeedback).
+// native request may still be in-flight (see requestCameraPermissionSafely).
 const PERMISSION_REQUEST_GUARD_TIMEOUT_MS = 15_000;
+
+// ---------------------------------------------------------------------------
+// Camera permission — serialized and never unhandled
+// ---------------------------------------------------------------------------
+
+// Android's PermissionAwareActivity keeps only ONE in-flight PermissionListener
+// slot, so calling requestPermission() while a previous native request is still
+// pending overwrites the earlier listener. The abandoned coroutine then never
+// resumes, its JPromise stays pending until JS GC collects it, and Nitro's
+// JPromise destructor rejects it with
+// "java.lang.RuntimeException: Timeouted: JPromise was destroyed!" — which
+// surfaces as an "Uncaught (in promise)" error. See
+// margelo/react-native-vision-camera#3834.
+//
+// Deliberately module-level rather than a per-hook ref: the selfie screen and
+// the Valid ID screens must serialize against EACH OTHER, not just themselves.
+// Navigating from one to the other mounts a fresh hook instance while the
+// previous screen's request is still pending, and a per-instance ref would not
+// see that in-flight request.
+let cameraPermissionRequestInFlight = false;
+
+/**
+ * Runs `requestPermission()` with the two guarantees the raw hook call lacks:
+ *
+ *  1. At most one camera permission request is in flight app-wide at a time,
+ *     so Android's single-listener slot is never overwritten.
+ *  2. The promise chain always terminates in a `.catch`, so an abandoned or
+ *     destroyed native request can never surface as an unhandled rejection.
+ *
+ * `onDenied` reports a denial in the caller's own wording — the selfie and Valid
+ * ID flows word their guidance differently. Permission state stays readable via
+ * the hook's `hasPermission`, so a swallowed rejection needs no extra handling.
+ */
+export function requestCameraPermissionSafely(
+  requestPermission: () => Promise<boolean>,
+  onDenied: () => void,
+): void {
+  if (cameraPermissionRequestInFlight) {
+    return;
+  }
+  cameraPermissionRequestInFlight = true;
+  // A leaked native request never resolves (that is the bug), so the guard must
+  // also be released by a timer, not only by the promise settling.
+  const releaseGuard = setTimeout(() => {
+    cameraPermissionRequestInFlight = false;
+  }, PERMISSION_REQUEST_GUARD_TIMEOUT_MS);
+  requestPermission()
+    .then((granted) => {
+      if (!granted) {
+        onDenied();
+      }
+    })
+    .catch(() => {
+      // Abandoned/destroyed native request — permission state is still readable
+      // via hasPermission, so nothing to report.
+    })
+    .finally(() => {
+      clearTimeout(releaseGuard);
+      cameraPermissionRequestInFlight = false;
+    });
+}
 
 // react-native-vision-camera is native-only. The modules are loaded lazily on
 // first render so that (a) web never executes them and (b) an outdated dev
@@ -397,41 +458,15 @@ export function useSelfieCapture({
   // Opens the (optional) permission prompt; a denied request surfaces the
   // same guidance alert whether it was auto-requested or retried by the user.
   //
-  // Requests are serialized (with a 15s safety valve): firing
-  // requestPermission() while a previous native request is still in-flight
-  // overwrites Android's single PermissionListener slot (RN core limitation —
-  // see margelo/react-native-vision-camera#3834). The abandoned coroutine then
-  // never resolves and its JPromise is rejected on GC with
-  // "java.lang.RuntimeException: Timeouted: JPromise was destroyed!", which
-  // used to surface here as an "Uncaught (in promise)" router error because
-  // the promise chain had no catch. The .catch keeps that destructor
-  // rejection (which can also fire when a request outlives the screen) off
-  // the console; the hook's hasPermission flag remains the source of truth.
-  const isRequestingPermissionRef = useRef(false);
+  // Serialization and the trailing .catch both live in the shared helper: the
+  // request must not overlap the Valid ID screens' requests (Android keeps a
+  // single PermissionListener slot — see margelo/react-native-vision-camera#3834),
+  // and an abandoned native request rejects on GC with
+  // "java.lang.RuntimeException: Timeouted: JPromise was destroyed!".
   const requestPermissionWithFeedback = useCallback(() => {
-    if (isRequestingPermissionRef.current) {
-      return;
-    }
-    isRequestingPermissionRef.current = true;
-    // A leaked native request never resolves (that is the bug), so the guard
-    // must also be released by a timer, not only by the promise settling.
-    const releaseGuard = setTimeout(() => {
-      isRequestingPermissionRef.current = false;
-    }, PERMISSION_REQUEST_GUARD_TIMEOUT_MS);
-    requestPermission()
-      .then((granted) => {
-        if (!granted) {
-          Alert.alert(PERMISSION_ALERT_TITLE, PERMISSION_ALERT_MESSAGE);
-        }
-      })
-      .catch(() => {
-        // Abandoned/destroyed native request — permission state is still
-        // readable via hasPermission, so nothing to report.
-      })
-      .finally(() => {
-        clearTimeout(releaseGuard);
-        isRequestingPermissionRef.current = false;
-      });
+    requestCameraPermissionSafely(requestPermission, () => {
+      Alert.alert(PERMISSION_ALERT_TITLE, PERMISSION_ALERT_MESSAGE);
+    });
   }, [requestPermission]);
 
   // Ask for camera permission once when the screen opens.
