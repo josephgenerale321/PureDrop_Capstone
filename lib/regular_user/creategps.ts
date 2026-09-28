@@ -4,6 +4,12 @@ import * as Location from "expo-location";
 export type GpsResult = {
   formattedLocation: string;
   city: string;
+  /** True when the pin falls outside both Toledo City and Balamban. */
+  isOutsideServiceArea: boolean;
+  /**
+   * Backward-compatible alias for `isOutsideServiceArea`, kept so existing
+   * create/edit report call sites keep working without changes.
+   */
   isOutsideToledo: boolean;
   latitude: number;
   longitude: number;
@@ -58,25 +64,42 @@ export async function loadLastGpsFix(): Promise<LastGpsFix | null> {
 }
 
 // Center of Toledo City, Cebu, Philippines (matches the default map region).
-const TOLEDO_CENTER = { latitude: 10.3775, longitude: 123.6388 };
+export const TOLEDO_CENTER = { latitude: 10.3775, longitude: 123.6388 };
 
-// A generous bounding box around Toledo City. GPS-triangulation and reverse
-// geocoding can be imprecise near the border, so we give a small tolerance so
-// a user standing just outside the official boundary is not wrongly rejected.
-//
-// maxLatitude is capped below Toledo's northern border with Balamban:
-// Balamban's start area (e.g. 10.495676, 123.714515) sits above 10.49, so
-// that neighboring municipality is correctly excluded from the geofence.
-const TOLEDO_BOUNDS = {
+// Center of Balamban, Cebu, Philippines (Google Maps place center
+// 10.502778, 123.7160325 — map viewport ~@10.4799599,123.7416366).
+export const BALAMBAN_CENTER = { latitude: 10.502778, longitude: 123.7160325 };
+
+// Combined service-area geofence covering Toledo City AND Balamban.
+// Toledo City center is ~10.3870453, 123.6501673 per Google Maps; Balamban's
+// center is ~10.502778, 123.7160325. GPS-triangulation and reverse geocoding
+// can be imprecise near borders, so each box carries a small tolerance for a
+// user standing just outside the official boundary.
+export const TOLEDO_BOUNDS = {
   minLatitude: 10.24,
   maxLatitude: 10.49,
   minLongitude: 123.56,
   maxLongitude: 123.76,
 };
 
-// A reverse-geocoded place is considered "in Toledo" if any of these fields
-// mention Toledo (directly or via a known alias).
-const TOLEDO_ALIASES = ["toledo"];
+// Balamban (Google Maps center 10.502778, 123.7160325) spans roughly
+// 10.41-10.60 latitude and 123.66-123.91 longitude. The box below generously
+// covers the municipality plus a small tolerance, without reaching Asturias
+// to the north or Cebu City to the east.
+export const BALAMBAN_BOUNDS = {
+  minLatitude: 10.4,
+  maxLatitude: 10.6,
+  minLongitude: 123.65,
+  maxLongitude: 123.92,
+};
+
+// A reverse-geocoded place is considered inside the service area if any of
+// these name fields mention Toledo City or Balamban.
+const SERVICE_AREA_NAME_ALIASES = ["toledo", "balamban"];
+
+// Toledo City uses ZIP 6038 and Balamban uses ZIP 6041. Checked only against
+// the postalCode field so street numbers elsewhere can't false-accept.
+const SERVICE_AREA_POSTAL_CODES = ["6038", "6041"];
 
 // Stop acquiring more readings once we reach this accuracy (meters).
 const GOOD_ACCURACY_METERS = 30;
@@ -97,13 +120,25 @@ const isInsideToledoBounds = (latitude: number, longitude: number): boolean =>
   longitude >= TOLEDO_BOUNDS.minLongitude &&
   longitude <= TOLEDO_BOUNDS.maxLongitude;
 
-const mentionsToledo = (...values: (string | null | undefined)[]): boolean =>
+const isInsideBalambanBounds = (latitude: number, longitude: number): boolean =>
+  latitude >= BALAMBAN_BOUNDS.minLatitude &&
+  latitude <= BALAMBAN_BOUNDS.maxLatitude &&
+  longitude >= BALAMBAN_BOUNDS.minLongitude &&
+  longitude <= BALAMBAN_BOUNDS.maxLongitude;
+
+export const isInsideServiceAreaBounds = (latitude: number, longitude: number): boolean =>
+  isInsideToledoBounds(latitude, longitude) || isInsideBalambanBounds(latitude, longitude);
+
+const mentionsServiceArea = (...values: (string | null | undefined)[]): boolean =>
   values.some((value) => {
     if (!value) {
       return false;
     }
     const lower = value.toLowerCase();
-    return TOLEDO_ALIASES.some((alias) => lower.includes(alias));
+    return (
+      SERVICE_AREA_NAME_ALIASES.some((alias) => lower.includes(alias)) ||
+      SERVICE_AREA_POSTAL_CODES.some((code) => lower.includes(code))
+    );
   });
 
 export async function getLocationFromCoordinates(
@@ -119,23 +154,26 @@ export async function getLocationFromCoordinates(
   const city = firstMatch?.city || firstMatch?.subregion || firstMatch?.region || "";
   const formattedLocation = formatLocation(city, latitude, longitude);
 
-  // A place is considered outside Toledo when it is outside the geofence AND
-  // the reverse-geocoded name does not mention Toledo. This avoids false
-  // rejections when the geocoder returns an empty/ambiguous name right on the
-  // edge of the city.
-  const isOutsideToledo = mentionsToledo(
+  // A place is considered outside the service area (Toledo City + Balamban)
+  // when it is outside both geofences AND the reverse-geocoded fields
+  // (city/subregion/region/district/postalCode) mention neither place. This
+  // avoids false rejections when the geocoder returns an empty/ambiguous
+  // name right on the edge of either area.
+  const isOutsideServiceArea = mentionsServiceArea(
     firstMatch?.city,
     firstMatch?.subregion,
     firstMatch?.region,
     firstMatch?.district,
+    firstMatch?.postalCode,
   )
     ? false
-    : !isInsideToledoBounds(latitude, longitude);
+    : !isInsideServiceAreaBounds(latitude, longitude);
 
   return {
     formattedLocation,
     city,
-    isOutsideToledo,
+    isOutsideServiceArea,
+    isOutsideToledo: isOutsideServiceArea,
     latitude,
     longitude,
   };
@@ -267,10 +305,10 @@ export async function getCurrentGpsLocation(): Promise<GpsResult> {
   const reading = await acquireBestReading();
   const location = await getLocationFromCoordinates(reading.latitude, reading.longitude);
 
-  // Always keep the user's actual GPS coordinates. If the fix is outside
-  // Toledo (e.g. Balamban), `isOutsideToledo` stays true so the confirm
-  // handler can reject it — but the map still centers on where the user
-  // really is instead of silently jumping to the Toledo center.
+  // Always keep the user's actual GPS coordinates. If the fix is outside the
+  // Toledo + Balamban service area, `isOutsideServiceArea` stays true so the
+  // confirm handler can reject it — but the map still centers on where the
+  // user really is instead of silently jumping to the Toledo center.
   const resolvedLocation = {
     ...location,
     latitude: reading.latitude,

@@ -10,6 +10,7 @@ import ValidIdCropper, {
   type DisplayedRect,
   type ValidIdCropperProps,
 } from "./valididcropper";
+import { activeTouchCount } from "./valididzoom";
 
 /**
  * Cropper variant for older OEM Android builds — Android 12 and below on
@@ -78,7 +79,21 @@ export function createLegacyAndroidGestures(
 
   // Drags the whole crop frame around the visible photo.
   const movePan = PanResponder.create({
-    onStartShouldSetPanResponder: () => !isSavingRef.current,
+    onStartShouldSetPanResponder: (event) => {
+      // Same multi-touch yield as the standard builders: a second finger means
+      // the user is pinching the photo, so the canvas zoom responder must win
+      // rather than this one dragging the frame.
+      if (isSavingRef.current || activeTouchCount(event) >= 2) {
+        return false;
+      }
+      return true;
+    },
+    onMoveShouldSetPanResponder: (event) => {
+      if (isSavingRef.current) {
+        return false;
+      }
+      return activeTouchCount(event) < 2;
+    },
     onPanResponderGrant: () => {
       // Never trust the grant coordinates on these ROMs — the first verified
       // move event re-baselines instead (UNSET sentinel).

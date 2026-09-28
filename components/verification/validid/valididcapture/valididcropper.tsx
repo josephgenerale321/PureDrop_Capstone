@@ -21,6 +21,13 @@ import * as FileSystem from "expo-file-system/legacy";
 // dev-client builds that predate expo-image-manipulator, crashing the whole
 // capture screen before the camera even opens).
 import type { ImageRef } from "expo-image-manipulator";
+import {
+  activeTouchCount,
+  createZoomGestures,
+  effectiveRect,
+  IDENTITY_ZOOM,
+  type ZoomState,
+} from "./valididzoom";
 
 // CR80 ID card ratio (85.6mm x 54mm) — same ratio as the capture guide frame,
 // so confirming the centered default crop reproduces the framed document.
@@ -330,7 +337,22 @@ export function createDefaultGestures(
 
   // Drags the whole crop frame around the visible photo.
   const movePan = PanResponder.create({
-    onStartShouldSetPanResponder: () => !isSavingRef.current,
+    onStartShouldSetPanResponder: (event) => {
+      // A second finger means the user is pinching the photo, not moving the
+      // frame — yielding here is what lets the canvas zoom responder win.
+      if (isSavingRef.current || activeTouchCount(event) >= 2) {
+        return false;
+      }
+      return true;
+    },
+    onMoveShouldSetPanResponder: (event) => {
+      if (isSavingRef.current) {
+        return false;
+      }
+      // Same reasoning as grant: a second finger mid-drag promotes the gesture
+      // to a pinch rather than dragging the frame around under it.
+      return activeTouchCount(event) < 2;
+    },
     onPanResponderGrant: () => {
       // Vivo Funtouch OS can grant with 0/NaN coords — baselining here would
       // teleport the frame on the first move. Mark "no baseline" and let the
@@ -560,6 +582,13 @@ export default function ValidIdCropper({
   // fresh values without being recreated mid-gesture.
   const frameRef = useRef<CropRect | null>(null);
   const displayedRef = useRef<DisplayedRect | null>(null);
+  // The zoom-1 rect, and the live user zoom. Mirrors rather than state so the
+  // PanResponder callbacks and the crop callback can read them mid-gesture.
+  const baseRectRef = useRef<DisplayedRect | null>(null);
+  // Canvas size as a ref, for the zoom gesture's pan clamping.
+  const containerSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const [zoom, setZoom] = useState<ZoomState>(IDENTITY_ZOOM);
+  const zoomRef = useRef<ZoomState>(IDENTITY_ZOOM);
   const isSavingRef = useRef(false);
   const lastTouchRef = useRef({ x: 0, y: 0 });
   const isDraggingRef = useRef(false);
@@ -592,7 +621,9 @@ export default function ValidIdCropper({
     setFrame(next);
   }, []);
 
-  const displayed = useMemo<DisplayedRect | null>(() => {
+  // The zoom-1 letterboxed rect: the contain-fit of the photo in the canvas,
+  // before any user zoom. This is the anchor the zoom transform is applied to.
+  const baseDisplayed = useMemo<DisplayedRect | null>(() => {
     if (!containerSize || !imageSize) {
       return null;
     }
@@ -616,9 +647,21 @@ export default function ValidIdCropper({
     };
   }, [containerSize, imageSize]);
 
+  // The gesture builders and the crop callback need the rect without waiting
+  // for a re-render, so both the base and the live transform are mirrored.
   useEffect(() => {
-    displayedRef.current = displayed;
-  }, [displayed]);
+    baseRectRef.current = baseDisplayed;
+  }, [baseDisplayed]);
+
+  useEffect(() => {
+    containerSizeRef.current = containerSize;
+  }, [containerSize]);
+
+  useEffect(() => {
+    displayedRef.current = baseDisplayed
+      ? effectiveRect(baseDisplayed, zoomRef.current)
+      : null;
+  }, [baseDisplayed, zoom]);
 
   useEffect(() => {
     displayUriRef.current = displayUri;
@@ -627,13 +670,17 @@ export default function ValidIdCropper({
   // (Re)place the default crop frame whenever the displayed photo changes
   // (initial layout, rotation, or a new capture).
   //
+  // Uses baseDisplayed (the zoom-1 rect) deliberately: the frame is placed from
+  // the capture guide against the un-zoomed layout, and it must NOT be re-placed
+  // when the user zooms — zooming is inspection, not re-framing.
+  //
   // Preferred source is the capture screen's guide: mapping it back into photo
   // pixels makes the two screens agree, so lining the card up in the guide is
   // the same thing as framing it here. The centered 86% default is only the
   // fallback for a cropper opened without that geometry (deep link, or the
   // guide had not been measured yet).
   useEffect(() => {
-    if (!displayed) {
+    if (!baseDisplayed) {
       frameRef.current = null;
       setFrame(null);
       return;
@@ -651,33 +698,66 @@ export default function ValidIdCropper({
     if (guidePhotoRect) {
       // Photo pixels -> canvas points via the same contain-fit the <Image> uses.
       applyFrame({
-        x: displayed.offsetX + guidePhotoRect.x * displayed.scale,
-        y: displayed.offsetY + guidePhotoRect.y * displayed.scale,
-        width: guidePhotoRect.width * displayed.scale,
-        height: guidePhotoRect.height * displayed.scale,
+        x: baseDisplayed.offsetX + guidePhotoRect.x * baseDisplayed.scale,
+        y: baseDisplayed.offsetY + guidePhotoRect.y * baseDisplayed.scale,
+        width: guidePhotoRect.width * baseDisplayed.scale,
+        height: guidePhotoRect.height * baseDisplayed.scale,
       });
       return;
     }
 
     const width = Math.min(
-      displayed.width * INITIAL_SIZE_FRACTION,
-      displayed.height * CROP_ASPECT,
+      baseDisplayed.width * INITIAL_SIZE_FRACTION,
+      baseDisplayed.height * CROP_ASPECT,
     );
     const initial: CropRect = {
-      x: displayed.offsetX + (displayed.width - width) / 2,
-      y: displayed.offsetY + (displayed.height - width / CROP_ASPECT) / 2,
+      x: baseDisplayed.offsetX + (baseDisplayed.width - width) / 2,
+      y: baseDisplayed.offsetY + (baseDisplayed.height - width / CROP_ASPECT) / 2,
       width,
       height: width / CROP_ASPECT,
     };
     applyFrame(initial);
   }, [
-    displayed,
+    baseDisplayed,
     imageSize,
     guideRect,
     viewWidth,
     viewHeight,
     applyFrame,
   ]);
+
+  // Applies a transform to both the mirror and React state. Called on every
+  // gesture frame (so the photo tracks the fingers) — which also keeps
+  // displayedRef, the source of the crop math, in step.
+  const applyZoom = useCallback((next: ZoomState) => {
+    zoomRef.current = next;
+    const base = baseRectRef.current;
+    if (base) {
+      displayedRef.current = effectiveRect(base, next);
+    }
+    setZoom(next);
+  }, []);
+
+  // Pinch / pan / double-tap for the photo itself. Built once — every input is a
+  // ref, so the responder never needs rebuilding mid-gesture.
+  const { zoomPan } = useMemo(
+    () =>
+      createZoomGestures({
+        baseRef: baseRectRef,
+        canvasRef: containerSizeRef,
+        zoomRef,
+        isBusyRef: isSavingRef,
+        onCommit: applyZoom,
+        onLive: applyZoom,
+      }),
+    [applyZoom],
+  );
+
+  // A new photo starts un-zoomed: the previous transform was fitted to a
+  // different image, so keeping it would drop the user somewhere arbitrary.
+  useEffect(() => {
+    applyZoom(IDENTITY_ZOOM);
+  }, [photoUri, applyZoom]);
 
   // Prepares the file the cropper previews and crops. Vision-camera captures
   // carry EXIF orientation tags, and on Android the dimensions Image.getSize
@@ -1135,11 +1215,28 @@ export default function ValidIdCropper({
                 : { width, height },
             );
           }}
+          // Pinch / pan / double-tap on the photo. On the canvas rather than
+          // the frame: the frame is a CHILD of this view, so RN gives touches
+          // that land on it to the frame's own move/resize responders first.
+          {...zoomPan.panHandlers}
         >
           {displayUri ? (
             <Image
               source={{ uri: displayUri }}
-              style={StyleSheet.absoluteFill}
+              style={[
+                StyleSheet.absoluteFill,
+                // Translate before scale so the pan distance stays in screen
+                // points, matching the focal-point math in valididzoom. RN
+                // scales about this element's center, which is the canvas
+                // center — the same origin effectiveRect assumes.
+                {
+                  transform: [
+                    { translateX: zoom.tx },
+                    { translateY: zoom.ty },
+                    { scale: zoom.scale },
+                  ],
+                },
+              ]}
               resizeMode="contain"
             />
           ) : (
@@ -1226,7 +1323,8 @@ export default function ValidIdCropper({
         </View>
 
         <Text style={styles.hint}>
-          Drag the frame over your ID and resize with the corner handle.
+          Drag the frame over your ID and resize with the corner handle. Pinch
+          or double-tap the photo to zoom in and check the details.
         </Text>
 
         {isCropperReady === false && (

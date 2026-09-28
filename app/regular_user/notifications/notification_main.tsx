@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useIsFocused } from "@react-navigation/native";
 import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -210,6 +211,8 @@ function NotificationCard({
 export default function NotificationScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  // Focus drives the back button's remount key below — see the comment there.
+  const isFocused = useIsFocused();
   const {
     items,
     loading,
@@ -290,10 +293,23 @@ export default function NotificationScreen() {
     <SafeAreaView style={styles.container} edges={["top"]}>
       {/* Floating header actions — same alignment as profileview: the back
           button is pinned to the top-left and the "Read" action to the
-          top-right, so the centered title never has to shift. */}
+          top-right, so the centered title never has to shift.
+
+          This screen is a TAB route, and a tab screen STAYS MOUNTED when the
+          user switches away — so any press-feedback state left behind by the
+          press that navigated away is still here on return. TouchableOpacity
+          keeps its opacity in component state and only restores it with an
+          Animated.timing on press-out; when that press navigates, the tab switch
+          deactivates the screen and that timing can be cut short, leaving the
+          button stuck dimmed. Keying on focus remounts it on the way back in,
+          so the stuck opacity cannot survive. (Without an explicit
+          activeOpacity the default is 0.2, which is what made it read as a
+          solid grey "active" button rather than a subtle press.) */}
       <TouchableOpacity
+        key={isFocused ? "back-focused" : "back-blurred"}
         style={[styles.backButton, { top: insets.top + 12 }]}
         onPress={() => router.navigate("/regular_user/home")}
+        activeOpacity={0.85}
         hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
         accessibilityRole="button"
         accessibilityLabel="Go back to home"

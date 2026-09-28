@@ -531,7 +531,7 @@ export function useEditReportForm(reportId: string) {
         selectedPin.longitude,
       );
       if (pickedLocation.isOutsideToledo) {
-        Alert.alert("Outside Toledo", "The selected location does not appear to be in Toledo City.");
+        Alert.alert("Outside Service Area", "The selected location does not appear to be in Toledo City or Balamban.");
         return;
       }
 
