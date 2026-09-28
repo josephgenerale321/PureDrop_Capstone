@@ -370,6 +370,9 @@ export default function ValidIdCropper({
   // mount so the preview and the native crop see identical pixel data. null
   // while the normalization roundtrip is still running.
   const [displayUri, setDisplayUri] = useState<string | null>(null);
+  // True while the portrait auto-rotation pass is running (separate from the
+  // initial normalization spinner so the preview never flashes mid-rotate).
+  const [isRotating, setIsRotating] = useState(false);
 
   // Refs mirroring state so the (stable) PanResponder callbacks always read
   // fresh values without being recreated mid-gesture.
@@ -509,7 +512,36 @@ export default function ValidIdCropper({
           throw new Error("Cannot find native module 'ExpoImageManipulator'");
         }
         const { ImageManipulator, SaveFormat } = resolved;
+        // Portrait-held phone + rear camera = the sensor writes landscape
+        // pixels (width > height) with an EXIF tag, and renderAsync() alone
+        // does NOT bake that tag into pixels on SDK 54. Explicitly rotate the
+        // context -90 deg so the normalized file is upright (portrait pixels)
+        // before the preview ever shows it.
+        let renderedWidth = 0;
+        let renderedHeight = 0;
+        try {
+          const probeContext = ImageManipulator.manipulate(photoUri);
+          const probe = await probeContext.renderAsync();
+          renderedWidth = probe.width;
+          renderedHeight = probe.height;
+          probe.release();
+        } catch (probeError) {
+          console.warn(
+            "[ValidIdCropper] orientation probe failed, skipping auto-rotate:",
+            probeError,
+          );
+        }
+        const needsPortraitFix = renderedWidth > renderedHeight && renderedHeight > 0;
         const context = ImageManipulator.manipulate(photoUri);
+        if (needsPortraitFix) {
+          console.log(
+            "[ValidIdCropper] portrait auto-rotate: sensor",
+            `${renderedWidth}x${renderedHeight}`,
+            "-> rotating -90 deg",
+          );
+          // -90 deg: landscape sensor pixels -> upright portrait.
+          context.rotate(-90);
+        }
         const rendered = await context.renderAsync();
         // Capture the dimensions before releasing the native ref — they are
         // the ground truth of what crop() will operate on.
@@ -611,6 +643,72 @@ export default function ValidIdCropper({
 
   // Maps the screen crop frame into image pixels and writes a new cropped
   // JPEG to the cache directory.
+  const handleRotateDisplay = useCallback(async () => {
+    const currentUri = displayUriRef.current;
+    if (isSavingRef.current || isRotating || !currentUri) {
+      return;
+    }
+
+    isSavingRef.current = true;
+    setIsRotating(true);
+    let rendered: ImageRef | null = null;
+    try {
+      const resolved = resolveManipulatorModule(
+        await import("expo-image-manipulator"),
+      );
+      if (!resolved) {
+        throw new Error("Cannot find native module 'ExpoImageManipulator'");
+      }
+      const { ImageManipulator, SaveFormat } = resolved;
+      // Manual 90 deg clockwise step for OEMs where the auto-detect guesses
+      // wrong (some Vivo builds tag the sensor opposite). Rotates the exact
+      // file the preview shows, swaps dimensions, and re-centers the frame
+      // via the displayed effect.
+      const context = ImageManipulator.manipulate(currentUri);
+      context.rotate(90);
+      rendered = await context.renderAsync();
+      const { width, height } = rendered;
+      const result = await rendered.saveAsync({
+        compress: 0.95,
+        format: SaveFormat.JPEG,
+      });
+      rendered.release();
+      rendered = null;
+      const rotatedUri = /^(file|content|https?):\/\//.test(result.uri) ||
+        result.uri.startsWith("data:")
+        ? result.uri
+        : `file://${result.uri}`;
+      const previousUri = displayUriRef.current;
+      const previousNormalized = normalizedUriRef.current;
+      normalizedUriRef.current = rotatedUri;
+      displayUriRef.current = rotatedUri;
+      setImageSize({ width, height });
+      setDisplayUri(rotatedUri);
+      // Drop the superseded intermediate so only the rotated file outlives
+      // the screen (never delete the raw capture — the caller owns it).
+      if (
+        previousUri &&
+        previousUri !== photoUri &&
+        previousUri !== rotatedUri &&
+        previousUri === previousNormalized
+      ) {
+        FileSystem.deleteAsync(previousUri, { idempotent: true }).catch(
+          () => {},
+        );
+      }
+    } catch (error) {
+      console.warn("[ValidIdCropper] manual rotate failed:", error);
+      Alert.alert(
+        "Rotate Failed",
+        "Could not rotate the photo. Please retake it.",
+      );
+    } finally {
+      rendered?.release();
+      isSavingRef.current = false;
+      setIsRotating(false);
+    }
+  }, [isRotating, photoUri]);
+
   const handleConfirmCrop = useCallback(async () => {
     const current = displayedRef.current;
     const currentFrame = frameRef.current;
@@ -721,7 +819,7 @@ export default function ValidIdCropper({
           <TouchableOpacity
             style={styles.iconButton}
             onPress={onCancel}
-            disabled={isSaving}
+            disabled={isSaving || isRotating}
             activeOpacity={0.85}
             accessibilityRole="button"
             accessibilityLabel="Discard the captured photo and return to the camera"
@@ -734,6 +832,20 @@ export default function ValidIdCropper({
               {sideLabel}
             </Text>
           </View>
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={handleRotateDisplay}
+            disabled={isSaving || isRotating || !displayUri}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Rotate the photo 90 degrees clockwise"
+          >
+            {isRotating ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Ionicons name="refresh" size={22} color="#FFFFFF" />
+            )}
+          </TouchableOpacity>
         </View>
 
         <View

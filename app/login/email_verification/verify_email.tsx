@@ -1,8 +1,11 @@
+import Clipboard from "@react-native-clipboard/clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
+  AppState,
   Keyboard,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -13,7 +16,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   clearPendingRegistration,
+  getOtpSentAtAsync,
   getPendingRegistration,
+  getPendingRegistrationAsync,
 } from "@/lib/login/pendingRegistrationStore";
 import {
   sendEmailVerificationOtp,
@@ -33,6 +38,89 @@ export default function VerifyEmailScreen() {
   const [secondsLeft, setSecondsLeft] = useState(RESEND_SECONDS);
   const [isResending, setIsResending] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(true);
+  const [isPasting, setIsPasting] = useState(false);
+
+  // Cold-start restore: Android may kill the app while the user is in Gmail.
+  // The in-memory pending registration is gone, so hydrate it from
+  // AsyncStorage and rebuild the resend cooldown from the persisted OTP time.
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const [storedRegistration, storedOtpSentAt] = await Promise.all([
+          getPendingRegistrationAsync(),
+          getOtpSentAtAsync(),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        if (storedOtpSentAt) {
+          const elapsed = Math.floor((Date.now() - storedOtpSentAt) / 1000);
+          setSecondsLeft(Math.max(RESEND_SECONDS - elapsed, 0));
+        } else {
+          setSecondsLeft(0);
+        }
+
+        if (!storedRegistration && !email) {
+          Alert.alert(
+            "Registration Expired",
+            "Please register again before verifying your email.",
+          );
+          router.replace("/login/register");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsRestoring(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [email, router]);
+
+  // When the user returns from the Gmail app, try the clipboard once:
+  // if it holds a 6-digit code, fill it in automatically.
+  useEffect(() => {
+    const subscription = AppState.addEventListener(
+      "change",
+      async (nextState) => {
+        if (nextState !== "active") {
+          return;
+        }
+
+        try {
+          let raw = "";
+          if (Platform.OS === "web") {
+            if (
+              typeof navigator !== "undefined" &&
+              navigator.clipboard?.readText
+            ) {
+              raw = await navigator.clipboard.readText();
+            }
+          } else {
+            raw = await Clipboard.getString();
+          }
+
+          const digits = raw.replace(/\D/g, "").slice(0, CODE_LENGTH);
+          if (digits.length === CODE_LENGTH) {
+            setCode((current) => (current ? current : digits));
+          }
+        } catch {
+          // Clipboard read is best-effort — never block verification.
+        }
+      },
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (secondsLeft <= 0) {
@@ -55,7 +143,8 @@ export default function VerifyEmailScreen() {
       return;
     }
 
-    const pendingRegistration = getPendingRegistration();
+    const pendingRegistration =
+      getPendingRegistration() ?? (await getPendingRegistrationAsync());
     const targetEmail = pendingRegistration?.email ?? email;
 
     if (!targetEmail) {
@@ -77,6 +166,40 @@ export default function VerifyEmailScreen() {
     }
   };
 
+  const handlePasteCode = async () => {
+    try {
+      setIsPasting(true);
+
+      let raw = "";
+      if (Platform.OS === "web") {
+        if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+          raw = await navigator.clipboard.readText();
+        }
+      } else {
+        raw = await Clipboard.getString();
+      }
+
+      const digits = raw.replace(/\D/g, "").slice(0, CODE_LENGTH);
+      if (digits.length !== CODE_LENGTH) {
+        Alert.alert(
+          "No Code Found",
+          "Copy the 6-digit code from your email first, then tap Paste.",
+        );
+        return;
+      }
+
+      setCode(digits);
+      inputRef.current?.focus();
+    } catch {
+      Alert.alert(
+        "Paste Failed",
+        "Could not read the clipboard. Please type the code manually.",
+      );
+    } finally {
+      setIsPasting(false);
+    }
+  };
+
   const handleVerify = async () => {
     if (code.length !== CODE_LENGTH) {
       Alert.alert("Invalid Code", "Please enter the 6-digit code sent to your email.");
@@ -85,7 +208,8 @@ export default function VerifyEmailScreen() {
 
     Keyboard.dismiss();
 
-    const pendingRegistration = getPendingRegistration();
+    const pendingRegistration =
+      getPendingRegistration() ?? (await getPendingRegistrationAsync());
     if (!pendingRegistration) {
       Alert.alert(
         "Registration Expired",
@@ -145,10 +269,28 @@ export default function VerifyEmailScreen() {
 
         <View style={styles.actions}>
           <TouchableOpacity
+            style={[styles.button, styles.pasteButton]}
+            onPress={handlePasteCode}
+            activeOpacity={0.8}
+            disabled={isPasting || isRestoring}
+          >
+            <Text style={[styles.buttonText, styles.pasteButtonText]}>
+              {isRestoring
+                ? "Restoring session..."
+                : isPasting
+                  ? "Pasting..."
+                  : "Paste Code from Gmail"}
+            </Text>
+          </TouchableOpacity>
+          <Text style={styles.hintText}>
+            Open Gmail, copy the 6-digit code, then return here and tap Paste.
+          </Text>
+
+          <TouchableOpacity
             style={[styles.button, styles.resendButton, secondsLeft > 0 && styles.buttonDisabled]}
             onPress={handleResend}
             activeOpacity={0.8}
-            disabled={secondsLeft > 0 || isResending}
+            disabled={secondsLeft > 0 || isResending || isRestoring}
           >
             <Text style={[styles.buttonText, styles.resendButtonText]}>
               {isResending
@@ -160,10 +302,10 @@ export default function VerifyEmailScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.button, styles.verifyButton, isVerifying && styles.buttonDisabled]}
+            style={[styles.button, styles.verifyButton, (isVerifying || isRestoring) && styles.buttonDisabled]}
             onPress={handleVerify}
             activeOpacity={0.8}
-            disabled={isVerifying}
+            disabled={isVerifying || isRestoring}
           >
             <Text style={[styles.buttonText, styles.verifyButtonText]}>{isVerifying ? "Verifying..." : "Verify"}</Text>
           </TouchableOpacity>
@@ -272,6 +414,24 @@ const styles = StyleSheet.create({
 
   buttonDisabled: {
     opacity: 0.5,
+  },
+
+  pasteButton: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1.5,
+    borderColor: "#0284c7",
+  },
+
+  pasteButtonText: {
+    color: "#0284c7",
+  },
+
+  hintText: {
+    color: "#64748b",
+    fontSize: 12,
+    textAlign: "center",
+    lineHeight: 16,
+    maxWidth: 260,
   },
 
   buttonText: {

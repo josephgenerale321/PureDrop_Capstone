@@ -6,6 +6,7 @@ import {
   Alert,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -44,6 +45,7 @@ export default function RegisterScreen() {
   const [loading, setLoading] = useState<boolean>(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [cityModalVisible, setCityModalVisible] = useState<boolean>(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -56,9 +58,17 @@ export default function RegisterScreen() {
   );
 
   const openAddressSelector = (): void => {
+    setCityModalVisible(true);
+  };
+
+  const openBarangaySelector = (city: "Toledo" | "Balamban"): void => {
+    setCityModalVisible(false);
     setSelectedAddress(address);
     router.push({
-      pathname: "/login/address_select",
+      pathname:
+        city === "Balamban"
+          ? "/login/address_selectblbn"
+          : "/login/address_select",
       params: { currentAddress: address },
     });
   };
@@ -283,6 +293,47 @@ value={waterMeter}
 
         <Text style={styles.footer}>Register your Account</Text>
       </ScrollView>
+
+      <Modal
+        visible={cityModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCityModalVisible(false)}
+      >
+        <View style={styles.cityOverlay}>
+          <View style={styles.citySheet}>
+            <Text style={styles.cityTitle}>Select City / Municipality</Text>
+            <Text style={styles.citySubtitle}>
+              Choose where your barangay belongs
+            </Text>
+
+            <TouchableOpacity
+              style={styles.cityButton}
+              activeOpacity={0.85}
+              onPress={() => openBarangaySelector("Toledo")}
+            >
+              <Text style={styles.cityButtonText}>Toledo City</Text>
+              <Text style={styles.cityButtonSub}>38 barangays</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.cityButton}
+              activeOpacity={0.85}
+              onPress={() => openBarangaySelector("Balamban")}
+            >
+              <Text style={styles.cityButtonText}>Balamban, Cebu</Text>
+              <Text style={styles.cityButtonSub}>28 barangays</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.cityCancelButton}
+              onPress={() => setCityModalVisible(false)}
+            >
+              <Text style={styles.cityCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -416,5 +467,65 @@ const styles = StyleSheet.create({
     marginTop: 32,
     fontSize: 14,
     color: "#94A3B8",
+  },
+
+  cityOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(5, 22, 38, 0.45)",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  citySheet: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingTop: 20,
+    paddingBottom: 14,
+    width: "100%",
+    maxWidth: 420,
+    alignSelf: "center",
+  },
+  cityTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0f172a",
+    textAlign: "center",
+    marginBottom: 4,
+  },
+  citySubtitle: {
+    fontSize: 13,
+    color: "#64748b",
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  cityButton: {
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    backgroundColor: "#f8fafc",
+  },
+  cityButtonText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0f172a",
+  },
+  cityButtonSub: {
+    fontSize: 12,
+    color: "#64748b",
+    marginTop: 2,
+  },
+  cityCancelButton: {
+    marginTop: 4,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: "#f1f5f9",
+  },
+  cityCancelText: {
+    textAlign: "center",
+    color: "#475569",
+    fontWeight: "600",
   },
 });

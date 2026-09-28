@@ -12,7 +12,7 @@ export interface RegisterParams {
   waterMeter: number;
 }
 
-const CITY_SUFFIX = ", Toledo City";
+const SUPPORTED_SUFFIXES = [", Toledo City", ", Balamban, Cebu", ", Balamban"];
 
 const normalizeAddress = (value: string): string => {
   const trimmed = value.trim();
@@ -21,11 +21,14 @@ const normalizeAddress = (value: string): string => {
     return "";
   }
 
-  if (trimmed.toLowerCase().endsWith(CITY_SUFFIX.toLowerCase())) {
-    return trimmed;
+  const lower = trimmed.toLowerCase();
+  for (const suffix of SUPPORTED_SUFFIXES) {
+    if (lower.endsWith(suffix.toLowerCase())) {
+      return trimmed;
+    }
   }
 
-  return `${trimmed}${CITY_SUFFIX}`;
+  return trimmed;
 };
 
 export function prepareRegistrationParams({

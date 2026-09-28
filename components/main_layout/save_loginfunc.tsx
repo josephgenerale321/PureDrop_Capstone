@@ -457,6 +457,12 @@ export default function SaveLoginSync() {
                   uid
                 );
               } else if (laterTarget === "home") {
+                // `laterTarget === "home"` here already came from the gate,
+                // which only returns "home" for a COMPLETE verified snapshot
+                // (verified + both submission markers), whether from a trusted
+                // cache or one authoritative read. So this branch is safe to
+                // navigate — unlike the generic settle below, no extra
+                // verification check is needed on a possibly-stale copy.
                 navigate("/regular_user/home");
                 await markSessionReady(uid);
               } else {
@@ -483,7 +489,11 @@ export default function SaveLoginSync() {
           // Post-login gate — rejected => rejection notice, unverified =>
           // verification flow, newly-approved => one-time celebration, else
           // Home. Reuses the synced profile snapshot (0 extra reads).
-          let target: Href = "/regular_user/home";
+          // Fail-CLOSED: the default parks on /start, never Home. Home is
+          // only reached when the gate positively resolves "home" — an
+          // unverified first-timer whose doc has not propagated yet (or a
+          // transient read error) must stay put, not leak into the app.
+          let target: Href = "/start";
           try {
             const loginTarget = await resolvePostLoginTarget({
               uid,
@@ -492,7 +502,30 @@ export default function SaveLoginSync() {
             });
             target = targetForGate(loginTarget);
           } catch {
-            // Gate check failure is non-fatal — fall through to Home.
+            // Gate check failure is non-fatal — stay put (fail-closed).
+          }
+
+          if (target === "/regular_user/home") {
+            navigate(target);
+            await recordGateOutcome(target, uid);
+            noteSessionSettled();
+            return;
+          }
+
+          if (target === "/start") {
+            // Gate could not prove the account may proceed anywhere
+            // (fail-closed default above). Do NOT navigate to /start from
+            // here: this redirect runs on the CURRENT pre-login screen and
+            // the LATER flow already parked the user on /start — navigating
+            // again would push a duplicate /start and break back behavior.
+            // Just disarm the fast path so the next cold start re-proves
+            // the account, then stay put.
+            await recordGateOutcome(
+              "/verification/verificationmain" as Href,
+              uid
+            );
+            noteSessionSettled();
+            return;
           }
 
           navigate(target);
@@ -598,6 +631,11 @@ export default function SaveLoginSync() {
                   rareUid
                 );
               } else if (laterTarget === "home") {
+                // This rare path already ran an authoritative single-read
+                // gate (`resolvePostLoginTarget()` with no preloaded cache),
+                // so "home" means the account proved verified — safe to
+                // navigate. The verified-snapshot check lives in the gate
+                // itself now, not on a possibly-stale profile copy.
                 navigate("/regular_user/home");
                 const readyUid = auth.currentUser?.uid;
                 if (readyUid) {
@@ -630,16 +668,48 @@ export default function SaveLoginSync() {
           // Post-login gate — routes a rejected verification to the rejection
           // notice screen (shown once per rejection), an unverified user to
           // the verification flow, and everyone else to Home.
-          let target: Href = "/regular_user/home";
+          // Fail-CLOSED: the default parks on /start (the stay-put
+          // sentinel), never Home. Home is only reached when the gate
+          // positively resolves "home" or a verified notice — an unverified
+          // first-timer whose doc has not propagated yet (or a transient
+          // read error) must stay put, not leak into the app while the
+          // back-stack still thinks it is mid-registration.
+          let target: Href = "/start";
           try {
             // Post-login gate — routes a rejected verification to the
             // rejection notice, a pending/unverified user to the verification
             // flow, a newly-approved account to the one-time fully-verified
             // celebration, and a verified account to Home.
+            // Gate check failure is non-fatal — keep the /start sentinel
+            // (fail-closed); the stay-put branch below then holds position.
             const loginTarget = await resolvePostLoginTarget();
             target = targetForGate(loginTarget);
           } catch {
-            // Gate check failure is non-fatal — fall through to Home.
+            // Keep the /start sentinel.
+          }
+
+          if (target === "/regular_user/home") {
+            navigate(target);
+            const rareUid = auth.currentUser?.uid ?? null;
+            await recordGateOutcome(target, rareUid);
+            noteSessionSettled();
+            return;
+          }
+
+          if (target === "/start") {
+            // Gate could not prove the account may proceed anywhere.
+            // Do NOT navigate to /start from here: this runs on the
+            // CURRENT route and the LATER flow already parked the user —
+            // navigating again would push a duplicate /start and break
+            // back behavior. Disarm the fast path so the next cold start
+            // re-proves the account, then stay put.
+            const rareUid = auth.currentUser?.uid ?? null;
+            await recordGateOutcome(
+              "/verification/verificationmain" as Href,
+              rareUid
+            );
+            noteSessionSettled();
+            return;
           }
 
           navigate(target);

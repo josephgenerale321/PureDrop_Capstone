@@ -10,6 +10,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
+    "test": "node --test \"scripts/*.test.mjs\"",
     "postinstall": "patch-package",
     "eas-build-postinstall": "patch-package"
   },

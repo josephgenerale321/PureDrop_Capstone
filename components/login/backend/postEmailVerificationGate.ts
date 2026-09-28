@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { auth, db } from "../../../firebaseConfig";
-import { saveVerificationCache } from "../../main_layout/offline_profile_cache";
+import { getVerificationCache, saveVerificationCache } from "../../main_layout/offline_profile_cache";
 
 /**
  * Post-email-verification gate for the email verification success screen
@@ -427,12 +427,17 @@ export type PreloadedUserDoc = {
 } | null;
 
 export async function resolvePostLoginTarget(
-  preloaded: PreloadedUserDoc = null
+  preloaded: PreloadedUserDoc = null,
+  /**
+   * Internal — set by the single automatic retry after a failed authoritative
+   * read (see the catch below). Callers must not pass it.
+   */
+  isRetry = false
 ): Promise<PostLoginTarget> {
   const t0 = Date.now();
   const user = auth.currentUser;
   if (!user?.uid) {
-    return "home";
+    return "verification";
   }
 
   try {
@@ -601,14 +606,76 @@ export async function resolvePostLoginTarget(
       gateLog("gate: -> verification", t0);
       return "verification";
     }
-  } catch {
-    // Non-fatal — a Firestore hiccup must never trap the user; they can
-    // always proceed and re-verify later.
-    gateLog("gate: error, fallback home", t0);
-  }
 
-  gateLog("gate: -> home (fallback)", t0);
-  return "home";
+    // Signed in but the user document is missing — exactly a brand-new
+    // registrant whose record has not propagated yet. Park in the
+    // verification flow, never Home: an account with no record has proven
+    // nothing, and Home would leak an unverified first-timer past the flow
+    // (the "first-time LATER goes Home" bug).
+    gateLog("gate: no user doc, fallback verification", t0);
+    return "verification";
+  } catch {
+    // The authoritative read failed (cold connection / offline). Before
+    // fail-closing, let the LOCAL gate snapshot — written only by successful
+    // server reads — answer when it can: an existing account that already
+    // celebrated full verification on this device is still provably
+    // `verified` with both submission markers present, with no round-trip.
+    // Same trust rule the gate already applies to a complete "async-cache"
+    // preloaded doc above, so a pending / unverified snapshot can never leak
+    // past the flow. Without this, a read hiccup during login dumped an
+    // EXISTING verified user into the verification hub, where the realtime
+    // decision watcher replayed the "Account Verified" popup for an approval
+    // they had acknowledged long ago.
+    try {
+      const cached = await getVerificationCache(user.uid);
+      const cachedStatus =
+        typeof cached?.verificationStatus === "string" ? cached.verificationStatus : "";
+      const cachedFaceScanDone =
+        typeof cached?.faceScanPath === "string" && cached.faceScanPath.length > 0;
+      const cachedValidIdDone =
+        typeof cached?.validIdFrontPath === "string" && cached.validIdFrontPath.length > 0;
+      if (cachedStatus === VERIFIED_STATUS && cachedFaceScanDone && cachedValidIdDone) {
+        const celebratedFromCache = cached?.fullyVerifiedNoticeSeenAt != null;
+        // `hasSeenFullyVerifiedNotice` checks AsyncStorage FIRST, so this still
+        // resolves while offline — and it never skips a celebration the account
+        // has not acknowledged yet (that path is unchanged).
+        const celebrated =
+          celebratedFromCache || (await hasSeenFullyVerifiedNotice(user.uid));
+        if (!celebrated) {
+          gateLog("gate: -> fully_verified_notice (local snapshot)", t0);
+          return "fully_verified_notice";
+        }
+        await clearVerificationLater();
+        gateLog("gate: -> home (local snapshot)", t0);
+        return "home";
+      }
+    } catch {
+      // Local snapshot unusable — fall through to the retry / fail-closed default.
+    }
+
+    // ONE automatic retry before fail-closing. `getDoc` fails transiently on a
+    // cold connection (the 10-20s WebChannel handshake documented in
+    // offline_profile_cache), and failing over straight to "verification"
+    // dumped an ALREADY-VERIFIED account into the verification hub on a fresh
+    // login — the account then sat on a verification screen where the realtime
+    // decision watcher replayed the "Account Verified" popup for an approval
+    // the user had acknowledged long ago. One retry keeps the fail-closed
+    // default for accounts that are genuinely unreachable, at the cost of a
+    // single extra attempt when the network really is down.
+    if (!isRetry) {
+      gateLog("gate: read failed, retrying once", t0);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 750);
+      });
+      return resolvePostLoginTarget(preloaded, true);
+    }
+    // Non-fatal — a Firestore hiccup must never park a signed-in user on
+    // Home either: Home implies verified. Route to verification instead so
+    // an unverified first-timer cannot leak past the flow when the read
+    // fails mid-LATER (the regular_user area stays fail-closed behind this).
+    gateLog("gate: error, fallback verification", t0);
+    return "verification";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +691,43 @@ export async function resolvePostLoginTarget(
 // its own notice still fires. Keyed `uid:count` — the same fingerprint the
 // watcher uses.
 let locallyAcknowledgedRejectionKey: string | null = null;
+
+/**
+ * Durable twin of the in-memory mirror above: `uid:count` acknowledgements the
+ * user actually completed (they pressed [Re-verify ID] on the notice screen).
+ *
+ * Unlike `locallyAcknowledgedRejectionKey`, AsyncStorage SURVIVES a restart —
+ * so a rejection whose Firestore `rejectedNoticeSeenCount` write was offline
+ * (or whose app was killed before it landed) can never replay the rejection
+ * notice / the "Verification Under Review" popup on the next run. Same
+ * `uid:count` fingerprint the watcher and the Firestore field use.
+ */
+const REJECTED_NOTICE_ACK_PREFIX = "@puredrop/rejected_notice_seen";
+
+const rejectedNoticeAckKey = (uid: string, count: number): string =>
+  `${REJECTED_NOTICE_ACK_PREFIX}:${uid}:${count}`;
+
+/**
+ * True when THIS account already acknowledged rejection `count` on this device.
+ * Never throws — an unreadable store returns `false`, i.e. exactly the behaviour
+ * the watcher had before this marker existed (ack comes from memory/Firestore).
+ */
+export async function hasPersistedRejectionAck(
+  uid: string,
+  rejectionCount: number
+): Promise<boolean> {
+  if (!uid || !Number.isFinite(rejectionCount)) {
+    return false;
+  }
+  try {
+    const value = await AsyncStorage.getItem(
+      rejectedNoticeAckKey(uid, Math.max(0, Math.floor(rejectionCount)))
+    );
+    return value === "true";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * `uid:count` of the rejection the user acknowledged on THIS app run, or null.
@@ -661,6 +765,17 @@ export async function markRejectedNoticeSeen(rejectionCount: number): Promise<vo
   // Synchronous mirror — set BEFORE the first await so the hub's watcher,
   // mounting on the next tick, already sees this rejection as acknowledged.
   locallyAcknowledgedRejectionKey = `${user.uid}:${safeCount}`;
+  // Durable twin, written FIRST (it survives a restart; the mirrors below do
+  // not). Best-effort — a storage failure only costs the old replay-once
+  // behaviour, never a crash.
+  const persistAck = (count: number): void => {
+    void AsyncStorage.setItem(rejectedNoticeAckKey(user.uid, count), "true").catch(
+      () => {
+        // Non-fatal.
+      }
+    );
+  };
+  persistAck(safeCount);
 
   // Authoritative count: never acknowledge LESS than the account's real
   // rejection count (server read; offline keeps the caller's value).
@@ -674,6 +789,7 @@ export async function markRejectedNoticeSeen(rejectionCount: number): Promise<vo
     if (Number.isFinite(live) && Math.floor(live) > safeCount) {
       safeCount = Math.floor(live);
       locallyAcknowledgedRejectionKey = `${user.uid}:${safeCount}`;
+      persistAck(safeCount);
     }
   } catch {
     // Offline / hiccup — keep the caller's count.
