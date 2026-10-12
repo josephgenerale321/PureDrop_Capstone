@@ -825,10 +825,12 @@ export default function SaveLoginSync() {
                   fullName: typeof v === "string" ? v : "",
                   address: typeof addr === "string" ? addr : "",
                   email: typeof mail === "string" ? mail : (syncingUser.email ?? ""),
-                  waterMeter:
-                    typeof fresh.waterMeter === "number" || typeof fresh.waterMeter === "string"
-                      ? (fresh.waterMeter as number | string)
-                      : null,
+                  accountNumber:
+                    typeof fresh.accountNumber === "number" || typeof fresh.accountNumber === "string"
+                      ? (fresh.accountNumber as number | string)
+                      : typeof fresh.waterMeter === "number" || typeof fresh.waterMeter === "string"
+                        ? (fresh.waterMeter as number | string)
+                        : null,
                   profileImageUrl: typeof img === "string" ? img : null,
                 });
                 if (isMounted) {

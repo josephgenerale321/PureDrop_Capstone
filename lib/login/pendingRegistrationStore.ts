@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { isValidAccountNumber } from "../accountNumber";
 import type { RegisterParams } from "./registerfunctions";
 
 const PENDING_REGISTRATION_KEY = "@puredrop/pending_registration";
@@ -25,7 +26,8 @@ const isValidRegistration = (value: unknown): value is RegisterParams => {
     typeof candidate.address === "string" &&
     typeof candidate.email === "string" &&
     typeof candidate.password === "string" &&
-    typeof candidate.waterMeter === "number"
+    typeof candidate.accountNumber === "string" &&
+    isValidAccountNumber(candidate.accountNumber)
   );
 };
 

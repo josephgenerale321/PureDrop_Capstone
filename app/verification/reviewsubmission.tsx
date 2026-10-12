@@ -14,6 +14,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../../firebaseConfig";
+import { resolveAccountNumber } from "../../lib/accountNumber";
 import useVerificationDecisionWatcher from "../../components/verification/backend/useVerificationDecisionWatcher";
 
 type Lightbox = { label: string; uri: string } | null;
@@ -28,7 +29,7 @@ const VERIFICATION_HUB_ROUTE = "/verification/verificationmain";
  * Firestore document:
  *
  *   - Account status (pending admin review / verified / incomplete)
- *   - Account information — full name, email, address and water meter
+ *   - Account information — full name, email, address and account number
  *   - Face Recognition — the enrolled selfie (faceScanUrl)
  *   - Valid ID — the chosen ID type (validIdType) plus the front and back
  *     photos (validIdFrontUrl / validIdBackUrl)
@@ -55,7 +56,7 @@ export default function ReviewSubmissionScreen() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [fullName, setFullName] = useState<string | null>(null);
   const [address, setAddress] = useState<string | null>(null);
-  const [waterMeter, setWaterMeter] = useState<string | null>(null);
+  const [accountNumber, setAccountNumber] = useState<string | null>(null);
   // Photo shown in the full-screen lightbox (null = closed).
   const [lightbox, setLightbox] = useState<Lightbox>(null);
 
@@ -81,7 +82,7 @@ export default function ReviewSubmissionScreen() {
       setStatus("");
       setFullName(null);
       setAddress(null);
-      setWaterMeter(null);
+      setAccountNumber(null);
       setIsLoading(false);
       return undefined;
     }
@@ -113,12 +114,7 @@ export default function ReviewSubmissionScreen() {
             ? data.address
             : null,
         );
-        if (data?.waterMeter !== undefined && data?.waterMeter !== null) {
-          const meter = Number(data.waterMeter);
-          setWaterMeter(Number.isFinite(meter) ? String(meter) : null);
-        } else {
-          setWaterMeter(null);
-        }
+        setAccountNumber(resolveAccountNumber(data));
         setIsLoading(false);
       },
       () => {
@@ -175,7 +171,7 @@ export default function ReviewSubmissionScreen() {
           </View>
 
           {/* Account information — the identity details this verification is
-              tied to (name, email, address, water meter). */}
+              tied to (name, email, address, account number). */}
           <Text style={styles.sectionLabel}>Account Information</Text>
           <View style={styles.infoCard}>
             <View style={styles.infoRow}>
@@ -191,8 +187,8 @@ export default function ReviewSubmissionScreen() {
               <Text style={styles.infoValue}>{address ?? "—"}</Text>
             </View>
             <View style={[styles.infoRow, styles.infoRowLast]}>
-              <Text style={styles.infoLabel}>Water meter</Text>
-              <Text style={styles.infoValue}>{waterMeter ?? "—"}</Text>
+              <Text style={styles.infoLabel}>Account number</Text>
+              <Text style={styles.infoValue}>{accountNumber ?? "—"}</Text>
             </View>
           </View>
 
@@ -354,7 +350,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
   },
-  // Account information card (full name / email / address / water meter).
+  // Account information card (full name / email / address / account number).
   infoCard: {
     backgroundColor: "#F8FAFC",
     borderWidth: 1,

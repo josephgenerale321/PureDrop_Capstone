@@ -15,6 +15,11 @@ import {
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
 import type { EditableProfileValues } from "./useProfileBackend";
+import {
+  ACCOUNT_NUMBER_MAX_LENGTH,
+  ACCOUNT_NUMBER_PLACEHOLDER,
+  formatAccountNumber,
+} from "../../lib/accountNumber";
 
 const CITY_SUFFIX = ", Toledo City";
 
@@ -237,16 +242,17 @@ export default function EditProfileLightbox({
             </View>
 
             <View style={styles.fieldGroup}>
-              <Text style={styles.label}>Water Meter</Text>
+              <Text style={styles.label}>Account number</Text>
               <TextInput
-                value={form.waterMeter}
+                value={form.accountNumber}
 onChangeText={(value) =>
-                  updateField("waterMeter", value.replace(/[^\d]/g, "").slice(0, 6))
+                  updateField("accountNumber", formatAccountNumber(value))
                 }
                 style={styles.input}
-                placeholder="Enter water meter number"
+                placeholder={`e.g. ${ACCOUNT_NUMBER_PLACEHOLDER}`}
                 placeholderTextColor="#94a3b8"
-                keyboardType="numeric"
+                keyboardType="number-pad"
+                maxLength={ACCOUNT_NUMBER_MAX_LENGTH}
               />
             </View>
           </ScrollView>

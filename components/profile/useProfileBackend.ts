@@ -20,6 +20,10 @@ import {
 } from "../main_layout/offline_profile_cache";
 import { auth, db } from "../../firebaseConfig";
 import { claimSequentialUserId } from "../../lib/regular_user/sequentialId";
+import {
+  isValidAccountNumber,
+  resolveAccountNumber,
+} from "../../lib/accountNumber";
 import { readStoredSequentialId, uidToNumber } from "../../lib/uidToNumber";
 
 const LOGIN_ROUTE = "/login" as Href;
@@ -54,6 +58,8 @@ interface RegularUserDoc {
   fullName?: string;
   address?: string;
   email?: string;
+  accountNumber?: string | null;
+  /** Legacy numeric field — still read so old profiles keep loading. */
   waterMeter?: number | string | null;
   profileImageUrl?: string;
   profileImagePath?: string;
@@ -90,7 +96,7 @@ export type EditableProfileValues = {
   fullName: string;
   address: string;
   email: string;
-  waterMeter: string;
+  accountNumber: string;
 };
 
 export function useProfileBackend() {
@@ -168,7 +174,7 @@ export function useProfileBackend() {
               fullName: "User",
               address: "",
               email: currentUser.email || "No email",
-              waterMeter: null,
+              accountNumber: null,
               profileImageUrl: null,
               uid: uidToNumber(currentUser.uid),
             });
@@ -192,7 +198,7 @@ export function useProfileBackend() {
             fullName: data.fullName || "User",
             address: data.address || "",
             email: data.email || currentUser.email || "No email",
-            waterMeter: data.waterMeter ?? null,
+            accountNumber: resolveAccountNumber(data),
             profileImageUrl: imgUrl,
             uid: resolveDisplayId(currentUser.uid, data),
           });
@@ -202,7 +208,7 @@ export function useProfileBackend() {
             fullName: data.fullName || "",
             address: data.address || "",
             email: data.email || currentUser.email || "",
-            waterMeter: data.waterMeter ?? null,
+            accountNumber: resolveAccountNumber(data),
             profileImageUrl: imgUrl,
             sequentialId: displaySequentialId,
           });
@@ -227,7 +233,7 @@ export function useProfileBackend() {
                 fullName: cached.fullName || "User",
                 address: cached.address || "",
                 email: cached.email || currentUser.email || "No email",
-                waterMeter: cached.waterMeter ?? null,
+                accountNumber: resolveAccountNumber(cached),
                 profileImageUrl: cached.profileImageLocalUri || cached.profileImageUrl,
                 uid:
                   typeof cached.sequentialId === "number" &&
@@ -266,10 +272,7 @@ export function useProfileBackend() {
     fullName: profile?.fullName || "",
     address: profile?.address || "",
     email: profile?.email || "",
-    waterMeter:
-      profile?.waterMeter !== undefined && profile?.waterMeter !== null
-        ? `${profile.waterMeter}`
-        : "",
+    accountNumber: resolveAccountNumber(profile) ?? "",
   };
 
   const handleSaveProfile = async (values: EditableProfileValues) => {
@@ -281,7 +284,7 @@ export function useProfileBackend() {
     const fullName = values.fullName.trim();
     const address = values.address.trim();
     const email = values.email.trim();
-    const waterMeterText = values.waterMeter.trim();
+    const accountNumber = values.accountNumber.trim();
 
     if (!fullName) {
       Alert.alert("Full name required", "Please enter your full name.");
@@ -298,16 +301,8 @@ export function useProfileBackend() {
       return;
     }
 
-    const waterMeter =
-      waterMeterText.length > 0 ? Number.parseInt(waterMeterText, 10) : null;
-
-    if (waterMeterText.length > 0 && !Number.isFinite(waterMeter)) {
-      Alert.alert("Invalid water meter", "Please enter numbers only for your water meter.");
-      return;
-    }
-
-    if (waterMeterText.length > 6) {
-      Alert.alert("Invalid water meter", "Water meter must be at most 6 digits.");
+    if (accountNumber.length > 0 && !isValidAccountNumber(accountNumber)) {
+      Alert.alert("Invalid account number", "Account number must be in 032-012-361 format.");
       return;
     }
 
@@ -336,7 +331,7 @@ export function useProfileBackend() {
         fullName,
         address,
         email,
-        waterMeter,
+        accountNumber: accountNumber.length > 0 ? accountNumber : null,
         updatedAt: serverTimestamp(),
       };
       // Only write the avatar fields when a new picture was actually uploaded.
@@ -368,7 +363,7 @@ export function useProfileBackend() {
         fullName,
         address,
         email,
-        waterMeter,
+        accountNumber: accountNumber.length > 0 ? accountNumber : null,
         profileImageUrl: resolvedProfileImageUrl ?? prev?.profileImageUrl ?? null,
         uid: prev?.uid ?? uidToNumber(currentUserId),
       }));
@@ -587,7 +582,7 @@ export function useProfileBackend() {
         fullName: prev?.fullName || "User",
         address: prev?.address || "",
         email: prev?.email || "No email",
-        waterMeter: prev?.waterMeter ?? null,
+        accountNumber: prev?.accountNumber ?? null,
         profileImageUrl: null,
         uid: prev?.uid ?? uidToNumber(currentUserId),
       }));

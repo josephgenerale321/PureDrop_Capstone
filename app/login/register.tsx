@@ -23,6 +23,12 @@ import { sendEmailVerificationOtp } from "../../lib/login/emailVerificationOtp";
 import { setPendingRegistration } from "../../lib/login/pendingRegistrationStore";
 import { useRegisterKeyboardScroll } from "../../lib/login/registerbehavior";
 import { prepareRegistrationParams } from "../../lib/login/registerfunctions";
+import {
+  ACCOUNT_NUMBER_MAX_LENGTH,
+  ACCOUNT_NUMBER_PLACEHOLDER,
+  formatAccountNumber,
+  isValidAccountNumber,
+} from "../../lib/accountNumber";
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -41,7 +47,7 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState<string>("");
   const [password, setPassword] = useState<string>("");
   const [confirmPassword, setConfirmPassword] = useState<string>("");
-  const [waterMeter, setWaterMeter] = useState<string>("0");
+  const [accountNumber, setAccountNumber] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -77,9 +83,9 @@ export default function RegisterScreen() {
     try {
       setLoading(true);
 
-      const waterMeterValue = parseFloat(waterMeter);
-      if (isNaN(waterMeterValue) || waterMeterValue < 0) {
-        throw new Error("Water meter must be a valid non-negative number");
+      const formattedAccountNumber = formatAccountNumber(accountNumber);
+      if (!isValidAccountNumber(formattedAccountNumber)) {
+        throw new Error("Account number must be in 032-012-361 format");
       }
 
       const pendingRegistration = prepareRegistrationParams({
@@ -88,7 +94,7 @@ export default function RegisterScreen() {
         email,
         password,
         confirmPassword,
-        waterMeter: waterMeterValue,
+        accountNumber: formattedAccountNumber,
       });
 
       setPendingRegistration(pendingRegistration);
@@ -262,21 +268,25 @@ export default function RegisterScreen() {
 
           <View
             style={styles.fieldGroup}
-            onLayout={registerFieldLayout("waterMeter")}
+            onLayout={registerFieldLayout("accountNumber")}
           >
-            <Text style={styles.label}>Water Meter (m3)</Text>
+            <Text style={styles.label}>Account number</Text>
             <TextInput
-              ref={registerInputRef("waterMeter")}
+              ref={registerInputRef("accountNumber")}
               style={styles.input}
-value={waterMeter}
+              placeholder={`e.g. ${ACCOUNT_NUMBER_PLACEHOLDER}`}
+              placeholderTextColor="#94A3B8"
+              value={accountNumber}
               onChangeText={(value) =>
-                setWaterMeter(value.replace(/[^\d]/g, "").slice(0, 6))
+                setAccountNumber(formatAccountNumber(value))
               }
-              onFocus={() => followFocusedField("waterMeter")}
-              onPressIn={() => followFocusedField("waterMeter")}
-              keyboardType="numeric"
+              keyboardType="number-pad"
+              maxLength={ACCOUNT_NUMBER_MAX_LENGTH}
               returnKeyType="done"
-              onSubmitEditing={() => focusNextField("waterMeter")}
+              onSubmitEditing={handleRegister}
+              onFocus={() => followFocusedField("accountNumber")}
+              onPressIn={() => followFocusedField("accountNumber")}
+              onLayout={registerFieldLayout("accountNumber")}
             />
           </View>
         </View>

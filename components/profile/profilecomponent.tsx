@@ -18,7 +18,7 @@ export interface ProfileViewModel {
   fullName: string;
   address: string;
   email: string;
-  waterMeter?: number | string | null;
+  accountNumber?: string | null;
   profileImageUrl?: string | null;
   uid?: string | null;
 }
@@ -119,11 +119,13 @@ export default function ProfileComponent({
             </View>
 
             <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>WATER METER:</Text>
+              <Text style={styles.fieldLabel}>ACCOUNT NUMBER:</Text>
               <Text style={styles.fieldValue}>
-                {profile?.waterMeter !== undefined && profile?.waterMeter !== null && `${profile.waterMeter}`.length > 0
-                  ? profile.waterMeter
-                  : "No water meter"}
+                {profile?.accountNumber !== undefined &&
+                profile?.accountNumber !== null &&
+                `${profile.accountNumber}`.length > 0
+                  ? profile.accountNumber
+                  : "No account number"}
               </Text>
               <View style={styles.line} />
             </View>

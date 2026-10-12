@@ -30,7 +30,7 @@ import { Platform } from "react-native";
  * Offline profile cache helpers for PureDrop.
  *
  * PureDrop stores the currently-signed-in user's profile (name, address,
- * email, water meter, and profile picture) so that when Firestore is not
+ * email, account number, and profile picture) so that when Firestore is not
  * reachable (no internet / offline reopen), the Home greeting, Profile
  * screen, and tab avatar can still show the real account instead of the
  * anonymous "Resident" placeholder or a generic default picture.
@@ -61,7 +61,7 @@ const PROFILE_PHOTO_DIR = "profile-photos";
 // ---------------------------------------------------------------------------
 //
 // WHY THIS EXISTS — the display cache above (`CachedProfile`) deliberately
-// holds ONLY name / address / email / water meter / photo. It carries NO
+// holds ONLY name / address / email / account number / photo. It carries NO
 // `verificationStatus`, and feeding that shape to the login gate
 // (`resolvePostLoginTarget`) made every cached boot look "not verified":
 // `data.verificationStatus === "verified"` was false, so the gate fell through
@@ -167,6 +167,8 @@ export type CachedProfile = {
   fullName: string;
   address: string;
   email: string;
+  accountNumber?: number | string | null;
+  /** Legacy numeric field — kept optional so pre-rename cache JSON still parses. */
   waterMeter?: number | string | null;
   profileImageUrl?: string | null;
   // Local `file://` URI of the downloaded profile picture (offline-safe).
@@ -277,7 +279,7 @@ export async function saveProfileCache(
       fullName: profile.fullName ?? "",
       address: profile.address ?? "",
       email: profile.email ?? "",
-      waterMeter: profile.waterMeter ?? null,
+      accountNumber: profile.accountNumber ?? profile.waterMeter ?? null,
       profileImageUrl: profile.profileImageUrl ?? null,
       profileImageLocalUri: localUri,
       sequentialId:
@@ -332,7 +334,7 @@ export async function getProfileCache(
       fullName: typeof parsed.fullName === "string" ? parsed.fullName : "",
       address: typeof parsed.address === "string" ? parsed.address : "",
       email: typeof parsed.email === "string" ? parsed.email : "",
-      waterMeter: parsed.waterMeter ?? null,
+      accountNumber: parsed.accountNumber ?? parsed.waterMeter ?? null,
       profileImageUrl:
         typeof parsed.profileImageUrl === "string" ? parsed.profileImageUrl : null,
       profileImageLocalUri:
@@ -408,7 +410,7 @@ const cachedProfileToDocData = (
     fullName: cached.fullName,
     address: cached.address,
     email: cached.email || emailFallback || "",
-    waterMeter: cached.waterMeter ?? null,
+    accountNumber: cached.accountNumber ?? cached.waterMeter ?? null,
     profileImageUrl: cached.profileImageUrl,
     ...(typeof cached.sequentialId === "number" &&
     Number.isInteger(cached.sequentialId) &&

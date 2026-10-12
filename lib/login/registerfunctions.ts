@@ -1,6 +1,7 @@
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "../../firebaseConfig";
+import { isValidAccountNumber } from "../accountNumber";
 import { reserveSequentialUserId } from "../regular_user/sequentialId";
 
 export interface RegisterParams {
@@ -9,7 +10,7 @@ export interface RegisterParams {
   email: string;
   password: string;
   confirmPassword: string;
-  waterMeter: number;
+  accountNumber: string;
 }
 
 const SUPPORTED_SUFFIXES = [", Toledo City", ", Balamban, Cebu", ", Balamban"];
@@ -37,11 +38,12 @@ export function prepareRegistrationParams({
   email,
   password,
   confirmPassword,
-  waterMeter,
+  accountNumber,
 }: RegisterParams): RegisterParams {
   const formattedAddress = normalizeAddress(address);
   const formattedFullName = fullName.trim();
   const formattedEmail = email.trim();
+  const formattedAccountNumber = accountNumber.trim();
 
   if (!formattedFullName || !formattedAddress || !formattedEmail || !password) {
     throw new Error("All fields are required");
@@ -51,8 +53,8 @@ export function prepareRegistrationParams({
     throw new Error("Passwords do not match");
   }
 
-  if (!Number.isFinite(waterMeter) || waterMeter < 0) {
-    throw new Error("Water meter must be non-negative");
+  if (!isValidAccountNumber(formattedAccountNumber)) {
+    throw new Error("Account number must be in 032-012-361 format");
   }
 
   return {
@@ -61,7 +63,7 @@ export function prepareRegistrationParams({
     email: formattedEmail,
     password,
     confirmPassword,
-    waterMeter,
+    accountNumber: formattedAccountNumber,
   };
 }
 
@@ -71,7 +73,7 @@ export async function registerUser(params: RegisterParams) {
     address,
     email,
     password,
-    waterMeter,
+    accountNumber,
   } = prepareRegistrationParams(params);
 
   const userCredential = await createUserWithEmailAndPassword(
@@ -120,7 +122,7 @@ export async function registerUser(params: RegisterParams) {
     presenceSource: "register",
     presenceUpdatedAt: serverTimestamp(),
     lastSeenAt: serverTimestamp(),
-    waterMeter,
+    accountNumber,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });

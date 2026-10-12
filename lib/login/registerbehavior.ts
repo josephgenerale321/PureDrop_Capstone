@@ -14,7 +14,7 @@ export type RegisterFieldKey =
   | "email"
   | "password"
   | "confirmPassword"
-  | "waterMeter";
+  | "accountNumber";
 
 const isMobile = Platform.OS !== "web";
 const inputScrollOffset = 130;
@@ -23,7 +23,7 @@ const nextFieldByField: Partial<Record<RegisterFieldKey, RegisterFieldKey>> = {
   fullName: "email",
   email: "password",
   password: "confirmPassword",
-  confirmPassword: "waterMeter",
+  confirmPassword: "accountNumber",
 };
 
 export function useRegisterKeyboardScroll() {

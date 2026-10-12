@@ -121,11 +121,14 @@ if (userSnap.exists()) {
                 typeof data.fullName === "string" ? data.fullName : "",
               address: typeof data.address === "string" ? data.address : "",
               email: typeof data.email === "string" ? data.email : "",
-              waterMeter:
-                typeof data.waterMeter === "string" ||
-                typeof data.waterMeter === "number"
-                  ? data.waterMeter
-                  : null,
+              accountNumber:
+                typeof data.accountNumber === "string" ||
+                typeof data.accountNumber === "number"
+                  ? data.accountNumber
+                  : typeof data.waterMeter === "string" ||
+                      typeof data.waterMeter === "number"
+                    ? data.waterMeter
+                    : null,
               profileImageUrl:
                 typeof data.profileImageUrl === "string"
                   ? data.profileImageUrl
