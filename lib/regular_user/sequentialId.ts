@@ -77,7 +77,17 @@ export const reserveSequentialUserId = async (): Promise<number> => {
   // seed is read BEFORE the transaction and only used when the counter doc
   // still does not exist inside the transaction. Racing first-claims retry
   // and converge on the same counter value.
-  const seededNext = await readSeededNextId();
+  //
+  // Best-effort: Firestore rules deny collection list on `regular_user`
+  // (see firestore.rules), so this seed query may throw permission-denied
+  // for non-admins. That must never break signup — fall back to counter-only
+  // logic (the counter doc drives IDs; an admin seeds it once via console).
+  let seededNext: number | null = null;
+  try {
+    seededNext = await readSeededNextId();
+  } catch {
+    seededNext = null;
+  }
 
   return runTransaction(db, async (transaction) => {
     const counterSnap = await transaction.get(counterRef);
@@ -85,7 +95,7 @@ export const reserveSequentialUserId = async (): Promise<number> => {
       counterSnap.data() as { next?: unknown } | undefined,
     );
 
-    const next = counterNext ?? seededNext;
+    const next = counterNext ?? seededNext ?? 1;
     transaction.set(
       counterRef,
       { next: next + 1, updatedAt: serverTimestamp() },
@@ -110,7 +120,14 @@ export const claimSequentialUserId = async (uid: string): Promise<number> => {
   const userRef = doc(db, USERS_COLLECTION, uid);
   const counterRef = doc(db, COUNTERS_COLLECTION, SEQUENTIAL_ID_COUNTER_ID);
 
-  const seededNext = await readSeededNextId();
+  // Best-effort seed (see reserveSequentialUserId): a denied list query must
+  // never break self-heal — fall back to counter-only logic.
+  let seededNext: number | null = null;
+  try {
+    seededNext = await readSeededNextId();
+  } catch {
+    seededNext = null;
+  }
 
   return runTransaction(db, async (transaction) => {
     const userDocSnap = await transaction.get(userRef);
@@ -142,7 +159,7 @@ export const claimSequentialUserId = async (uid: string): Promise<number> => {
       return existing;
     }
 
-    const next = counterNext ?? seededNext;
+    const next = counterNext ?? seededNext ?? 1;
     transaction.set(
       counterRef,
       { next: next + 1, updatedAt: serverTimestamp() },

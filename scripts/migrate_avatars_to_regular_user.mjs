@@ -17,7 +17,11 @@
  *
  * Environment variables:
  *   SUPABASE_SERVICE_KEY    (required — service_role key from Supabase dashboard)
- *   GOOGLE_APPLICATION_CREDENTIALS (optional, defaults to the adminsdk JSON path)
+ *   GOOGLE_APPLICATION_CREDENTIALS (required — absolute path to a Firebase
+ *     service-account JSON kept OUTSIDE the repo, e.g. %APPDATA%\PureDrop\
+ *     service-account.json. Never commit this file. After this one-time
+ *     migration, DELETE the key in Firebase Console > Project Settings >
+ *     Service accounts and rotate it.)
  *   OLD_BUCKET              (optional, defaults to "reports")
  *   NEW_BUCKET              (optional, defaults to "regular_user")
  *   AVATAR_FOLDER           (optional, defaults to "users")
@@ -49,9 +53,17 @@ if (!SERVICE_KEY) {
 }
 
 // ---- Firebase service-account JWT -> Google OAuth token ----
-const serviceAccountPath =
-  process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-  path.join(__root, "puredrop-capstone-project-firebase-adminsdk-fbsvc-f5c887662b.json");
+// Requires GOOGLE_APPLICATION_CREDENTIALS to point at a service-account JSON
+// stored OUTSIDE the repo. The legacy in-repo adminsdk JSON must be deleted
+// and its key revoked in Firebase Console (it was committed to disk).
+const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || "";
+
+if (!serviceAccountPath) {
+  console.error(
+    "Missing GOOGLE_APPLICATION_CREDENTIALS. Set it to the absolute path of a Firebase service-account JSON kept OUTSIDE the repo."
+  );
+  process.exit(1);
+}
 
 const serviceAccount = JSON.parse(await readFile(serviceAccountPath, "utf8"));
 
